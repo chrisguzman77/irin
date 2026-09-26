@@ -7,15 +7,15 @@ Baselines (forecasters on the 16-feature matrix, like the model):
   B linear trend  current + 30 x roc15 (a missing slot: the 10-min, then 30-min rate)
   C weighted ROC  current + 30 x (3 r1 + 2 r2 + 1 r3) / 6, r = the last three
                   5-min rates, newest first (falls back to B on a missing slot)
-M xgboost is scored only where it never trained:
-  - HELD-OUT: the shipped forecast_v1.json on the final 8 weeks;
+M xgboost (a quantile forecast, --quantile) is scored only where it never trained:
+  - HELD-OUT: the final 8 weeks, forecast by the last fold's model, which is
+    trained exactly as train.py trains the shipped forecast_v1.json;
   - ROLLING FOLDS: FOLDS consecutive 8-week blocks ending with the held-out
     one; each block is forecast by a model trained only on rows whose label
     lands before the block starts (train.rows_before), so every forecast is
     out-of-sample and the pooled blocks hold several times the held-out lows.
 Baselines have no training, so they are also scored over the full history.
-Reads ml/data/clean.csv, dataset.csv and ml/models/forecast_v1.json (run
-ml/train.py first); writes the sweep plot to ml/data/processed/ (gitignored).
+Reads ml/data/clean.csv and dataset.csv; writes the sweep plot to ml/data/processed/ (gitignored).
 Prints summaries only. metrics.md waits for the threshold choice (step 3.7)."""
 
 from __future__ import annotations
@@ -30,9 +30,9 @@ import pandas as pd
 from ml.events import (FCST_FROM_MIN, FCST_TO_MIN, MAX_LEAD_MIN, MIN_LEAD_MIN, NEAR_MISS_MGDL, forecasts,
                        replay_events, summarize)
 from ml.models.features import FEATURE_NAMES, drop_collisions
-from ml.train import HOLDOUT_DAYS, MODELS, fit, forecaster, holdout_start, rows_before
+from ml.train import HOLDOUT_DAYS, QUANTILE, fit, forecaster, holdout_start, rows_before
 
-THRESHOLDS = (70.0, 75.0, 80.0, 85.0)
+THRESHOLDS = (70.0, 75.0, 80.0, 85.0, 90.0)
 N_CONSEC = 2
 FOLDS = 5
 MODEL = "M xgboost"
@@ -120,17 +120,6 @@ def sweep_plot(panels: list[tuple[str, dict]], out: Path) -> None:
     plt.close(fig)
 
 
-def load_shipped():
-    import xgboost as xgb
-
-    path = MODELS / "forecast_v1.json"
-    if not path.exists():
-        raise SystemExit(f"{path} missing: run `python -m ml.train` first")
-    booster = xgb.Booster()
-    booster.load_model(str(path))
-    return booster
-
-
 def score(ts, x, preds_by_name: dict, start=None) -> dict:
     out = {}
     for name, preds in preds_by_name.items():
@@ -143,6 +132,7 @@ def score(ts, x, preds_by_name: dict, start=None) -> dict:
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--data", default="ml/data")
+    p.add_argument("--quantile", type=float, default=QUANTILE)
     args = p.parse_args()
     data = Path(args.data)
     t0 = time.perf_counter()
@@ -164,25 +154,18 @@ def main() -> None:
           f" {FCST_FROM_MIN}..{FCST_TO_MIN} min before the crossing;"
           f"\n  false = warning cleared with no crossing; near = lowest actual during it < {NEAR_MISS_MGDL:.0f}, far = >= {NEAR_MISS_MGDL:.0f}")
 
-    shipped = forecaster(load_shipped())
-    everyone = {**BASELINES, MODEL: shipped}
-    print("\nPOINT METRICS, held-out rows (absolute mg/dL at t+30)")
-    print("  name              MAE    MAE(true<100)  no forecast")
-    for name, f in everyone.items():
-        m = point_metrics(held_rows, f)
-        print(f"  {name:<16} {m['mae']:5.2f}   {_num(m['mae_lt100'], '5.2f')}          {m['no_forecast']}")
-
     base_preds = {name: forecasts(ts, x, f) for name, f in BASELINES.items()}
-    held = score(ts, x, {**base_preds, MODEL: forecasts(ts, x, shipped)}, start=split.to_datetime64())
     full = score(ts, x, base_preds)
 
     # Rolling folds: block k is forecast by a model trained only before block k.
+    # The last block is the held-out 8 weeks; its model is the shipped model's twin.
     starts = [split - pd.Timedelta(days=HOLDOUT_DAYS * k) for k in range(FOLDS - 1, -1, -1)]
     ends = starts[1:] + [clean.timestamp.max() + pd.Timedelta(seconds=1)]
     pooled = np.full(len(x), np.nan)
-    print(f"\nROLLING FOLDS ({FOLDS} x {HOLDOUT_DAYS} days, each forecast by a model trained only before it)")
+    print(f"\nROLLING FOLDS ({FOLDS} x {HOLDOUT_DAYS} days, each forecast by a model trained only before it;"
+          f" model = quantile {args.quantile:.2f})")
     for a, b in zip(starts, ends):
-        booster, info = fit(rows_before(rows, a))
+        booster, info = fit(rows_before(rows, a), args.quantile)
         f = forecaster(booster)
         in_block = (ts >= a.to_datetime64()) & (ts < b.to_datetime64())
         pooled[in_block] = forecasts(ts, x, f)[in_block]
@@ -190,12 +173,21 @@ def main() -> None:
         mb, mm = point_metrics(block, linear_trend), point_metrics(block, f)
         print(f"  {a:%Y-%m-%d} .. {b:%Y-%m-%d}   train rows {info['rows']:6d}  rounds {info['rounds']:4d}"
               f"   MAE B {mb['mae']:5.2f}  M {mm['mae']:5.2f}   (true<100: B {_num(mb['mae_lt100'], '5.2f')}  M {_num(mm['mae_lt100'], '5.2f')})")
+    held_model = f                                           # the last block's model = the held-out model
+
+    print("\nPOINT METRICS, held-out rows (absolute mg/dL at t+30; M is a low quantile, so biased low by design)")
+    print("  name              MAE    MAE(true<100)  no forecast")
+    for name, fn in {**BASELINES, MODEL: held_model}.items():
+        m = point_metrics(held_rows, fn)
+        print(f"  {name:<16} {m['mae']:5.2f}   {_num(m['mae_lt100'], '5.2f')}          {m['no_forecast']}")
+
     two = {n: base_preds[n] for n in ("B linear 15m", "C weighted ROC")}
     folds = score(ts, x, {**two, MODEL: pooled}, start=starts[0].to_datetime64())
+    held = score(ts, x, {**base_preds, MODEL: pooled}, start=split.to_datetime64())
 
     s = held[("B linear 15m", 70.0)]
     print(f"\nHELD-OUT coverage: {s['days']:.1f} sensor-days, {s['nights']:.1f} sensor-nights")
-    print_event_table(f"EVENT METRICS, HELD-OUT {HOLDOUT_DAYS} DAYS (M = shipped forecast_v1.json)", held)
+    print_event_table(f"EVENT METRICS, HELD-OUT {HOLDOUT_DAYS} DAYS", held)
     s = folds[("B linear 15m", 70.0)]
     print(f"\nROLLING-FOLD coverage: {s['days']:.1f} sensor-days, {s['nights']:.1f} sensor-nights")
     print_event_table(f"EVENT METRICS, ROLLING FOLDS POOLED ({FOLDS} x {HOLDOUT_DAYS} days, all out-of-sample)", folds)
@@ -203,7 +195,7 @@ def main() -> None:
     print(f"\nFULL HISTORY coverage: {s['days']:.1f} sensor-days, {s['nights']:.1f} sensor-nights")
     print_event_table("EVENT METRICS, FULL HISTORY (baselines only: untrained, so no leakage)", full)
 
-    out = data / "processed" / "sweep.png"
+    out = data / "processed" / f"sweep_q{round(100 * args.quantile):02d}.png"
     sweep_plot([("full history, baselines", full), (f"rolling folds ({FOLDS} x 8 wk)", folds),
                 (f"held-out {HOLDOUT_DAYS} days", held)], out)
     print(f"\nwrote {out}  ({time.perf_counter() - t0:.1f} s)")

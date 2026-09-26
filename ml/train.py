@@ -1,5 +1,11 @@
 """george.md step 3: split by TIME (hold out the final 8 weeks); XGBoost on the
-30-min DELTA over the 16 features (NaN = a dropped reading, routed as missing);
+30-min DELTA over the 16 features (NaN = a dropped reading, routed as missing),
+trained as a QUANTILE forecast (George, checkpoint 3): the model predicts the
+QUANTILE-th percentile of glucose 30 min ahead, "how low could this plausibly
+go", because the squared-error model forecast the mean outcome, learned that
+lows get treated and rebound, and never predicted a low (0-4% detection).
+Point MAE is therefore biased high by design; events are the judge.
+
 save ONLY ml/models/forecast_v1.json (never a pickle) with the pinned xgboost
 version, plus forecast_v1_check.json: one fixed SYNTHETIC window and the value
 predict() must return for it, so the Pi can prove it loads the same model.
@@ -24,7 +30,7 @@ HOLDOUT_DAYS = 56
 PURGE = pd.Timedelta(minutes=30)
 VAL_DAYS = 28
 PARAMS = {
-    "objective": "reg:squarederror",
+    "objective": "reg:quantileerror",
     "eta": 0.05,
     "max_depth": 6,
     "min_child_weight": 10,
@@ -35,6 +41,7 @@ PARAMS = {
     "seed": 0,
     "nthread": 4,
 }
+QUANTILE = 0.2           # default percentile; evaluate.py --quantile sweeps it
 MAX_ROUNDS = 1500
 EARLY_STOP = 50
 MODELS = Path(__file__).resolve().parent / "models"
@@ -53,20 +60,22 @@ def rows_before(rows: pd.DataFrame, start: pd.Timestamp) -> pd.DataFrame:
     return rows[rows.timestamp < start - PURGE]
 
 
-def fit(train: pd.DataFrame) -> tuple:
+def fit(train: pd.DataFrame, quantile: float = QUANTILE) -> tuple:
     """Early-stop on the last VAL_DAYS of `train` (time-ordered), then refit on
     all of `train` with that many rounds. Returns (booster, info)."""
     import xgboost as xgb
+
+    params = {**PARAMS, "quantile_alpha": quantile}
 
     cut = train.timestamp.max() - pd.Timedelta(days=VAL_DAYS)
     tr, va = train[train.timestamp < cut - PURGE], train[train.timestamp >= cut]
     dtr = xgb.DMatrix(tr[FEATURE_NAMES].to_numpy(float), label=tr.y_delta.to_numpy(float))
     dva = xgb.DMatrix(va[FEATURE_NAMES].to_numpy(float), label=va.y_delta.to_numpy(float))
-    probe = xgb.train(PARAMS, dtr, MAX_ROUNDS, evals=[(dva, "val")], early_stopping_rounds=EARLY_STOP, verbose_eval=False)
+    probe = xgb.train(params, dtr, MAX_ROUNDS, evals=[(dva, "val")], early_stopping_rounds=EARLY_STOP, verbose_eval=False)
     rounds = probe.best_iteration + 1
     dall = xgb.DMatrix(train[FEATURE_NAMES].to_numpy(float), label=train.y_delta.to_numpy(float))
-    booster = xgb.train(PARAMS, dall, rounds)
-    return booster, {"rows": len(train), "rounds": rounds, "val_rmse": float(probe.best_score)}
+    booster = xgb.train(params, dall, rounds)
+    return booster, {"rows": len(train), "rounds": rounds, "val_loss": float(probe.best_score), "quantile": quantile}
 
 
 def forecaster(booster):
@@ -80,6 +89,7 @@ def forecaster(booster):
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--data", default="ml/data")
+    p.add_argument("--quantile", type=float, default=QUANTILE)
     args = p.parse_args()
     data = Path(args.data)
     t0 = time.perf_counter()
@@ -89,10 +99,11 @@ def main() -> None:
     rows = pd.read_csv(data / "dataset.csv", parse_dates=["timestamp"])
     split = holdout_start(clean_ts)
     train = rows_before(rows, split)
-    booster, info = fit(train)
+    booster, info = fit(train, args.quantile)
     print(f"xgboost {xgb.__version__}   split {split:%Y-%m-%d %H:%M} (final {HOLDOUT_DAYS} days held out)")
+    print(f"objective: quantile {info['quantile']:.2f} of glucose at t+30")
     print(f"train rows {info['rows']} (label before split)   rounds {info['rounds']} (early stop on last {VAL_DAYS} train days,"
-          f" val RMSE {info['val_rmse']:.2f} mg/dL on the delta)")
+          f" val pinball loss {info['val_loss']:.2f})")
 
     gain = booster.get_score(importance_type="gain")
     total = sum(gain.values())
@@ -111,7 +122,7 @@ def main() -> None:
     predict_mod._model = None
     got = predict_mod.predict(CHECK_WINDOW, CHECK_HOUR)
     check = {"window": [None if np.isnan(v) else v for v in np.asarray(CHECK_WINDOW, dtype=float)],
-             "hour": CHECK_HOUR, "expected": expected, "xgboost": xgb.__version__,
+             "hour": CHECK_HOUR, "expected": expected, "xgboost": xgb.__version__, "quantile": info["quantile"],
              "note": "SYNTHETIC window; predict(window with None -> NaN, hour) must return expected within 1e-3"}
     (MODELS / "forecast_v1_check.json").write_text(json.dumps(check, indent=2) + "\n")
     print(f"\nwrote {out} ({out.stat().st_size / 1e6:.2f} MB)")
