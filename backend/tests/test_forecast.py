@@ -10,7 +10,7 @@ import numpy as np
 from app.clock import clock
 from app.contracts import Reading
 from app.datasource.replay import ReplayDataSource
-from app.forecast import Forecaster
+from app.forecast import HISTORY_MINUTES, Forecaster
 
 T0 = datetime(2020, 1, 1, 22, 0)
 
@@ -92,7 +92,7 @@ def test_gap_in_replay_suspends_then_resumes(tmp_path):
         status, reason = {}, {}
         for i in range(60):
             latest = await ds.get_latest()  # the FEED's verdict on staleness
-            res = f.forecast(await ds.history(minutes=75), latest=latest)
+            res = f.forecast(await ds.history(minutes=HISTORY_MINUTES), latest=latest)
             status[i], reason[i] = res.status, res.reason
             clock.advance(5 * 60)
         await ds.stop()

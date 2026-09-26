@@ -106,6 +106,25 @@ def test_timeout_discards_the_pending_entry(db):
     assert v.confirm(r["pending_id"])["status"] == "expired" and stored() == []
 
 
+def test_timeout_is_wall_time_so_replay_speed_never_eats_the_confirm(db):
+    """Justin's finding: at 60x, 10 s of clock time is 0.17 s of wall time and
+    no thumb is that fast. The window is TIMEOUT_S wall seconds at any speed."""
+    from datetime import datetime
+
+    clock.set(speed=60.0, start=datetime(2020, 1, 1, 22, 0))
+    try:
+        v = VoiceLogger()
+        r = v.submit("5 units")
+        assert r["timeout_s"] == TIMEOUT_S
+        clock.advance(TIMEOUT_S * 60 - 1)  # 9.98 s of wall time at 60x: still open
+        assert v.confirm(r["pending_id"])["status"] == "stored" and len(stored()) == 1
+        r = v.submit("5 units")
+        clock.advance(TIMEOUT_S * 60 + 1)  # just past 10 s of wall time: gone
+        assert v.confirm(r["pending_id"])["status"] == "expired" and len(stored()) == 1
+    finally:
+        clock.reset()
+
+
 def test_confirm_inside_the_window_stores(db):
     v = VoiceLogger()
     r = v.submit("5 units")

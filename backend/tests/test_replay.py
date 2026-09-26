@@ -2,6 +2,7 @@
 sleep(): drive clock.py with advance()."""
 
 import asyncio
+from datetime import timedelta
 from pathlib import Path
 
 from app.clock import clock
@@ -60,33 +61,34 @@ def test_replay_sets_clock_to_scenario_time(tmp_path):
 
 
 def test_the_save_plays_end_to_end_at_60x():
-    """The shipped scenario: every reading is served in order, none is stale
-    mid-scenario, and the feed turns stale 15 clock minutes after the CSV ends."""
+    """The shipped scenario, whatever George cuts it to: every row is served in
+    order at its own timestamp, fresh, and the feed turns stale 15 clock
+    minutes after the CSV ends."""
     from app.config import config
 
     ds = ReplayDataSource(config.scenario_path, speed=60.0)
-    assert len(ds.rows) == 97 and ds.speed == 60.0
+    rows = ds.rows
+    assert len(rows) >= 24 and ds.speed == 60.0  # at least two hours of night
 
     async def run():
         await ds.start()
         seen = []
-        for _ in range(97):
+        for ts, mgdl, _trend in rows:
+            clock.advance(max(0.0, (ts - clock.now()).total_seconds()))  # to this row, exactly
             r = await ds.get_latest()
-            assert r is not None and not r.is_stale and r.source == "replay"
-            if not seen or r.timestamp != seen[-1].timestamp:
-                seen.append(r)
-            clock.advance(5 * 60)  # one reading interval; 5 s of wall time at 60x
-        assert len(seen) == 97
+            assert r is not None and r.timestamp == ts and r.glucose_mgdl == mgdl
+            assert r.source == "replay" and not r.is_stale
+            seen.append(r)
+        assert len(seen) == len(rows)
         assert all(a.timestamp < b.timestamp for a, b in zip(seen, seen[1:]))
-        assert min(r.glucose_mgdl for r in seen) == 55
+        assert min(r.glucose_mgdl for r in seen) == min(g for _, g, _ in rows) < 70  # The Save has its low
 
-        # now = 8 h 05 min (+ a few seconds of wall jitter at 60x) after the first row
         hist = await ds.history(minutes=60)
         assert hist[-1].timestamp == seen[-1].timestamp
-        assert 11 <= len(hist) <= 12  # 05:05 is on the boundary, 05:10..06:00 always inside
+        assert len(hist) == sum(1 for ts, _, _ in rows if ts >= clock.now() - timedelta(minutes=60))
         assert all(not h.is_stale for h in hist)  # history rows are facts, never stale
 
-        clock.advance(10 * 60)  # 15 min since the last row -> stale, honestly
+        clock.advance(15 * 60)  # 15 min since the last row -> stale, honestly
         last = await ds.get_latest()
         assert last.timestamp == seen[-1].timestamp and last.is_stale
         await ds.stop()

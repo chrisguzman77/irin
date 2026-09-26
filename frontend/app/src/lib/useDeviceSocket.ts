@@ -25,7 +25,8 @@ export function applyMessage(snap: StateSnapshot | null, msg: WSMessage): StateS
     case "reading_update":
       return { ...snap, latest_reading: p as unknown as Reading };
     case "forecast_update":
-      return { ...snap, forecast: p as unknown as Forecast };
+      // status ok | suspended | unavailable; only ok carries a forecast to draw
+      return { ...snap, forecast: p.status === "ok" ? ((p.forecast ?? null) as Forecast | null) : null };
     case "alarm_state_change":
       return { ...snap, alarm: ((p.alarm ?? p) as unknown) as AlarmState };
     case "settings_change":

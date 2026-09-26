@@ -38,6 +38,47 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * History
+         * @description Readings from the last `minutes` of clock time, oldest first (the
+         *     display's graph after a reload; Justin's request, no contracts change).
+         */
+        get: operations["history_api_history_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/forecast": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Forecast Status
+         * @description The last forecast result: forecast, status (ok | suspended | unavailable), reason.
+         */
+        get: operations["forecast_status_api_forecast_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/contracts/fresh_pin": {
         parameters: {
             query?: never;
@@ -81,10 +122,210 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/acknowledge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Acknowledge
+         * @description Acknowledge the current alarm. source records which screen answered
+         *     (the kiosk's big button = device, the app = app) for the R2 recorder.
+         */
+        post: operations["acknowledge_api_acknowledge_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/log/voice": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Log Voice
+         * @description Parse spoken text. Carbs-only entries are stored at once; any insulin
+         *     comes back as needs_confirm with an echo and a pending_id (10 s on clock.py).
+         */
+        post: operations["log_voice_api_log_voice_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/log/voice/{pending_id}/confirm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Log Voice Confirm */
+        post: operations["log_voice_confirm_api_log_voice__pending_id__confirm_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/log/voice/{pending_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Log Voice Cancel */
+        post: operations["log_voice_cancel_api_log_voice__pending_id__cancel_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/log": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Log Treatment
+         * @description Structured logging from the app's forms (basal taken, carbs + units,
+         *     notes). The Treatment contract refuses insulin_units without
+         *     confirmed=True (422); `confirmed` is the client's assertion that its
+         *     echo-and-confirm screen was passed, which the server cannot see, so the
+         *     PIN gate is what makes that assertion trustworthy.
+         */
+        post: operations["log_treatment_api_log_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/treatments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Treatments */
+        get: operations["treatments_api_treatments_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/presence": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Presence State */
+        get: operations["presence_state_api_presence_get"];
+        put?: never;
+        /**
+         * Set Presence
+         * @description The manual Home/Away toggle (Settings.presence_override). It always beats
+         *     the radar; it gates room outputs only and never touches alarm logic.
+         */
+        post: operations["set_presence_api_presence_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/scheduler": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Scheduler State
+         * @description clock_synced (the NTP guard), display_mode (detail | night | morning, from
+         *     backend state), and the basal nudge (none | visual | email).
+         */
+        get: operations["scheduler_state_api_scheduler_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/alarm": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Alarm State */
+        get: operations["alarm_state_api_alarm_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** AckRequest */
+        AckRequest: {
+            /**
+             * Source
+             * @enum {string}
+             */
+            source: "device" | "app";
+        };
+        /** AlarmState */
+        AlarmState: {
+            /**
+             * State
+             * @default idle
+             * @enum {string}
+             */
+            state: "idle" | "pending" | "active" | "acknowledged" | "rearmed";
+            /** Trigger Type */
+            trigger_type?: ("predicted_low" | "actual_low" | "high" | "stale") | null;
+            /** Started At */
+            started_at?: string | null;
+            /** Acknowledged At */
+            acknowledged_at?: string | null;
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
@@ -97,6 +338,34 @@ export interface components {
              * @enum {string}
              */
             mode: "replay" | "nightscout";
+        };
+        /** PresenceOverride */
+        PresenceOverride: {
+            /**
+             * Override
+             * @enum {string}
+             */
+            override: "auto" | "home" | "away";
+        };
+        /** PresenceState */
+        PresenceState: {
+            /**
+             * Mode
+             * @default home
+             * @enum {string}
+             */
+            mode: "home" | "away";
+            /**
+             * Source
+             * @default radar
+             * @enum {string}
+             */
+            source: "radar" | "toggle";
+            /**
+             * Since
+             * Format: date-time
+             */
+            since: string;
         };
         /** Reading */
         Reading: {
@@ -120,6 +389,37 @@ export interface components {
              */
             is_stale: boolean;
         };
+        /**
+         * Treatment
+         * @description A logged event. Invariant 2: insulin_units may only be stored with
+         *     confirmed=True (echo-and-confirm). A parsed-but-unconfirmed voice entry
+         *     lives in voice.py's pending state, never in a Treatment.
+         */
+        Treatment: {
+            /**
+             * Timestamp
+             * Format: date-time
+             */
+            timestamp: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "bolus" | "basal" | "carbs" | "note" | "glp1_dose" | "therapy_change";
+            /** Insulin Units */
+            insulin_units?: number | null;
+            /** Carbs G */
+            carbs_g?: number | null;
+            /** Dose Label */
+            dose_label?: string | null;
+            /** Text */
+            text?: string | null;
+            /**
+             * Confirmed
+             * @default false
+             */
+            confirmed: boolean;
+        };
         /** ValidationError */
         ValidationError: {
             /** Location */
@@ -132,6 +432,11 @@ export interface components {
             input?: unknown;
             /** Context */
             ctx?: Record<string, never>;
+        };
+        /** VoiceText */
+        VoiceText: {
+            /** Text */
+            text: string;
         };
     };
     responses: never;
@@ -180,6 +485,59 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Reading"];
+                };
+            };
+        };
+    };
+    history_api_history_get: {
+        parameters: {
+            query?: {
+                minutes?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Reading"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    forecast_status_api_forecast_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
         };
@@ -239,6 +597,315 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    acknowledge_api_acknowledge_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-PIN"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AckRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    log_voice_api_log_voice_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-PIN"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VoiceText"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    log_voice_confirm_api_log_voice__pending_id__confirm_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-PIN"?: string | null;
+            };
+            path: {
+                pending_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    log_voice_cancel_api_log_voice__pending_id__cancel_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-PIN"?: string | null;
+            };
+            path: {
+                pending_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    log_treatment_api_log_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-PIN"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["Treatment"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    treatments_api_treatments_get: {
+        parameters: {
+            query?: {
+                hours?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Treatment"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    presence_state_api_presence_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PresenceState"];
+                };
+            };
+        };
+    };
+    set_presence_api_presence_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-PIN"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PresenceOverride"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PresenceState"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    scheduler_state_api_scheduler_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    alarm_state_api_alarm_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AlarmState"];
                 };
             };
         };

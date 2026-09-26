@@ -1,0 +1,241 @@
+"""george.md step 7: the SYNTHETIC titration scenario reproduces the chris.md
+R10 worked example EXACTLY through ml/models/nights.py, its companion JSON
+validates against backend/app/contracts.py, and the CSV loads the way the
+replay datasource reads it. Regenerating it is deterministic."""
+
+import csv
+import json
+import sys
+from datetime import datetime, timedelta
+from pathlib import Path
+
+import pytest
+
+from ml.models import nights as N
+
+ROOT = Path(__file__).resolve().parents[2]
+SCEN = ROOT / "demo" / "scenarios"
+T0 = datetime(2020, 1, 1)
+
+
+def load(name):
+    with (SCEN / f"{name}.csv").open() as f:
+        rows = list(csv.DictReader(f))
+    readings = [{"timestamp": datetime.fromisoformat(r["timestamp"]), "glucose_mgdl": float(r["glucose_mgdl"])} for r in rows]
+    return rows, readings, json.loads((SCEN / f"{name}.json").read_text())
+
+
+@pytest.fixture(scope="module")
+def titration():
+    return load("titration_synthetic")
+
+
+def night(n):
+    return (T0 + timedelta(days=n, hours=22), T0 + timedelta(days=n + 1, hours=7))
+
+
+def night_records(readings, alarms, nights):
+    recs = []
+    for n in nights:
+        m = N.night_metrics(readings, alarms, night(n))
+        codes, src = N.classify_night(readings, None, None, None, night(n))
+        recs.append({**m, "night_date": night(n)[0].date(), "reason_codes": codes, "code_source": src})
+    return recs
+
+
+def alarms_of(comp):
+    return [{**a, "started_at": datetime.fromisoformat(a["started_at"])} for a in comp["alarm_events"]]
+
+
+def test_labeled_synthetic_and_loads_like_replay(titration):
+    rows, readings, comp = titration
+    assert comp["synthetic"] is True and comp["overlay_synthetic"] is True and comp["kind"] == "titration"
+    assert readings[0]["timestamp"].year == 2020                       # obviously fake timestamps
+    assert list(rows[0].keys()) == ["timestamp", "glucose_mgdl", "trend"]
+    ts = [r["timestamp"] for r in readings]
+    assert all(a < b for a, b in zip(ts, ts[1:]))
+    assert max(b - a for a, b in zip(ts, ts[1:])) <= timedelta(minutes=10)   # dropouts are single readings
+
+
+def test_companion_validates_against_contracts(titration):
+    sys.path.insert(0, str(ROOT / "backend"))
+    contracts = pytest.importorskip("app.contracts")
+    _, _, comp = titration
+    contracts.TitrationPlan.model_validate(comp["plan"])
+    for a in comp["alarm_events"]:
+        contracts.AlarmEvent.model_validate(a)
+    for c in comp["symptom_checks"]:
+        contracts.SymptomCheck.model_validate(c)
+    for t in comp["injections"]:
+        contracts.Treatment.model_validate(t)
+
+
+def test_step2_days_3_to_7_is_the_worked_example(titration):
+    _, readings, comp = titration
+    alarms = alarms_of(comp)
+    window_days = range(44, 49)                                        # step 2 (starts day 42) days 3-7
+    window = night_records(readings, alarms, window_days)
+    baseline = night_records(readings, alarms, range(0, 14))
+    lo, hi = T0 + timedelta(days=44), T0 + timedelta(days=49)
+    win_readings = [r for r in readings if lo <= r["timestamp"] < hi]
+    checks = [{**c, "date": datetime.fromisoformat(c["date"]).date()} for c in comp["symptom_checks"]]
+    v, _ = N.step_window_metrics(window, baseline, checks, [], window_readings=win_readings, window_days=5,
+                                 window_dates=[(T0 + timedelta(days=d)).date() for d in window_days])
+    assert len(win_readings) == 1390 and round(v["coverage_pct"], 1) == 96.5
+    assert v["baseline_low_point"] == 98 and v["window_low_point"] == 76 and v["low_point_shift"] == -22
+    assert sum(r["glucose_mgdl"] < 70 for r in win_readings) == 58 and round(v["tbr_pct"], 2) == 4.03
+    assert v["near_misses"] == 2
+    assert v["tolerance"] == {"fine": 2, "rough": 3, "cant_eat": 0, "missing": 0}
+    assert v["ketone_risk_episodes"] == 0 and not v["insufficient"]
+    assert all(r["level2_count"] == 0 for r in window)                 # no red: no level 2, no re-arm
+
+    lows = [e for n in window_days for e in N.low_events(readings, None, alarms, night(n))]
+    assert len(lows) == 1 and lows[0]["inferred_unfelt"]
+    sv, _ = N.standing_window([], lows, [{"low_event_id": k, "answer": a} for k, a in comp["recall_answers"].items()])
+    assert (sv["answered"], sv["unfelt_lows"], sv["unfelt_low_rate"]) == (1, 1, 1.0)
+    assert comp["recall_answers"] == {lows[0]["low_event_id"]: "dont_remember"}
+
+
+@pytest.mark.parametrize("shift_nights", [range(43, 48), range(45, 49)])
+def test_low_point_median_is_robust_to_the_window_edge(titration, shift_nights):
+    _, readings, comp = titration
+    recs = night_records(readings, alarms_of(comp), shift_nights)
+    import numpy as np
+    assert np.median([r["low_point_mgdl"] for r in recs]) == 76
+
+
+def test_step1_window_is_green(titration):
+    _, readings, comp = titration
+    alarms = alarms_of(comp)
+    window = night_records(readings, alarms, range(16, 21))            # step 1 days 3-7
+    baseline = night_records(readings, alarms, range(0, 14))
+    lo, hi = T0 + timedelta(days=16), T0 + timedelta(days=21)
+    v, _ = N.step_window_metrics(window, baseline, comp["symptom_checks"], [],
+                                 window_readings=[r for r in readings if lo <= r["timestamp"] < hi], window_days=5)
+    assert v["low_point_shift"] > -15 and v["tbr_pct"] <= 4.0 and v["near_misses"] < 2
+    assert v["ketone_risk_episodes"] < 2 and v["coverage_pct"] >= 70
+
+
+def test_regeneration_is_deterministic(tmp_path):
+    from demo.make_scenarios import titration as build, write
+    rows, comp = build()
+    write(tmp_path, "titration_synthetic", rows, comp)
+    for ext in ("csv", "json"):
+        # line endings normalized: git's autocrlf may check the committed file out with CRLF
+        fresh = (tmp_path / f"titration_synthetic.{ext}").read_bytes().replace(b"\r\n", b"\n")
+        committed = (SCEN / f"titration_synthetic.{ext}").read_bytes().replace(b"\r\n", b"\n")
+        assert fresh == committed
+
+
+# ---------------------------------------------------------------- basal_change_1 (real glucose, date-shifted)
+
+@pytest.fixture(scope="module")
+def basal():
+    return load("basal_change_1")
+
+
+def records(readings, alarms, days):
+    out = []
+    for d in days:
+        w = (datetime(d.year, d.month, d.day, 22), datetime(d.year, d.month, d.day, 7) + timedelta(days=1))
+        m = N.night_metrics(readings, alarms, w)
+        codes, src = N.classify_night(readings, None, None, None, w)
+        out.append({**m, "night_date": d, "reason_codes": codes, "code_source": src})
+    return out
+
+
+def test_basal_change_is_real_date_shifted_with_a_labeled_overlay(basal):
+    rows, readings, comp = basal
+    assert comp["kind"] == "basal_change" and comp["synthetic"] is False and comp["overlay_synthetic"] is True
+    assert readings[0]["timestamp"].year == 2021                       # shifted; the real dates never enter the repo
+    assert comp["dose_change"]["date"] == "2021-02-01" and comp["dose_change"]["new_units"] == 18
+    assert all(c["code_source"] == "inferred" for c in comp["reason_codes"].values())
+    assert None in comp["recall_answers"].values()                    # at least one "no answer"
+    assert all(a["is_demo"] for a in comp["alarm_events"])
+    sys.path.insert(0, str(ROOT / "backend"))
+    contracts = pytest.importorskip("app.contracts")
+    for a in comp["alarm_events"]:
+        contracts.AlarmEvent.model_validate(a)
+
+
+def test_basal_check_fires_in_the_week_before_the_change_and_follow_up_has_data(basal):
+    from ml.evaluate_rounds import basal_check
+    _, readings, comp = basal
+    alarms = alarms_of(comp)
+    change = datetime(2021, 2, 1).date()
+    fired = []
+    for k in range(7, -1, -1):
+        m = change - timedelta(days=k)
+        bc = basal_check(records(readings, alarms, [m - timedelta(days=j) for j in range(14, 0, -1)]))
+        assert not bc["falling"] and not bc["near_miss_high"]           # never a contradictory card
+        fired.append(bc["rising"])
+    assert fired[:5] == [True] * 5                                      # the Detect mornings, 2021-01-25..29
+    for days in (range(0, 7), range(0, 14)):
+        v, _ = N.standing_window(records(readings, alarms, [change + timedelta(days=k) for k in days]), [], [])
+        assert v["clean_nights"] >= 3                                   # Follow-up has enough data on each side
+
+
+# ---------------------------------------------------------------- the six core scenarios (real, date-shifted)
+
+CORE = ["the_save", "normal_night", "failure", "meal_context", "rearm_low", "high_spike"]
+
+
+def series(name):
+    import numpy as np
+    _, readings, _ = load_csv_only(name)
+    ts = np.array([r["timestamp"] for r in readings], dtype="datetime64[s]")
+    x = np.array([r["glucose_mgdl"] for r in readings])
+    return readings, ts, x
+
+
+def load_csv_only(name):
+    with (SCEN / f"{name}.csv").open() as f:
+        rows = list(csv.DictReader(f))
+    return rows, [{"timestamp": datetime.fromisoformat(r["timestamp"]), "glucose_mgdl": float(r["glucose_mgdl"])} for r in rows], None
+
+
+@pytest.mark.parametrize("name", CORE)
+def test_core_scenario_is_shifted_and_loads_like_replay(name):
+    rows, readings, _ = load_csv_only(name)
+    assert list(rows[0].keys()) == ["timestamp", "glucose_mgdl", "trend"]
+    assert readings[0]["timestamp"].year == 2021 and readings[0]["timestamp"].month == 3   # shifted; real dates stay off-repo
+    ts = [r["timestamp"] for r in readings]
+    assert all(a < b for a, b in zip(ts, ts[1:]))
+
+
+def test_the_save_forecast_crosses_before_the_actual_value():
+    """The same forecaster and warning rule the Pi runs: the warning comes 10-60
+    min before the first reading under 70 (the night is held-out, so this is
+    out-of-sample for forecast_v1)."""
+    pytest.importorskip("xgboost")
+    from ml.events import forecasts, replay_events
+    from ml.models.predict import PREDICTED_LOW_THRESHOLD, _model
+    from ml.train import forecaster
+    _, ts, x = series("the_save")
+    rep = replay_events(ts, x, forecasts(ts, x, forecaster(_model)), threshold=PREDICTED_LOW_THRESHOLD)
+    assert rep["lows"] and rep["lows"][0]["outcome"] == "detected" and rep["lows"][0]["lead_min"] >= 10
+    assert (x < 70).sum() >= 2
+
+
+def test_rearm_low_stays_under_70_long_enough_to_rearm_and_recovers():
+    _, ts, x = series("rearm_low")
+    run = best = 0
+    for v in x:
+        run = run + 1 if v < 70 else 0
+        best = max(best, run)
+    assert best * 5 >= 30                                               # still low 15 min after an ack, twice over
+    assert x[-6:].min() >= 70                                           # the recovery is in the file
+
+
+def test_normal_failure_meal_and_high():
+    _, _, x = series("normal_night")
+    assert x.min() >= 90 and x.max() <= 180
+    _, ts, x = series("failure")
+    gaps = (ts[1:] - ts[:-1]).astype(int) / 60
+    assert gaps.max() >= 40 and x.min() >= 80                         # stale after 15 min, never near a low
+    readings, _, x = series("meal_context")
+    d = readings[0]["timestamp"].replace(hour=22, minute=0, second=0)
+    codes, src = N.classify_night(readings, None, None, None, (d, d + timedelta(hours=9)))
+    assert "late_meal" in codes and src == "inferred" and x.max() < 250 and x.min() >= 70
+    _, _, x = series("high_spike")
+    assert (x >= 250).sum() >= 6 and x[-12:].max() < 200
