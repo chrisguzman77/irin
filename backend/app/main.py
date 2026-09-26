@@ -29,8 +29,8 @@ from .alarm import AlarmEngine, Transition
 from .auth import require_pin
 from .clock import clock
 from .config import REPO_ROOT, config
-from .contracts import (FRESH_PIN_ENDPOINTS, AlarmState, FamilyRecipient, FamilyStory, MorningReport, Reading,
-                        Settings, Treatment, WSMessage)
+from .contracts import (FRESH_PIN_ENDPOINTS, AlarmEvent, AlarmState, FamilyRecipient, FamilyStory, LowEvent,
+                        MorningReport, NightRecord, Reading, Settings, Treatment, WSMessage)
 from .datasource.base import DataSource
 from .datasource.nightscout import NightscoutDataSource
 from .datasource.replay import ReplayDataSource
@@ -41,6 +41,10 @@ from .forward import Forwarder, from_config as forwarder_from_config
 from .outputs import GatedOutputs
 from .presence import PresenceMachine, PresenceState
 from .reports import ReportBuilder, SmtpMailer
+from .rounds.alarm_events import AlarmEventRecorder
+from .rounds.ledger import Ledger
+from .rounds.low_events import LowEventDetector
+from .rounds.nights_adapter import NightsAdapter
 from .scheduler import Scheduler, basal_logged_on, timedatectl_synced
 from . import voice_out
 from .voice import MAX_CARBS_G, MAX_UNITS, VoiceLogger
@@ -75,6 +79,9 @@ class Runtime:
     reports: "ReportBuilder | None" = None
     forwarder: "Forwarder | None" = None
     family: "FamilyStoryService | None" = None
+    alarm_events: "AlarmEventRecorder | None" = None
+    ledger: "Ledger | None" = None
+    low_events: "LowEventDetector | None" = None
 
 
 runtime = Runtime(mode="nightscout" if config.DATASOURCE == "nightscout" else "replay",
@@ -203,6 +210,44 @@ def _replay_rows(cursor: datetime | None) -> tuple[object, list[dict]]:
 
 runtime.forwarder = forwarder_from_config(_replay_rows)
 
+
+# --- the night ledger (R3): George's nights.py over the device's own stores, at night-window end ---
+
+runtime.ledger = Ledger(
+    adapter=NightsAdapter(settings=runtime.settings, readings_for=_readings_between,
+                          treatments_for=_treatments_between, alarm_events_for=store.select_alarm_events,
+                          presence_for=store.select_presence_transitions,
+                          brain_only=lambda: config.IRIN_BRAIN_ONLY),
+    is_demo=lambda: runtime.mode == "replay")
+
+
+runtime.low_events = LowEventDetector(adapter=runtime.ledger.adapter, is_demo=lambda: runtime.mode == "replay")
+
+
+def _ledger_job(morning: date) -> None:
+    """At night-window end: the night that just ended (keyed by its evening date)."""
+    task = asyncio.get_running_loop().create_task(
+        asyncio.to_thread(_build_night_record, runtime.ledger.night_ended_on(morning)))
+    _broadcast_tasks.add(task)
+    task.add_done_callback(_broadcast_tasks.discard)
+
+
+def _build_night_record(night_date: date) -> NightRecord | None:
+    """The ledger row, then the night's low events (R4) from the same inputs."""
+    try:
+        record = runtime.ledger.build_night(night_date)
+    except Exception:
+        logging.getLogger("irin.main").exception("night ledger failed for %s", night_date)
+        return None
+    try:
+        runtime.low_events.detect(night_date)
+    except Exception:
+        logging.getLogger("irin.main").exception("low events failed for %s; the ledger row stands", night_date)
+    return record
+
+
+runtime.scheduler.register("ledger", lambda: runtime.settings.night_window_end, _ledger_job)
+
 ALARM_TICK_CLOCK_SECONDS = 30.0
 _broadcast_tasks: set[asyncio.Task] = set()  # references held so a broadcast is never GC'd mid-flight
 
@@ -220,9 +265,16 @@ def _broadcast_transition(t: Transition) -> None:
 
 
 runtime.alarm.on_transition(_broadcast_transition)
+runtime.alarm_events = AlarmEventRecorder(is_demo=lambda: runtime.mode == "replay",
+                                          brain_only=lambda: config.IRIN_BRAIN_ONLY)
+runtime.alarm.on_transition(runtime.alarm_events)  # R2 observes; it never calls back into alarm.py
 
 
 def _broadcast_presence(state: PresenceState) -> None:
+    try:
+        store.insert_presence_transition(state)  # the toggle history the night ledger reads (R3)
+    except Exception:
+        logging.getLogger("irin.main").exception("presence transition not stored")
     try:
         task = asyncio.get_running_loop().create_task(
             hub.broadcast(WSMessage(type="presence_change", payload=state.model_dump(mode="json"))))
@@ -241,7 +293,9 @@ async def _alarm_tick_loop() -> None:
     while True:
         try:
             runtime.alarm.tick()
-            runtime.presence.sample(runtime.outputs.get_presence())
+            raw = runtime.outputs.get_presence()
+            runtime.presence.sample(raw)
+            runtime.alarm_events.sample(raw)  # the same raw radar sample, aggregated per episode (B7)
         except Exception:
             logging.getLogger("irin.main").exception("tick failed; continuing")
         await clock.sleep(ALARM_TICK_CLOCK_SECONDS)
@@ -338,6 +392,7 @@ async def set_mode(req: ModeRequest) -> dict:
     runtime.mode = req.mode
     await new.start()
     runtime.alarm.reset()  # switch semantics (step 12): alarm state back to idle
+    runtime.alarm_events.reset()  # an episode cut by the switch is dropped, never written
     runtime.forecaster.reset()
     runtime.voice.reset()
     hub._last = None
@@ -471,6 +526,42 @@ async def scheduler_state() -> dict:
 @app.get("/api/alarm", response_model=AlarmState)
 async def alarm_state() -> AlarmState:
     return runtime.alarm.state
+
+
+@app.get("/api/nights", response_model=list[NightRecord])
+async def nights(days: int = 14) -> list[NightRecord]:
+    """The night ledger (R3), oldest first."""
+    days = max(1, min(days, 365))
+    return store.select_night_records(clock.now().date() - timedelta(days=days))
+
+
+class BuildNightRequest(BaseModel):
+    night_date: date | None = None
+
+
+@app.post("/api/nights/build", dependencies=[Depends(require_pin)], response_model=NightRecord)
+async def build_night(req: BuildNightRequest) -> NightRecord:
+    """Build or rebuild one night now (the demo panel, the seek's catch-up).
+    night_date is the EVENING the night starts on; default: the night that ended this morning."""
+    record = await asyncio.to_thread(_build_night_record,
+                                     req.night_date or runtime.ledger.night_ended_on(clock.now().date()))
+    if record is None:
+        raise HTTPException(status_code=500, detail="night ledger failed; see the log")
+    return record
+
+
+@app.get("/api/low_events", response_model=list[LowEvent])
+async def low_events(days: int = 14) -> list[LowEvent]:
+    """Nocturnal lows (R4), oldest first."""
+    days = max(1, min(days, 365))
+    return store.select_low_events(clock.now().date() - timedelta(days=days))
+
+
+@app.get("/api/alarm_events", response_model=list[AlarmEvent])
+async def alarm_events(hours: int = 24) -> list[AlarmEvent]:
+    """Finished episodes (R2), oldest first: the under-the-hood panel and Justin's timeline."""
+    hours = max(1, min(hours, 24 * 30))
+    return store.select_alarm_events(clock.now() - timedelta(hours=hours))
 
 
 # --- settings (the app's settings form): one shared Settings object, updated in place ---

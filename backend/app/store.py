@@ -10,7 +10,7 @@ from datetime import date, datetime
 from pathlib import Path
 
 from .config import config
-from .contracts import FamilyStory, MorningReport, Reading, Treatment
+from .contracts import AlarmEvent, FamilyStory, LowEvent, MorningReport, NightRecord, PresenceState, Reading, Treatment
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS readings (
@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS doctor_messages (message_id TEXT PRIMARY KEY, json TE
 CREATE TABLE IF NOT EXISTS family_stories (story_id TEXT PRIMARY KEY, json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS reports (night_date TEXT PRIMARY KEY, json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS presence_transitions (since TEXT PRIMARY KEY, json TEXT NOT NULL);
 """
 
 
@@ -238,3 +239,129 @@ def select_family_stories(night_date: date | None = None, limit: int = 100,
         stories = [s for s in stories if s.night_date == night_date]
     stories.sort(key=lambda s: (s.night_date, s.story_id), reverse=True)
     return stories[:limit]
+
+
+# --- AlarmEvents (R2): one row per episode, replaced on rewrite ---
+
+
+def upsert_alarm_event(event: AlarmEvent, conn: sqlite3.Connection | None = None) -> None:
+    own = conn is None
+    conn = conn or connect()
+    with conn:
+        conn.execute("INSERT OR REPLACE INTO alarm_events VALUES (?, ?)", (event.event_id, event.model_dump_json()))
+    if own:
+        conn.close()
+
+
+def select_alarm_events(since: datetime, until: datetime | None = None,
+                        conn: sqlite3.Connection | None = None) -> list[AlarmEvent]:
+    """Episodes that started in [since, until], oldest first."""
+    own = conn is None
+    conn = conn or connect()
+    rows = conn.execute("SELECT json FROM alarm_events").fetchall()
+    if own:
+        conn.close()
+    events = [AlarmEvent.model_validate_json(r["json"]) for r in rows]
+    events = [e for e in events if e.started_at >= since and (until is None or e.started_at <= until)]
+    events.sort(key=lambda e: e.started_at)
+    return events
+
+
+# --- the presence TOGGLE history (R3's "away" reason code reads it; the radar never lands here) ---
+
+
+def insert_presence_transition(state: PresenceState, conn: sqlite3.Connection | None = None) -> None:
+    own = conn is None
+    conn = conn or connect()
+    with conn:
+        conn.execute("INSERT OR REPLACE INTO presence_transitions VALUES (?, ?)",
+                     (state.since.isoformat(), state.model_dump_json()))
+    if own:
+        conn.close()
+
+
+def select_presence_transitions(start: datetime, end: datetime,
+                                conn: sqlite3.Connection | None = None) -> list[PresenceState]:
+    """The transitions in [start, end] plus the last one before start (the state in force)."""
+    own = conn is None
+    conn = conn or connect()
+    rows = conn.execute("SELECT json FROM presence_transitions WHERE since <= ? ORDER BY since",
+                        (end.isoformat(),)).fetchall()
+    if own:
+        conn.close()
+    states = [PresenceState.model_validate_json(r["json"]) for r in rows]
+    before = [s for s in states if s.since < start]
+    return (before[-1:] if before else []) + [s for s in states if s.since >= start]
+
+
+# --- night records (R3): one per night_date, replaced on rebuild ---
+
+
+def upsert_night_record(record: NightRecord, conn: sqlite3.Connection | None = None) -> None:
+    own = conn is None
+    conn = conn or connect()
+    with conn:
+        conn.execute("INSERT OR REPLACE INTO night_records VALUES (?, ?)",
+                     (record.night_date.isoformat(), record.model_dump_json()))
+    if own:
+        conn.close()
+
+
+def select_night_record(night_date: date, conn: sqlite3.Connection | None = None) -> NightRecord | None:
+    own = conn is None
+    conn = conn or connect()
+    r = conn.execute("SELECT json FROM night_records WHERE night_date = ?", (night_date.isoformat(),)).fetchone()
+    if own:
+        conn.close()
+    return NightRecord.model_validate_json(r["json"]) if r else None
+
+
+def select_night_records(since: date, until: date | None = None,
+                         conn: sqlite3.Connection | None = None) -> list[NightRecord]:
+    """Oldest first, by night_date in [since, until]."""
+    own = conn is None
+    conn = conn or connect()
+    rows = conn.execute("SELECT json FROM night_records WHERE night_date >= ? AND night_date <= ? ORDER BY night_date",
+                        (since.isoformat(), (until or date.max).isoformat())).fetchall()
+    if own:
+        conn.close()
+    return [NightRecord.model_validate_json(r["json"]) for r in rows]
+
+
+# --- low events (R4): one per nocturnal low, replaced on rebuild ---
+
+
+def upsert_low_event(event: LowEvent, conn: sqlite3.Connection | None = None) -> None:
+    own = conn is None
+    conn = conn or connect()
+    with conn:
+        conn.execute("INSERT OR REPLACE INTO low_events VALUES (?, ?)", (event.low_event_id, event.model_dump_json()))
+    if own:
+        conn.close()
+
+
+def replace_low_events(night_date: date, events: list[LowEvent], conn: sqlite3.Connection | None = None) -> None:
+    """One transaction: the night's previous rows go, the new set is written."""
+    own = conn is None
+    conn = conn or connect()
+    with conn:
+        old = [r["low_event_id"] for r in conn.execute("SELECT low_event_id, json FROM low_events").fetchall()
+               if LowEvent.model_validate_json(r["json"]).night_date == night_date]
+        conn.executemany("DELETE FROM low_events WHERE low_event_id = ?", [(i,) for i in old])
+        conn.executemany("INSERT OR REPLACE INTO low_events VALUES (?, ?)",
+                         [(e.low_event_id, e.model_dump_json()) for e in events])
+    if own:
+        conn.close()
+
+
+def select_low_events(since: date, until: date | None = None, conn: sqlite3.Connection | None = None) -> list[LowEvent]:
+    """By night_date in [since, until], oldest first."""
+    own = conn is None
+    conn = conn or connect()
+    rows = conn.execute("SELECT json FROM low_events").fetchall()
+    if own:
+        conn.close()
+    events = [LowEvent.model_validate_json(r["json"]) for r in rows]
+    events = [e for e in events if since <= e.night_date <= (until or date.max)]
+    events.sort(key=lambda e: e.started_at)
+    return events

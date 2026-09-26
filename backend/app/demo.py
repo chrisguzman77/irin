@@ -92,6 +92,8 @@ async def select_scenario(req: ScenarioRequest) -> dict:
     _runtime.datasource = new
     await new.start()
     _runtime.alarm.reset()
+    if getattr(_runtime, "alarm_events", None) is not None:
+        _runtime.alarm_events.reset()
     _runtime.forecaster.reset()
     _runtime.voice.reset()
     _runtime.hub._last = None
