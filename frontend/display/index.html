@@ -44,6 +44,22 @@
     <div id="doctor-msg"></div>
   </section>
 
+  <!-- R1: Share with my doctor. The QR is drawn only by the screen that started
+       the pairing; the code and Confirm show whenever the doctor has joined. -->
+  <section id="pair" class="hidden" aria-label="share with my doctor">
+    <div id="pair-title">Share with my doctor</div>
+    <div id="pair-list"></div>
+    <div id="pair-qr" class="hidden"></div>
+    <div id="pair-code" class="hidden"></div>
+    <div id="pair-text"></div>
+    <div id="pair-buttons">
+      <button type="button" id="pair-close">Close</button>
+      <button type="button" id="pair-start">Show a pairing code</button>
+      <button type="button" id="pair-confirm" class="hidden">Confirm</button>
+    </div>
+    <div id="pair-msg"></div>
+  </section>
+
   <section id="keypad" class="hidden" aria-label="enter PIN">
     <div id="keypad-title">Enter PIN</div>
     <div id="keypad-dots"></div>
@@ -58,6 +74,7 @@
       </div>
       <div id="units">mg/dL</div>
       <div id="reading-time">waiting for device</div>
+      <button type="button" id="share-open">Share with my doctor</button>
     </section>
 
     <section id="graph-wrap">
@@ -118,6 +135,7 @@
   </main>
 
   <script src="doctor-echo.js"></script>
+  <script src="qrcode.js"></script>
   <script src="display.js"></script>
 </body>
 </html>

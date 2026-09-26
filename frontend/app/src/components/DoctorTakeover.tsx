@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { soundingLow } from "../lib/alarm";
 import { useDevice } from "../lib/device";
-import { echoDoctorMessage, messagePath, type DoctorMessage } from "../lib/doctorMessages";
+import { echoDoctorMessage, messagePath, pairedDoctorName, type DoctorMessage } from "../lib/doctorMessages";
 import { cancelFreshPrompt, postFresh } from "../lib/freshPin";
 
 // R4: the doctor-message confirm takeover in the app, mirroring the kiosk.
@@ -28,9 +28,7 @@ export default function DoctorTakeover() {
   }, [pendingIds]);
   if (target.status !== "ready" || !snap || !m || soundingLow(snap.alarm)) return null;
 
-  const pairing = (snap.pairing_state ?? {}) as { doctor_display_name?: unknown };
-  const name = typeof pairing.doctor_display_name === "string" ? pairing.doctor_display_name : null;
-  const e = echoDoctorMessage(m, name);
+  const e = echoDoctorMessage(m, pairedDoctorName(snap.pairing_state));
   const note = msg?.id === m.message_id ? msg.text : null;
 
   const answer = async (verb: "confirm" | "decline") => {

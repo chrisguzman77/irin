@@ -2,7 +2,8 @@
 // takeover shows for a DoctorMessage (contracts.py). ONE file for both
 // screens: the kiosk loads it as a <script>, the app imports a byte-identical
 // copy (frontend/app/src/lib/doctorEcho.js); keep the two equal. Pure; it
-// defines globalThis.irinDoctorEcho(message, doctorName, plan) and nothing else.
+// defines globalThis.irinDoctorEcho(message, doctorName) and
+// globalThis.irinDoctorName(pairingState) and nothing else.
 (function (g) {
   var MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   function day(iso) {
@@ -78,5 +79,20 @@
     return { who: who, line: line, note: note, insulin: insulin, confirm: confirm, known: known };
   }
 
+  /**
+   * The paired doctor's name for the echo, from pairing_state.pairings. A
+   * DoctorMessage names no doctor, so the name is used only when exactly one
+   * doctor is paired; otherwise "Your doctor". (pairing_state's top-level
+   * doctor_display_name is the PENDING peer's, never the sender's.)
+   */
+  function doctorName(pairingState) {
+    var list = pairingState && Array.isArray(pairingState.pairings) ? pairingState.pairings : [];
+    var paired = list.filter(function (p) {
+      return p && p.status === "paired" && (p.peer_kind || "doctor") === "doctor" && typeof p.doctor_display_name === "string";
+    });
+    return paired.length === 1 ? paired[0].doctor_display_name : null;
+  }
+
   g.irinDoctorEcho = echo;
+  g.irinDoctorName = doctorName;
 })(typeof window !== "undefined" ? window : globalThis);

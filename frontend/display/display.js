@@ -41,12 +41,13 @@ const state = {
   piDate: null,        // "YYYY-MM-DD" of the Pi's clock, to match a report's night_date
   report: null,        // MorningReport (GET /api/reports/latest), fetched in morning mode
   alarm: { state: "idle", trigger_type: null },  // AlarmState
-  basalNudge: "none",
-  familyStories: [],
+  basalNudge: "none",  // the scheduler's basal nudge level: none | visual | email
+  familyStories: [],   // FamilyStory list of the latest night (snapshot family_story_status + updates)
   doctorMessages: [],  // pending DoctorMessage list (snapshot pending_doctor_messages + updates)
-  doctorName: null,    // the paired doctor's display name (snapshot pairing_state)
+  doctorName: null,    // the one paired doctor's display name (irinDoctorName of pairing_state)
   doctorMsg: "",
-  doctorAsking: null,  // message_id the keypad is open for   // FamilyStory list of the latest night (snapshot family_story_status + updates)  // the scheduler's basal nudge level: none | visual | email
+  doctorAsking: null,  // message_id the keypad is open for
+  pairing: {},         // pairing_state (snapshot + pairing_state messages)
   ackMsg: "",
 };
 
@@ -119,7 +120,7 @@ function onMessage(msg) {
       state.alarm = p.alarm || { state: "idle", trigger_type: null };
       state.familyStories = Array.isArray(p.family_story_status) ? p.family_story_status : [];
       state.doctorMessages = Array.isArray(p.pending_doctor_messages) ? p.pending_doctor_messages : [];
-      state.doctorName = (p.pairing_state && p.pairing_state.doctor_display_name) || null;
+      setPairing(p.pairing_state);
       if (p.latest_reading) addReading(p.latest_reading);
       else state.latest = null;
       backfillHistory();
@@ -158,6 +159,9 @@ function onMessage(msg) {
       break;
     case "settings_change":
       state.settings = p.settings || p;
+      break;
+    case "pairing_state":
+      setPairing(p);
       break;
     default:
       return; // other types belong to later steps; the hub's echo replies have no type
@@ -280,6 +284,7 @@ function render() {
   // IOB, last dose, and today's TIR are not in the snapshot yet (contracts
   // request to Chris, see journal); the tiles stay "—" until they are.
   renderAlarm(num, arrow);
+  renderPair();
   renderDoctor();
   if (mode === "detail") drawGraph();
 }
@@ -323,6 +328,160 @@ async function answerDoctor(verb) {
   if (res.cancelled) return;
   state.doctorMsg = res.ok ? "sent — waiting for your Irin" : res.reason;
   render();
+}
+
+// --- Share with my doctor (R1): the QR screen ---
+
+// POST /api/pair/start (PIN from the keypad) answers with the QR URL; only
+// the screen that started a pairing can draw its QR (pairing_state never
+// carries the token). The Pi learns that the doctor's browser joined only
+// when asked (GET /api/pair/status), so this screen polls while its QR is
+// up, with the PIN typed for Start, held in memory for this one pairing
+// (never the cached ack PIN, never stored). Confirm is a fresh-PIN verb: the
+// keypad opens every time (postFresh). Nothing is shared until Confirm.
+const PAIR_POLL_MS = 3000;
+const pair = { open: false, qr: null, pin: null, deadline: 0, msg: "", timer: null, busy: false };
+
+function setPairing(ps) {
+  const before = state.pairing.status;
+  state.pairing = ps && typeof ps === "object" ? ps : {};
+  state.doctorName = window.irinDoctorName(state.pairing);
+  const now = state.pairing.status;
+  if (now === "awaiting_confirm" && before !== "awaiting_confirm") pair.open = true; // the doctor joined: show the code here too
+  if (now !== "awaiting_scan" && now !== "awaiting_confirm" && pair.qr) endQr(""); // confirmed, expired, or the mode changed
+}
+
+function endQr(msg) {
+  clearInterval(pair.timer);
+  pair.timer = null;
+  pair.qr = null;
+  pair.pin = null;
+  pair.msg = msg;
+}
+
+async function pollPair() {
+  if (!pair.pin) return;
+  if (Date.now() > pair.deadline) {
+    endQr("The code expired. Start again when the doctor is ready.");
+    return render();
+  }
+  try {
+    const res = await fetch("/api/pair/status", { headers: { "X-PIN": pair.pin }, cache: "no-store" });
+    if (res.status === 401) endQr("PIN not accepted");
+    else if (res.ok) setPairing(await res.json());
+  } catch { /* the next poll tries again */ }
+  render();
+}
+
+async function startPairing() {
+  if (pair.busy) return;
+  const pin = await promptPin("Enter PIN to share with your doctor");
+  if (!pin) return;
+  pair.busy = true;
+  pair.msg = "starting…";
+  render();
+  try {
+    const res = await fetch("/api/pair/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-PIN": pin },
+      body: JSON.stringify({ peer_kind: "doctor" }),
+    });
+    if (res.status === 401) { pair.msg = "PIN not accepted"; return; }
+    if (!res.ok) {
+      const b = await res.json().catch(() => null);
+      pair.msg = `could not start: ${(b && typeof b.detail === "string" && b.detail) || `the device refused (${res.status})`}`;
+      return;
+    }
+    const b = await res.json();
+    endQr("");
+    pair.qr = { url: b.qr_url, demo: !!b.is_demo };
+    pair.pin = pin;
+    pair.deadline = Date.now() + (Number(b.expires_in_s) || 600) * 1000;
+    pair.timer = setInterval(pollPair, PAIR_POLL_MS);
+    pollPair();
+  } catch {
+    pair.msg = "could not reach the device";
+  } finally {
+    pair.busy = false;
+    render();
+  }
+}
+
+async function confirmPairing() {
+  if (pair.busy) return;
+  pair.busy = true;
+  pair.msg = "confirming…"; // shown once the keypad closes: the Pi asks the relay before it answers
+  render();
+  try {
+    const res = await postFresh("/api/pair/confirm", undefined, "Enter PIN to confirm sharing");
+    if (res.cancelled) { pair.msg = ""; return; }
+    pair.msg = res.ok ? `Now sharing with ${(res.value && res.value.doctor_display_name) || "your doctor"}` : res.reason;
+  } finally {
+    pair.busy = false;
+    render();
+  }
+}
+
+// The QR as SVG: one path, a dark square per module, 4-module quiet zone.
+function qrSvg(text) {
+  const q = window.qrcode(0, "M");
+  q.addData(text);
+  q.make();
+  const n = q.getModuleCount(), m = 4;
+  let d = "";
+  for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) if (q.isDark(r, c)) d += `M${c + m} ${r + m}h1v1h-1z`;
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("viewBox", `0 0 ${n + 2 * m} ${n + 2 * m}`);
+  svg.setAttribute("shape-rendering", "crispEdges");
+  svg.setAttribute("role", "img");
+  svg.setAttribute("aria-label", "pairing QR code");
+  const path = document.createElementNS(ns, "path");
+  path.setAttribute("d", d);
+  path.setAttribute("fill", "#000");
+  svg.append(path);
+  return svg;
+}
+
+let pairQrDrawn = null; // the URL the SVG on screen encodes
+function renderPair() {
+  $("pair").classList.toggle("hidden", !pair.open);
+  if (!pair.open) return;
+  const ps = state.pairing || {};
+  const status = ps.status || "idle";
+  const sharing = (Array.isArray(ps.pairings) ? ps.pairings : []).filter((p) => p && p.status === "paired");
+  $("pair-list").textContent = sharing.length
+    ? "Sharing with " + sharing.map((p) => p.doctor_display_name + (p.is_demo ? " (DEMO)" : "")).join(", ")
+    : "Not sharing with anyone yet";
+
+  const showQr = status === "awaiting_scan" && !!pair.qr;
+  $("pair-qr").classList.toggle("hidden", !showQr);
+  if (showQr && pairQrDrawn !== pair.qr.url) {
+    $("pair-qr").replaceChildren(qrSvg(pair.qr.url));
+    pairQrDrawn = pair.qr.url;
+  }
+  if (!showQr) { $("pair-qr").replaceChildren(); pairQrDrawn = null; }
+
+  const joined = status === "awaiting_confirm" && typeof ps.code4 === "string";
+  $("pair-code").classList.toggle("hidden", !joined);
+  $("pair-code").textContent = joined ? ps.code4 : "";
+  $("pair-confirm").classList.toggle("hidden", !joined);
+  $("pair-start").classList.toggle("hidden", status !== "idle");
+  $("pair-start").disabled = $("pair-confirm").disabled = pair.busy;
+
+  let text = "";
+  if (joined) {
+    const who = ps.doctor_display_name || "The doctor";
+    text = `${who}'s screen should show this same code. Confirm only if it matches: nothing is shared until you do.`;
+  } else if (showQr) {
+    const left = Math.max(0, Math.round((pair.deadline - Date.now()) / 1000));
+    text = `Scan with the doctor's phone or computer. The code works once, for ${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")} more.`;
+    if (pair.qr.demo) text += " Demo pairing: it receives demo cards only.";
+  } else if (status === "awaiting_scan") {
+    text = "A pairing was started in the app: scan the code shown on the phone.";
+  }
+  $("pair-text").textContent = text;
+  $("pair-msg").textContent = pair.msg;
 }
 
 // --- morning (step 2 numbers, from the step 11 report) ---
@@ -497,7 +656,10 @@ async function postFresh(path, body, title = "Enter PIN to confirm") {
       body: body === undefined ? undefined : JSON.stringify(body),
     });
     if (res.status === 401) return { ok: false, badPin: true, reason: "PIN not accepted" };
-    if (!res.ok) return { ok: false, status: res.status, reason: `the device refused (${res.status})` };
+    if (!res.ok) {
+      const b = await res.json().catch(() => null);
+      return { ok: false, status: res.status, reason: (b && typeof b.detail === "string" && b.detail) || `the device refused (${res.status})` };
+    }
     return { ok: true, value: await res.json().catch(() => null) };
   } catch {
     return { ok: false, reason: "could not reach the device" };
@@ -659,6 +821,12 @@ window.addEventListener("resize", drawGraph);
 $("alarm-ack").addEventListener("click", onAckTap);
 $("doctor-confirm").addEventListener("click", () => answerDoctor("confirm"));
 $("doctor-decline").addEventListener("click", () => answerDoctor("decline"));
+$("share-open").addEventListener("click", () => { pair.open = true; pair.msg = ""; render(); });
+$("pair-close").addEventListener("click", () => { pair.open = false; endQr(""); render(); });
+$("pair-start").addEventListener("click", startPairing);
+$("pair-confirm").addEventListener("click", confirmPairing);
+// the QR countdown ticks without a message arriving
+setInterval(() => { if (pair.qr) render(); }, 1000);
 render();
 connect();
 pollDevice();

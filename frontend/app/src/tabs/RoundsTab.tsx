@@ -1,17 +1,20 @@
 import { useEffect, useState } from "react";
 import SignalCard from "../components/SignalCard";
-import { listCards, listPairings, type CardRecord, type Pairing } from "../lib/cards";
+import { listCards, type CardRecord } from "../lib/cards";
 import type { SignalCard as Card } from "../lib/contracts";
 import { useDevice } from "../lib/device";
 import standing from "../fixtures/signal_card_standing.json";
 import step from "../fixtures/signal_card_step.json";
+import { readPairingState } from "../lib/pairing";
 import RecallCards from "./device/RecallCards";
+import DoctorSharing from "./rounds/DoctorSharing";
 
 // Irin Rounds tab (justin.md R3): this morning's recall questions, then "What
 // my doctor sees": the cards the device actually sealed (GET /api/rounds/cards,
 // refreshed on card_sent), each with who received it. Until the first real
 // card exists it shows the two SAMPLE cards, labeled "Sample card" and DEMO.
-// Pairing status, glucagon, and the step timeline arrive next.
+// Above them, My doctor: pairing status, Share with my doctor, Revoke.
+// Glucagon and the step timeline arrive next.
 const SAMPLES = [
   { key: "standing", label: "Basal Check", card: standing as unknown as Card },
   { key: "step", label: "Step check", card: step as unknown as Card },
@@ -74,18 +77,16 @@ export default function RoundsTab() {
   const snap = socket.snapshot;
   const base = target.status === "ready" ? target.url : null;
   const [cards, setCards] = useState<CardRecord[] | null>(null);
-  const [pairings, setPairings] = useState<Pairing[]>([]);
   const [error, setError] = useState(false);
   const [open, setOpen] = useState<string | null>(null);
 
   useEffect(() => {
     if (!base) return;
     let alive = true;
-    Promise.all([listCards(base), listPairings(base)])
-      .then(([c, p]) => {
+    listCards(base)
+      .then((c) => {
         if (!alive) return;
         setCards(c);
-        setPairings(p);
         setError(false);
       })
       .catch(() => alive && setError(true));
@@ -94,13 +95,14 @@ export default function RoundsTab() {
     };
   }, [base, socket.cardsVersion]);
 
-  const names = new Map(pairings.map((p) => [p.doctor_id, p.doctor_display_name]));
+  const names = new Map(readPairingState(snap?.pairing_state).pairings.map((p) => [p.doctor_id, p.doctor_display_name]));
   const real = cards ?? [];
   const latest = real[0];
 
   return (
     <section className="flex flex-col gap-4">
       {base && <RecallCards lows={socket.recallDue} baseUrl={base} demo={snap?.mode === "replay"} />}
+      {base && <DoctorSharing />}
       <h2 className="text-xl font-semibold">What my doctor sees</h2>
       {error && <p className="text-sm text-red-400">Could not load the cards from your Irin.</p>}
       {!base || cards === null || real.length === 0 ? (
@@ -137,7 +139,6 @@ export default function RoundsTab() {
           )}
         </>
       )}
-      <p className="text-xs text-neutral-500">Pairing with your doctor and the step timeline arrive next.</p>
     </section>
   );
 }

@@ -58,6 +58,8 @@ export function applyMessage(snap: StateSnapshot | null, msg: WSMessage): StateS
     case "family_story_pending":
     case "family_story_sent":
       return { ...snap, family_story_status: mergeStory(snap.family_story_status, p) };
+    case "pairing_state":
+      return { ...snap, pairing_state: p };
     case "presence_change":
       return { ...snap, presence: ((p.presence ?? p) as unknown) as StateSnapshot["presence"] };
     default:
