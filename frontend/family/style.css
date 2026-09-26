@@ -1,3 +1,23 @@
-body { font-family: system-ui, sans-serif; margin: 2rem; background: #fafafa; color: #222; }
-.badge { display: inline-block; background: #ffb000; padding: 0.2rem 0.6rem; border-radius: 0.3rem; }
-pre { background: #eee; padding: 1rem; }
+:root { --bg: #fafaf7; --fg: #1f2328; --muted: #6b7280; --card: #fff; --line: #e5e7eb; }
+* { box-sizing: border-box; }
+body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; background: var(--bg); color: var(--fg); }
+main { max-width: 520px; margin: 0 auto; padding: 16px; display: flex; flex-direction: column; gap: 16px; }
+h1 { font-size: 20px; margin: 8px 0 0; }
+h2 { font-size: 16px; margin: 0 0 8px; }
+.muted { color: var(--muted); font-weight: 500; }
+.demo { position: sticky; top: 0; background: #ffb000; color: #000; font-weight: 800; text-align: center; padding: 8px; letter-spacing: 0.04em; }
+.now { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 20px; text-align: center; }
+.reading { font-size: 72px; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; }
+.trend { font-size: 40px; margin-left: 10px; vertical-align: middle; }
+.unit { color: var(--muted); margin-top: 4px; }
+.since { margin-top: 10px; font-size: 15px; }
+.now.stale .reading { color: #9ca3af; }
+.now.stale .since { color: #b45309; font-weight: 600; }
+.night { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 16px; }
+#strip { width: 100%; height: auto; display: block; }
+.stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 12px 0 4px; }
+.stats div { background: var(--bg); border-radius: 10px; padding: 8px; }
+.stats dt { font-size: 12px; color: var(--muted); }
+.stats dd { margin: 2px 0 0; font-weight: 700; font-size: 15px; }
+.msg { color: #b45309; font-weight: 600; }
+footer { text-align: center; color: var(--muted); font-size: 12px; padding: 16px; }
