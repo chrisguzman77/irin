@@ -19,6 +19,11 @@ export default function FreshPinPrompt() {
             return { title, resolve };
           });
         }),
+      () =>
+        setAsk((prev) => {
+          prev?.resolve(null);
+          return null;
+        }),
     );
     return () => registerPrompter(null);
   }, []);

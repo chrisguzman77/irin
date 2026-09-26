@@ -9,9 +9,15 @@
 type Prompter = (title: string) => Promise<string | null>;
 
 let prompter: Prompter | null = null;
+let canceller: (() => void) | null = null;
 /** FreshPinPrompt (mounted once in the app shell) registers itself here. */
-export function registerPrompter(p: Prompter | null): void {
+export function registerPrompter(p: Prompter | null, cancel: (() => void) | null = null): void {
   prompter = p;
+  canceller = cancel;
+}
+/** Close an open prompt as if cancelled (its question no longer exists). */
+export function cancelFreshPrompt(): void {
+  canceller?.();
 }
 
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import DoctorTakeover from "./components/DoctorTakeover";
 import FreshPinPrompt from "./components/FreshPinPrompt";
 import Gate from "./components/Gate";
 import StatusBar from "./components/StatusBar";
@@ -45,6 +46,7 @@ export default function App() {
     <DeviceProvider>
       <div className="min-h-dvh bg-black text-white">
         <StatusBar />
+        <DoctorTakeover />
         <FreshPinPrompt />
         <nav className="flex border-b border-neutral-800 bg-black">
           {TABS.map((t) => (

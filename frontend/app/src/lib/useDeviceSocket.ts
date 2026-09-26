@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { addMessage, removeMessage } from "./doctorMessages";
 import type { AlarmState, Forecast, Reading, Settings, StateSnapshot, WSMessage } from "./contracts";
 
 // The ONE socket to the Pi (justin.md hard client rule 1). Screens render
@@ -44,6 +45,10 @@ export function applyMessage(snap: StateSnapshot | null, msg: WSMessage): StateS
       return { ...snap, settings: ((p.settings ?? p) as unknown) as Settings };
     case "mode_change":
       return { ...snap, mode: p.mode as StateSnapshot["mode"] };
+    case "doctor_message_received":
+      return { ...snap, pending_doctor_messages: addMessage(snap.pending_doctor_messages, p) };
+    case "doctor_message_resolved":
+      return { ...snap, pending_doctor_messages: removeMessage(snap.pending_doctor_messages, p) };
     case "family_story_pending":
     case "family_story_sent":
       return { ...snap, family_story_status: mergeStory(snap.family_story_status, p) };

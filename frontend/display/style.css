@@ -138,6 +138,23 @@ body.alarm-high::after { content: ""; position: fixed; inset: 0; pointer-events:
 body.is-stale #alarm-glucose, body.is-disconnected #alarm-glucose { opacity: 0.55; }
 
 /* keypad */
+/* --- Doctor-message takeover (R4): calm blue, never an alarm colour. Under
+   the alarm (z 20) and the flags (z 25); the keypad (z 30) opens over it. --- */
+#doctor { position: fixed; inset: 0; z-index: 15; background: #071a2e; color: #e8f1fb; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 2.4vh; padding: 8vh 6vw; text-align: center; }
+#doctor-count { font-size: 2.2vh; color: #8fb3d9; min-height: 2.2vh; }
+#doctor-who { font-size: 3.4vh; font-weight: 700; color: #8fb3d9; }
+#doctor-line { font-size: min(6vh, 4.4vw); font-weight: 700; line-height: 1.2; max-width: 80vw; }
+#doctor-units { font-size: min(14vh, 11vw); font-weight: 800; font-variant-numeric: tabular-nums; line-height: 1; }
+#doctor-note { font-size: 2.8vh; color: #cfe0f2; max-width: 70vw; }
+#doctor-buttons { display: flex; gap: 3vw; margin-top: 2vh; }
+#doctor-buttons button { font: 800 4vh system-ui, sans-serif; padding: 2.4vh 5vw; border-radius: 1.2vh; border: 0.3vh solid #8fb3d9; }
+#doctor-decline { background: transparent; color: #e8f1fb; }
+#doctor-confirm { background: #e8f1fb; color: #071a2e; }
+#doctor-confirm:disabled { opacity: 0.35; }
+#doctor-msg { font-size: 2.4vh; color: #ffd27a; min-height: 2.4vh; }
+body.mode-night #doctor { background: #03101d; }
+
 #keypad { position: fixed; inset: 0; z-index: 30; background: rgba(0,0,0,0.94); display: flex;
   flex-direction: column; align-items: center; justify-content: center; gap: 2vh; }
 #keypad-title { font-size: 4vh; color: var(--fg); }
