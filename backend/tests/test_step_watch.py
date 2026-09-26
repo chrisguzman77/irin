@@ -651,5 +651,5 @@ def test_a_plan_update_keeps_the_green_run_and_the_watch_runs_before_standing(db
     assert sw.active_plan().drug_label == "tirzepatide (edited)" and sw.green_weeks(sw.active_plan()) == 1
     from app import main
 
-    src = inspect.getsource(main._evaluate_after_ledger)
+    src = inspect.getsource(main._evaluate_night)  # the coroutine the ledger job and a late recall answer both schedule
     assert src.index("step_watch.run") < src.index("standing.run")

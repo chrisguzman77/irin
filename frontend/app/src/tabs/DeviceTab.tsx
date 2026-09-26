@@ -89,7 +89,7 @@ export default function DeviceTab() {
       </div>
       {view === "Live" && (
         <RecallCards
-          lows={socket.recallDue}
+          items={socket.recallDue}
           baseUrl={target.url}
           demo={snap?.mode === "replay"}
         />

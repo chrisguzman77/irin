@@ -1,15 +1,16 @@
 import { useEffect, useState } from "react";
 import { PinRejected } from "../../lib/api";
 import {
-  ANSWERS, SYMPTOM_ANSWERS, answerLabel, answerRecall, markAnswered, noonAfter, useAnswered, usePiClock,
-  type LowEvent, type RecallAnswer,
+  ANSWERS, CLOSED, SYMPTOM_ANSWERS, answerLabel, answerRecall, getRecalls, markAnswered, useAnswered, usePiClock,
+  type RecallAnswer, type RecallItem,
 } from "../../lib/recall";
 
-// R2: morning recall cards. "At 2:47 AM you were 58 for about 25 minutes. Do
-// you remember that?" with the curve around the low and four one-tap answers,
-// none pre-selected. Carbs logged near the low: "You logged carbs at 3:05.
-// Did you feel symptoms?" (yes / no). The Pi's answer is shown only after it
-// accepted it; after noon (Pi clock) the card is gone and the Pi records "no
+// R2/R11: morning recall cards. "At 2:47 AM you were 58 for about 25 minutes.
+// Do you remember that?" with the curve around the low and four one-tap
+// answers, none pre-selected. prefill_treated (carbs logged near the low):
+// "You logged carbs at 3:05. Did you feel symptoms?" (yes / no). The answer is
+// shown only once the Pi accepted it (or GET /api/rounds/recalls reports it);
+// at the Pi's answer_until (noon) the card is gone and the Pi records "no
 // answer", never "fine".
 
 const pad = (n: number) => String(n).padStart(2, "0");
@@ -43,7 +44,8 @@ function Curve({ points, nadirAt }: { points: Point[]; nadirAt: number }) {
   );
 }
 
-function RecallCard({ low, baseUrl, piNow, demo }: { low: LowEvent; baseUrl: string; piNow: number | null; demo: boolean }) {
+function RecallCard({ item, baseUrl, piNow, demo }: { item: RecallItem; baseUrl: string; piNow: number | null; demo: boolean }) {
+  const low = item.low_event;
   const answered = useAnswered().get(low.low_event_id);
   const [points, setPoints] = useState<Point[]>([]);
   const [carbsAt, setCarbsAt] = useState<string | null>(null);
@@ -78,7 +80,7 @@ function RecallCard({ low, baseUrl, piNow, demo }: { low: LowEvent; baseUrl: str
 
   // when carbs were logged near the low, name the time
   useEffect(() => {
-    if (!low.carbs_logged_within_30min) return;
+    if (!item.prefill_treated) return;
     let alive = true;
     fetch(`${baseUrl}/api/treatments?hours=48`, { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : []))
@@ -90,7 +92,7 @@ function RecallCard({ low, baseUrl, piNow, demo }: { low: LowEvent; baseUrl: str
     return () => {
       alive = false;
     };
-  }, [baseUrl, low.low_event_id, low.carbs_logged_within_30min, nadirAt]);
+  }, [baseUrl, low.low_event_id, item.prefill_treated, nadirAt]);
 
   const send = async (a: RecallAnswer) => {
     if (busy) return;
@@ -99,9 +101,10 @@ function RecallCard({ low, baseUrl, piNow, demo }: { low: LowEvent; baseUrl: str
     try {
       const res = await answerRecall(baseUrl, low.low_event_id, a);
       if (res.ok) {
-        markAnswered(low.low_event_id, a);
+        markAnswered(low.low_event_id, res.recall.answer ?? a);
         setChanging(false);
-      } else setMsg(res.reason);
+      } else if (res.closed) markAnswered(low.low_event_id, CLOSED);
+      else setMsg(res.reason);
     } catch (e) {
       if (!(e instanceof PinRejected)) setMsg("Could not reach your Irin. Nothing was saved.");
     } finally {
@@ -109,7 +112,7 @@ function RecallCard({ low, baseUrl, piNow, demo }: { low: LowEvent; baseUrl: str
     }
   };
 
-  const symptomsOnly = low.carbs_logged_within_30min;
+  const symptomsOnly = item.prefill_treated;
   const choices = symptomsOnly ? SYMPTOM_ANSWERS : ANSWERS;
   const minutes = low.minutes_below_70;
   return (
@@ -128,7 +131,9 @@ function RecallCard({ low, baseUrl, piNow, demo }: { low: LowEvent; baseUrl: str
         )}
       </p>
       <Curve points={points} nadirAt={nadirAt} />
-      {answered && !changing ? (
+      {answered === CLOSED ? (
+        <p className="text-sm text-neutral-400">It is past noon: this one is recorded as no answer.</p>
+      ) : answered && !changing ? (
         <div className="flex items-center gap-2">
           <span className="text-emerald-400 text-sm font-semibold flex-1">
             Saved: {(symptomsOnly ? SYMPTOM_ANSWERS.find(([k]) => k === answered)?.[1] : null) ?? answerLabel(answered)}
@@ -158,16 +163,26 @@ function RecallCard({ low, baseUrl, piNow, demo }: { low: LowEvent; baseUrl: str
 }
 
 export default function RecallCards({
-  lows, baseUrl, demo,
+  items, baseUrl, demo,
 }: {
-  lows: LowEvent[];
+  items: RecallItem[];
   baseUrl: string;
   demo: boolean;
 }) {
-  const piNow = usePiClock(lows.length ? baseUrl : null);
-  // after noon of that morning the question is closed (the Pi records "no answer")
+  const piNow = usePiClock(items.length ? baseUrl : null);
+  const ids = items.map((i) => i.low_event.low_event_id).join(",");
+  // the answers the Pi already holds (another screen, before a reload)
+  useEffect(() => {
+    if (!ids) return;
+    for (const i of items) if (i.recall?.answer) markAnswered(i.low_event.low_event_id, i.recall.answer);
+    getRecalls(baseUrl)
+      .then((all) => all.forEach((i) => i.recall?.answer && markAnswered(i.low_event.low_event_id, i.recall.answer)))
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [baseUrl, ids]);
+  // at answer_until (the Pi's noon of that morning) the question is closed: the Pi records "no answer"
   if (piNow === null) return null; // no trusted "now" yet: never show a question that may have closed
-  const open = lows.filter((l) => piNow < noonAfter(l.night_date));
+  const open = items.filter((i) => piNow < new Date(i.answer_until).getTime());
   if (open.length === 0) return null;
   return (
     <section className="flex flex-col gap-3 mb-4" aria-label="morning questions">
@@ -175,8 +190,8 @@ export default function RecallCards({
         {open.length === 1 ? "A question about last night" : `${open.length} questions about last night`}
       </h3>
       <ul className="flex flex-col gap-3">
-        {open.map((l) => (
-          <RecallCard key={l.low_event_id} low={l} baseUrl={baseUrl} piNow={piNow} demo={demo || !!l.is_demo} />
+        {open.map((i) => (
+          <RecallCard key={i.low_event.low_event_id} item={i} baseUrl={baseUrl} piNow={piNow} demo={demo || !!i.low_event.is_demo} />
         ))}
       </ul>
     </section>

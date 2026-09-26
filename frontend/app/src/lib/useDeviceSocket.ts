@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { addMessage, removeMessage } from "./doctorMessages";
-import { lowsFromRecallDue, type LowEvent } from "./recall";
+import { recallItems, type RecallItem } from "./recall";
 import type { AlarmState, Forecast, Reading, Settings, StateSnapshot, WSMessage } from "./contracts";
 
 // The ONE socket to the Pi (justin.md hard client rule 1). Screens render
@@ -17,9 +17,9 @@ export interface DeviceSocket {
   connected: boolean;
   /** true once the socket has been down longer than 15 s: show the banner */
   disconnectedLong: boolean;
-  /** the lows the Pi is asking about this morning (recall_due, or the
-   * snapshot's todays_checkin_status when it carries them); [] = none */
-  recallDue: LowEvent[];
+  /** this morning's open recall questions (recall_due, or the snapshot's
+   * todays_checkin_status.recalls); [] = none */
+  recallDue: RecallItem[];
   /** bumps on every card_sent and mode change: lists of sent cards refetch */
   cardsVersion: number;
 }
@@ -69,7 +69,7 @@ export function applyMessage(snap: StateSnapshot | null, msg: WSMessage): StateS
 
 export function useDeviceSocket(baseUrl: string | null): DeviceSocket {
   const [snapshot, setSnapshot] = useState<StateSnapshot | null>(null);
-  const [recallDue, setRecallDue] = useState<LowEvent[]>([]);
+  const [recallDue, setRecallDue] = useState<RecallItem[]>([]);
   const [cardsVersion, setCardsVersion] = useState(0);
   const [connected, setConnected] = useState(false);
   const [now, setNow] = useState(() => Date.now());
@@ -103,12 +103,11 @@ export function useDeviceSocket(baseUrl: string | null): DeviceSocket {
       if (!msg || typeof msg.type !== "string") return; // the hub's echo replies carry no type
       setSnapshot((s) => applyMessage(s, msg));
       if (msg.type === "card_sent" || msg.type === "mode_change") setCardsVersion((v) => v + 1);
-      if (msg.type === "recall_due") setRecallDue(lowsFromRecallDue(msg.payload) ?? []);
+      if (msg.type === "recall_due") setRecallDue(recallItems(msg.payload));
       else if (msg.type === "mode_change") setRecallDue([]); // live and demo lows never mix
       else if (msg.type === "state_snapshot") {
-        const c = (msg.payload as { todays_checkin_status?: Record<string, unknown> }).todays_checkin_status ?? {};
-        const fromSnap = lowsFromRecallDue(c.recall_due ?? c.recalls ?? c.low_events ?? null);
-        if (fromSnap) setRecallDue(fromSnap);
+        // the open questions ride todays_checkin_status.recalls; none there = none open
+        setRecallDue(recallItems((msg.payload as { todays_checkin_status?: unknown }).todays_checkin_status ?? null));
       }
     };
     ws.onclose = () => {
