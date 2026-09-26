@@ -12,7 +12,27 @@
     <div id="badge-clock" class="flag flag-clock hidden">clock not set</div>
     <div id="banner-stale" class="flag flag-stale hidden">STALE — no new reading</div>
     <div id="banner-disconnected" class="flag flag-disc hidden">DISCONNECTED — number may be old</div>
+    <div id="flag-high" class="flag flag-high hidden">HIGH</div>
+    <div id="flag-acked" class="flag flag-acked hidden">acknowledged — still low</div>
   </header>
+
+  <!-- Alarm takeover (step 3): amber = predicted low (WARNING), red = actual low (FULL).
+       The tier comes from alarm.trigger_type; it covers every screen mode. -->
+  <section id="alarm" class="hidden" role="alert">
+    <div id="alarm-title">LOW</div>
+    <div id="alarm-reading"><span id="alarm-glucose">---</span><span id="alarm-trend"></span></div>
+    <div id="alarm-sub"></div>
+    <button id="alarm-ack" type="button">Acknowledge</button>
+    <div id="alarm-ack-msg"></div>
+  </section>
+
+  <!-- Touch keypad: the kiosk's PIN, entered once and cached in localStorage
+       (the kiosk-only concession, justin.md rule 2). -->
+  <section id="keypad" class="hidden" aria-label="enter PIN">
+    <div id="keypad-title">Enter PIN</div>
+    <div id="keypad-dots"></div>
+    <div id="keypad-keys"></div>
+  </section>
 
   <main id="detail" class="screen">
     <section id="now">
