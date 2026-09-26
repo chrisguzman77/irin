@@ -40,7 +40,8 @@ const state = {
   piDate: null,        // "YYYY-MM-DD" of the Pi's clock, to match a report's night_date
   report: null,        // MorningReport (GET /api/reports/latest), fetched in morning mode
   alarm: { state: "idle", trigger_type: null },  // AlarmState
-  basalNudge: "none",  // the scheduler's basal nudge level: none | visual | email
+  basalNudge: "none",
+  familyStories: [],   // FamilyStory list of the latest night (snapshot family_story_status + updates)  // the scheduler's basal nudge level: none | visual | email
   ackMsg: "",
 };
 
@@ -111,6 +112,7 @@ function onMessage(msg) {
       state.forecast = p.forecast || null;
       state.forecastNote = "";
       state.alarm = p.alarm || { state: "idle", trigger_type: null };
+      state.familyStories = Array.isArray(p.family_story_status) ? p.family_story_status : [];
       if (p.latest_reading) addReading(p.latest_reading);
       else state.latest = null;
       backfillHistory();
@@ -130,6 +132,10 @@ function onMessage(msg) {
       state.alarm = p.alarm || p;
       if (!SOUNDING.includes(state.alarm.state)) state.ackMsg = "";
       break;
+    case "family_story_pending":
+    case "family_story_sent":
+      mergeStory(p);
+      break;
     case "settings_change":
       state.settings = p.settings || p;
       break;
@@ -137,6 +143,14 @@ function onMessage(msg) {
       return; // other types belong to later steps; the hub's echo replies have no type
   }
   render();
+}
+
+// One night's stories: a newer night replaces the list, the same night updates in place.
+function mergeStory(story) {
+  if (!story || typeof story.story_id !== "string") return;
+  const night = state.familyStories[0] && state.familyStories[0].night_date;
+  if (night && story.night_date > night) state.familyStories = [];
+  state.familyStories = state.familyStories.filter((s) => s.story_id !== story.story_id).concat([story]);
 }
 
 // --- socket ---
@@ -294,6 +308,30 @@ function renderMorning() {
     ? `sensor covered ${pct(s.coverage_pct)} of the night; some of it is missing`
     : "";
   $("morning-note").textContent = note;
+  renderFamily();
+}
+
+// "Sent to Mom" (F2): shown as sent only when the Pi says status "sent";
+// passive chips, the pause and approve buttons live in the phone app.
+function renderFamily() {
+  const box = $("morning-family");
+  box.replaceChildren();
+  const recips = (state.settings && state.settings.family_recipients) || [];
+  const nameOf = (id) => (recips.find((r) => r.recipient_id === id) || {}).name || "family";
+  for (const s of state.familyStories) {
+    const chip = document.createElement("span");
+    const name = nameOf(s.recipient_id);
+    if (s.status === "sent") { chip.className = "fam-chip fam-sent"; chip.textContent = `Sent to ${name}`; }
+    else if (s.status === "demo") {
+      chip.className = "fam-chip fam-demo";
+      const b = document.createElement("b"); b.textContent = "DEMO";
+      chip.append(b, `${name}: not sent`);
+    }
+    else if (s.status === "pending_approval") { chip.className = "fam-chip fam-wait"; chip.textContent = `${name}: waiting for your approval in the app`; }
+    else if (s.status === "skipped") { chip.className = "fam-chip fam-other"; chip.textContent = `${name}: skipped`; }
+    else { chip.className = "fam-chip fam-other"; chip.textContent = `${name}: not sent`; }
+    box.appendChild(chip);
+  }
 }
 
 // --- alarm (step 3) ---
