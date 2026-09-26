@@ -1,24 +1,17 @@
 import type { StateSnapshot } from "../../lib/contracts";
 import { isAckedLow, isHigh, TREND_ARROWS } from "../../lib/alarm";
-import AckBar from "./AckBar";
 
 const hhmm = (iso: string) =>
   new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
 
 // Step 4: the live view, rendered only from the snapshot (+ updates).
-export default function LiveView({ snap, baseUrl, stale }: { snap: StateSnapshot | null; baseUrl: string; stale: boolean }) {
+export default function LiveView({ snap, stale }: { snap: StateSnapshot | null; stale: boolean }) {
   if (!snap) return <p className="text-neutral-400">Waiting for your Irin…</p>;
   const r = snap.latest_reading;
   const readingStale = !r || r.is_stale || stale;
   const fc = snap.forecast && r && !readingStale ? snap.forecast : null; // never forecast on stale
   return (
     <>
-      {/* keyed per alarm episode/state so a previous tap's message never carries over */}
-      <AckBar
-        key={`${snap.alarm?.trigger_type}-${snap.alarm?.state}-${snap.alarm?.started_at}`}
-        alarm={snap.alarm}
-        baseUrl={baseUrl}
-      />
       <section className="flex flex-col items-center gap-1 py-6">
         {r ? (
           <>
