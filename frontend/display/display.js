@@ -19,10 +19,11 @@ const TARGET_HIGH = 180;
 const MORNING_MIN = 120;       // Morning screen lasts 2 h after the night window ends
 const HEALTH_POLL_MS = 5000;   // the Pi's clock, polled (at 60x replay: 5 clock-min)
 
-const TREND_ARROWS = {
+// U+FE0E forces the text glyph: some platforms draw ↗ ↘ as colour emoji.
+const TREND_ARROWS = Object.fromEntries(Object.entries({
   DoubleUp: "⇈", SingleUp: "↑", FortyFiveUp: "↗", Flat: "→",
   FortyFiveDown: "↘", SingleDown: "↓", DoubleDown: "⇊",
-};
+}).map(([k, v]) => [k, v + "\uFE0E"]));
 
 const state = {
   mode: null,
