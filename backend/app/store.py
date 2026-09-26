@@ -10,7 +10,7 @@ from datetime import date, datetime
 from pathlib import Path
 
 from .config import config
-from .contracts import FamilyStory, MorningReport, Reading, Treatment
+from .contracts import AlarmEvent, FamilyStory, MorningReport, Reading, Treatment
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS readings (
@@ -238,3 +238,29 @@ def select_family_stories(night_date: date | None = None, limit: int = 100,
         stories = [s for s in stories if s.night_date == night_date]
     stories.sort(key=lambda s: (s.night_date, s.story_id), reverse=True)
     return stories[:limit]
+
+
+# --- AlarmEvents (R2): one row per episode, replaced on rewrite ---
+
+
+def upsert_alarm_event(event: AlarmEvent, conn: sqlite3.Connection | None = None) -> None:
+    own = conn is None
+    conn = conn or connect()
+    with conn:
+        conn.execute("INSERT OR REPLACE INTO alarm_events VALUES (?, ?)", (event.event_id, event.model_dump_json()))
+    if own:
+        conn.close()
+
+
+def select_alarm_events(since: datetime, until: datetime | None = None,
+                        conn: sqlite3.Connection | None = None) -> list[AlarmEvent]:
+    """Episodes that started in [since, until], oldest first."""
+    own = conn is None
+    conn = conn or connect()
+    rows = conn.execute("SELECT json FROM alarm_events").fetchall()
+    if own:
+        conn.close()
+    events = [AlarmEvent.model_validate_json(r["json"]) for r in rows]
+    events = [e for e in events if e.started_at >= since and (until is None or e.started_at <= until)]
+    events.sort(key=lambda e: e.started_at)
+    return events

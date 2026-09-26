@@ -29,8 +29,8 @@ from .alarm import AlarmEngine, Transition
 from .auth import require_pin
 from .clock import clock
 from .config import REPO_ROOT, config
-from .contracts import (FRESH_PIN_ENDPOINTS, AlarmState, FamilyRecipient, FamilyStory, MorningReport, Reading,
-                        Settings, Treatment, WSMessage)
+from .contracts import (FRESH_PIN_ENDPOINTS, AlarmEvent, AlarmState, FamilyRecipient, FamilyStory, MorningReport,
+                        Reading, Settings, Treatment, WSMessage)
 from .datasource.base import DataSource
 from .datasource.nightscout import NightscoutDataSource
 from .datasource.replay import ReplayDataSource
@@ -41,6 +41,7 @@ from .forward import Forwarder, from_config as forwarder_from_config
 from .outputs import GatedOutputs
 from .presence import PresenceMachine, PresenceState
 from .reports import ReportBuilder, SmtpMailer
+from .rounds.alarm_events import AlarmEventRecorder
 from .scheduler import Scheduler, basal_logged_on, timedatectl_synced
 from . import voice_out
 from .voice import MAX_CARBS_G, MAX_UNITS, VoiceLogger
@@ -75,6 +76,7 @@ class Runtime:
     reports: "ReportBuilder | None" = None
     forwarder: "Forwarder | None" = None
     family: "FamilyStoryService | None" = None
+    alarm_events: "AlarmEventRecorder | None" = None
 
 
 runtime = Runtime(mode="nightscout" if config.DATASOURCE == "nightscout" else "replay",
@@ -220,6 +222,9 @@ def _broadcast_transition(t: Transition) -> None:
 
 
 runtime.alarm.on_transition(_broadcast_transition)
+runtime.alarm_events = AlarmEventRecorder(is_demo=lambda: runtime.mode == "replay",
+                                          brain_only=lambda: config.IRIN_BRAIN_ONLY)
+runtime.alarm.on_transition(runtime.alarm_events)  # R2 observes; it never calls back into alarm.py
 
 
 def _broadcast_presence(state: PresenceState) -> None:
@@ -241,7 +246,9 @@ async def _alarm_tick_loop() -> None:
     while True:
         try:
             runtime.alarm.tick()
-            runtime.presence.sample(runtime.outputs.get_presence())
+            raw = runtime.outputs.get_presence()
+            runtime.presence.sample(raw)
+            runtime.alarm_events.sample(raw)  # the same raw radar sample, aggregated per episode (B7)
         except Exception:
             logging.getLogger("irin.main").exception("tick failed; continuing")
         await clock.sleep(ALARM_TICK_CLOCK_SECONDS)
@@ -338,6 +345,7 @@ async def set_mode(req: ModeRequest) -> dict:
     runtime.mode = req.mode
     await new.start()
     runtime.alarm.reset()  # switch semantics (step 12): alarm state back to idle
+    runtime.alarm_events.reset()  # an episode cut by the switch is dropped, never written
     runtime.forecaster.reset()
     runtime.voice.reset()
     hub._last = None
@@ -471,6 +479,13 @@ async def scheduler_state() -> dict:
 @app.get("/api/alarm", response_model=AlarmState)
 async def alarm_state() -> AlarmState:
     return runtime.alarm.state
+
+
+@app.get("/api/alarm_events", response_model=list[AlarmEvent])
+async def alarm_events(hours: int = 24) -> list[AlarmEvent]:
+    """Finished episodes (R2), oldest first: the under-the-hood panel and Justin's timeline."""
+    hours = max(1, min(hours, 24 * 30))
+    return store.select_alarm_events(clock.now() - timedelta(hours=hours))
 
 
 # --- settings (the app's settings form): one shared Settings object, updated in place ---
