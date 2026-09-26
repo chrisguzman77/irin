@@ -99,5 +99,13 @@ Open:
 - Radar wire colours: add the `radar_wiring_*.jpg` photos to docs/figures/
   (which adapter wire colour went to VCC, GND, OUT; colours are not
   standardized, so the board's printed labels are the reference).
-- Radar mounting and gate profiles (HOME / DEMO) not yet recorded: note the
-  mount used (SmartiPi cradle or printed housing) and the gate numbers here.
+- Radar settings (HLKRadarTool, stored in the radar): HOME = max gate 2
+  (2.25 m), no-one duration 5 s, set 2026-09-26. DEMO = gate 1 (1.5 m), set
+  at table setup. Mount (SmartiPi cradle or printed housing) not yet
+  recorded.
+- Radar never dropped to empty in two 40 s tests at gate 2 (radar_watch.py
+  held PRESENT throughout). Not yet known whether the tester left the range,
+  or the cooler fan / a loose mount holds it on. Diagnose with the app's live
+  view in an empty room: a target at 0-0.3 m = fan or vibration (move it a
+  few cm and fix it rigidly), 1-2 m = something real in range, beyond
+  2.25 m = the settings did not save.
