@@ -10,7 +10,8 @@ from datetime import date, datetime
 from pathlib import Path
 
 from .config import config
-from .contracts import AlarmEvent, FamilyStory, LowEvent, MorningReport, NightRecord, PresenceState, Reading, Treatment
+from .contracts import (AlarmEvent, FamilyStory, LowEvent, MorningReport, NightRecord, Pairing, PresenceState, Reading,
+                        Treatment)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS readings (
@@ -28,6 +29,7 @@ CREATE TABLE IF NOT EXISTS symptom_checks (date TEXT PRIMARY KEY, json TEXT NOT 
 CREATE TABLE IF NOT EXISTS cards (card_id TEXT PRIMARY KEY, json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS plans (plan_id TEXT PRIMARY KEY, json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS pairings (id INTEGER PRIMARY KEY AUTOINCREMENT, json TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS peer_pairings (doctor_id TEXT PRIMARY KEY, json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS doctor_messages (message_id TEXT PRIMARY KEY, json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS family_stories (story_id TEXT PRIMARY KEY, json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS reports (night_date TEXT PRIMARY KEY, json TEXT NOT NULL);
@@ -365,3 +367,24 @@ def select_low_events(since: date, until: date | None = None, conn: sqlite3.Conn
     events = [e for e in events if since <= e.night_date <= (until or date.max)]
     events.sort(key=lambda e: e.started_at)
     return events
+
+
+# --- pairings (R5): one row per peer, replaced on confirm and revoke ---
+
+
+def upsert_pairing(pairing: Pairing, conn: sqlite3.Connection | None = None) -> None:
+    own = conn is None
+    conn = conn or connect()
+    with conn:
+        conn.execute("INSERT OR REPLACE INTO peer_pairings VALUES (?, ?)", (pairing.doctor_id, pairing.model_dump_json()))
+    if own:
+        conn.close()
+
+
+def select_pairings(conn: sqlite3.Connection | None = None) -> list[Pairing]:
+    own = conn is None
+    conn = conn or connect()
+    rows = conn.execute("SELECT json FROM peer_pairings ORDER BY doctor_id").fetchall()
+    if own:
+        conn.close()
+    return [Pairing.model_validate_json(r["json"]) for r in rows]

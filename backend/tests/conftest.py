@@ -19,6 +19,10 @@ def _no_network_no_real_db(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "SMTP_HOST", "")
     monkeypatch.setattr(config, "DEVICE_TOKEN", "")  # the cloud forwarder stays disabled
     monkeypatch.setattr(config, "VOICE_BACKEND", "none")  # never render a clip from a test
+    from app.rounds import crypto
+
+    monkeypatch.setattr(crypto, "KEYS_DIR", tmp_path / "keys")  # never the Pi's real keypair
+    monkeypatch.setattr(config, "RELAY_URL", "http://relay.invalid")  # a test that pairs injects its own relay
     monkeypatch.setattr(config, "ELEVENLABS_API_KEY", "")
     monkeypatch.setattr(config, "IRIN_DB", str(tmp_path / "irin-test.db"))
     try:

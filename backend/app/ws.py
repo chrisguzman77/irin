@@ -43,6 +43,7 @@ class Hub:
             mode=self.runtime.mode,
             clock_synced=self.runtime.scheduler.clock_synced if self.runtime.scheduler else True,
             family_story_status=self._family_status(),
+            pairing_state=self.runtime.pairing.state() if getattr(self.runtime, "pairing", None) else {},
         )
 
     def _family_status(self) -> list[dict]:

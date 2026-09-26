@@ -26,11 +26,11 @@ from pydantic import BaseModel, Field
 
 from . import store
 from .alarm import AlarmEngine, Transition
-from .auth import require_pin
+from .auth import require_fresh_pin, require_pin
 from .clock import clock
 from .config import REPO_ROOT, config
 from .contracts import (FRESH_PIN_ENDPOINTS, AlarmEvent, AlarmState, FamilyRecipient, FamilyStory, LowEvent,
-                        MorningReport, NightRecord, Reading, Settings, Treatment, WSMessage)
+                        MorningReport, NightRecord, Pairing, Reading, Settings, Treatment, WSMessage)
 from .datasource.base import DataSource
 from .datasource.nightscout import NightscoutDataSource
 from .datasource.replay import ReplayDataSource
@@ -41,9 +41,11 @@ from .forward import Forwarder, from_config as forwarder_from_config
 from .outputs import GatedOutputs
 from .presence import PresenceMachine, PresenceState
 from .reports import ReportBuilder, SmtpMailer
+from .rounds import crypto
 from .rounds.alarm_events import AlarmEventRecorder
 from .rounds.ledger import Ledger
 from .rounds.low_events import LowEventDetector
+from .rounds.pairing import PairingError, PairingService, RelayPairing
 from .rounds.nights_adapter import NightsAdapter
 from .scheduler import Scheduler, basal_logged_on, timedatectl_synced
 from . import voice_out
@@ -82,6 +84,7 @@ class Runtime:
     alarm_events: "AlarmEventRecorder | None" = None
     ledger: "Ledger | None" = None
     low_events: "LowEventDetector | None" = None
+    pairing: "PairingService | None" = None
 
 
 runtime = Runtime(mode="nightscout" if config.DATASOURCE == "nightscout" else "replay",
@@ -248,6 +251,33 @@ def _build_night_record(night_date: date) -> NightRecord | None:
 
 runtime.scheduler.register("ledger", lambda: runtime.settings.night_window_end, _ledger_job)
 
+
+# --- doctor / buddy pairing (R5): the QR handshake through the relay, confirmed with a FRESH PIN ---
+
+
+def _role_url(configured: str, sub: str) -> str:
+    """INBOX_URL / WATCH_URL from .env, else derived from APP_ORIGIN (doctor. / watch.)."""
+    if configured:
+        return configured
+    return config.APP_ORIGIN.replace("://", f"://{sub}.", 1) if config.APP_ORIGIN.startswith("https://") else config.APP_ORIGIN
+
+
+def _broadcast_pairing_state(state: dict) -> None:
+    try:
+        task = asyncio.get_running_loop().create_task(hub.broadcast(WSMessage(type="pairing_state", payload=state)))
+    except RuntimeError:
+        return
+    _broadcast_tasks.add(task)
+    task.add_done_callback(_broadcast_tasks.discard)
+
+
+def _make_pairing() -> PairingService:
+    return PairingService(relay=RelayPairing(config.RELAY_URL, config.RELAY_SOURCE_KEY),
+                          device_id=config.DEVICE_ID or "irin-dev", device_pk_fn=crypto.device_public_key,
+                          inbox_url=_role_url(config.INBOX_URL, "doctor"), watch_url=_role_url(config.WATCH_URL, "watch"),
+                          relay_url=config.RELAY_URL, is_demo=lambda: runtime.mode == "replay",
+                          on_state=_broadcast_pairing_state)
+
 ALARM_TICK_CLOCK_SECONDS = 30.0
 _broadcast_tasks: set[asyncio.Task] = set()  # references held so a broadcast is never GC'd mid-flight
 
@@ -305,6 +335,7 @@ async def _alarm_tick_loop() -> None:
 async def lifespan(app: FastAPI):
     store.init_db()
     _load_settings()
+    runtime.pairing = _make_pairing()  # after init_db: it loads the stored pairings
     await runtime.datasource.start()
     hub.start()
     tick_task = asyncio.create_task(_alarm_tick_loop())
@@ -526,6 +557,59 @@ async def scheduler_state() -> dict:
 @app.get("/api/alarm", response_model=AlarmState)
 async def alarm_state() -> AlarmState:
     return runtime.alarm.state
+
+
+# --- pairing endpoints (R5) ---
+
+
+class PairStartRequest(BaseModel):
+    peer_kind: Literal["doctor", "buddy"] = "doctor"
+
+
+def _pairing_error(e: PairingError) -> HTTPException:
+    return HTTPException(status_code=e.status, detail=e.detail)
+
+
+@app.post("/api/pair/start", dependencies=[Depends(require_pin)])
+async def pair_start(req: PairStartRequest) -> dict:
+    """A single-use 10-minute token and the QR URL (everything after # stays off every server)."""
+    try:
+        return await asyncio.to_thread(runtime.pairing.start, req.peer_kind)
+    except PairingError as e:
+        raise _pairing_error(e)
+
+
+@app.get("/api/pair/status")
+async def pair_status() -> dict:
+    """Polls the relay once: awaiting_scan | awaiting_confirm (with code4) | idle, plus the pairings."""
+    try:
+        return await asyncio.to_thread(runtime.pairing.poll)
+    except PairingError as e:
+        raise _pairing_error(e)
+
+
+@app.post("/api/pair/confirm", dependencies=[Depends(require_fresh_pin)], response_model=Pairing)
+async def pair_confirm() -> Pairing:
+    """The patient's confirmation on the device, with a PIN typed fresh (FRESH_PIN_ENDPOINTS)."""
+    try:
+        pairing = await asyncio.to_thread(runtime.pairing.confirm)
+    except PairingError as e:
+        raise _pairing_error(e)
+    return pairing.model_copy(update={"doctor_pk": ""})  # the peer key stays on the device
+
+
+@app.post("/api/pair/{doctor_id}/revoke", dependencies=[Depends(require_pin)], response_model=Pairing)
+async def pair_revoke(doctor_id: str) -> Pairing:
+    """Instant and final on both sides: sharing ended."""
+    try:
+        return await asyncio.to_thread(runtime.pairing.revoke, doctor_id)
+    except PairingError as e:
+        raise _pairing_error(e)
+
+
+@app.get("/api/pairings", response_model=list[Pairing])
+async def pairings() -> list[Pairing]:
+    return [p.model_copy(update={"doctor_pk": ""}) for p in runtime.pairing.pairings.values()]
 
 
 @app.get("/api/nights", response_model=list[NightRecord])
