@@ -4,6 +4,7 @@ IRIN_HW=real (Pi only)."""
 from __future__ import annotations
 
 from . import leds, presence, sound
+from .hal import Color
 
 
 class RealHAL:
@@ -11,8 +12,8 @@ class RealHAL:
         self.leds = leds.LedFrame()
         self.radar = presence.Radar()
 
-    def set_leds(self, state: str) -> None:
-        self.leds.set_state(state)
+    def set_leds(self, state: str, color: Color | None = None, brightness: float | None = None) -> None:
+        self.leds.set_state(state, color, brightness)
 
     def play_sound(self, name: str, volume: float) -> None:
         sound.play(name, volume)

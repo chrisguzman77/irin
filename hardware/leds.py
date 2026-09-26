@@ -14,10 +14,10 @@ except ImportError:  # laptops
 
 
 class LedFrame:
-    def __init__(self, count: int = 60) -> None:
+    def __init__(self, count: int = 29) -> None:  # the as-built frame (docs/wiring.md)
         if Pi5Neo is None:
             raise RuntimeError("pi5neo not installed: real LEDs are Pi-only (IRIN_HW=real)")
         self.strip = Pi5Neo("/dev/spidev0.0", count, 800)
 
-    def set_state(self, state: str) -> None:
+    def set_state(self, state: str, color: tuple[int, int, int] | None = None, brightness: float | None = None) -> None:
         raise NotImplementedError("slavik.md step 2: LED states")

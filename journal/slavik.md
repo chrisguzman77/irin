@@ -1,7 +1,8 @@
-Updated: 2026-09-26 00:00
+Updated: 2026-09-26 03:01
 
-Done: nothing yet
-In progress: nothing
-Broken: nothing
-Interface changes: none
-Notes for other models: none
+Done: step 1 (hal.py interface + mock.py) on branch slavik/step-1-hal-mock, not yet committed. hal.py gained LED_STATES / SOUND_NAMES (fixed vocabularies), validators, reset_hal_for_test(); mock rejects unknown names, clamps volume/brightness to 0-1 and never caps below that. hardware/tests/test_hal.py: 23 passed. hardware/pytest.ini limits collection to tests/ (scripts/full_frame_test.py otherwise gets collected and SystemExits). Check passed: backend boots with IRIN_HW=mock on the Windows laptop, /api/health -> hw: mock; backend pytest still 5 passed / 19 skipped.
+Hardware: LEDs and radar verified by hand on the Pi; as-built wiring recorded in hardware/docs/wiring.md "As built" (no screw terminal: strip power runs through breadboard col 16; radar VCC from the breadboard 5V node).
+In progress: nothing. Open on the bench: confirm the six unused shifter inputs are grounded (wiring.md "Open"); optionally move strip power onto Wagos. Next action: human reviews the diff and commits; then step 2, hardware/leds.py LedFrame.set_state(state, color, brightness) + scripts/first_light.py and scripts/full_frame_test.py (hand-run on the Pi). leds.py must cap total frame current (~1 A) while strip power crosses the breadboard. Frame has 29 LEDs (leds.py LedFrame default now 29). scripts/full_frame_test.py written (Pi5Neo, chase + colour cycle, capped at 30 %, frame off on exit); awaiting Slavik's hand run on the Pi. first_light.py still a stub.
+Broken: nothing.
+Interface changes: set_leds(state, color=None, brightness=None); color (r,g,b) 0-255 and brightness 0-1 are OPTIONAL overrides, so existing set_leds(state) calls are unchanged. Unknown LED state / sound name now raises ValueError in the mock (and will in the real drivers). Backend may import hal.LED_STATES and hal.SOUND_NAMES instead of repeating the strings.
+Notes for other models: On Windows the venv python is .venv\Scripts\python.exe (not .venv/bin/python). Run hardware tests with `python -m pytest` from hardware/. Windows PowerShell 5.1 Get-Content/Set-Content mangle UTF-8 (em dashes, BOM); edit journal and docs with the editor tools, not PowerShell.
