@@ -41,6 +41,7 @@ const state = {
   piDate: null,        // "YYYY-MM-DD" of the Pi's clock, to match a report's night_date
   report: null,        // MorningReport (GET /api/reports/latest), fetched in morning mode
   alarm: { state: "idle", trigger_type: null },  // AlarmState
+  presence: null,      // PresenceState (snapshot presence + presence_change): drives the idle screen
   basalNudge: "none",  // the scheduler's basal nudge level: none | visual | email
   familyStories: [],   // FamilyStory list of the latest night (snapshot family_story_status + updates)
   doctorMessages: [],  // pending DoctorMessage list (snapshot pending_doctor_messages + updates)
@@ -48,6 +49,8 @@ const state = {
   doctorMsg: "",
   doctorAsking: null,  // message_id the keypad is open for
   pairing: {},         // pairing_state (snapshot + pairing_state messages)
+  planState: {},       // Step Watch plan_state (snapshot + plan_state messages); {active: false} = no watch
+  activePlan: null,    // the snapshot's active_plan (TitrationPlan), for the fallback in renderWatch
   ackMsg: "",
 };
 
@@ -118,9 +121,12 @@ function onMessage(msg) {
       state.forecast = p.forecast || null;
       state.forecastNote = "";
       state.alarm = p.alarm || { state: "idle", trigger_type: null };
+      state.presence = p.presence || null;
       state.familyStories = Array.isArray(p.family_story_status) ? p.family_story_status : [];
       state.doctorMessages = Array.isArray(p.pending_doctor_messages) ? p.pending_doctor_messages : [];
       setPairing(p.pairing_state);
+      state.planState = p.plan_state || {};
+      state.activePlan = p.active_plan || null;
       if (p.latest_reading) addReading(p.latest_reading);
       else state.latest = null;
       backfillHistory();
@@ -162,6 +168,12 @@ function onMessage(msg) {
       break;
     case "pairing_state":
       setPairing(p);
+      break;
+    case "plan_state":
+      state.planState = p || {};
+      break;
+    case "presence_change":
+      state.presence = p;
       break;
     default:
       return; // other types belong to later steps; the hub's echo replies have no type
@@ -237,6 +249,20 @@ const screenMode = () => (state.clockSynced ? state.displayMode : "detail");
 
 const isDisconnected = () => !state.connected && Date.now() - state.downSince > DISCONNECT_BANNER_MS;
 
+// The 30-min prediction, shown as TEXT under the current number and as the
+// DOTTED graph line, in one colour. forecast_v1 is a 20th-percentile forecast
+// ("how low it could plausibly get"), so the words say "could be as low as",
+// never a bare "predicted". It updates on every forecast_update (each new
+// reading, ~5 min) and, like the dotted line, only on fresh data (invariant 1).
+const PREDICTION_COLOR = "#B1D2BD";
+
+function predictionText() {
+  const r = state.latest;
+  const fc = state.forecast;
+  if (!fc || !r || r.is_stale || isDisconnected() || fc.predicted_mgdl == null) return null;
+  return `could be as low as ${Math.round(fc.predicted_mgdl)} in ${fc.horizon_min ?? 30} min`;
+}
+
 function render() {
   const r = state.latest;
   const stale = !r || r.is_stale;
@@ -270,6 +296,11 @@ function render() {
   $("night-trend").textContent = $("morning-trend").textContent = arrow;
   const now = state.piClock ?? (r ? toMs(r.timestamp) : null);
   $("night-clock").textContent = now === null ? "--:--" : hhmm(now);
+  const pred = predictionText();
+  for (const id of ["prediction", "night-prediction"]) {
+    $(id).textContent = pred ?? "";
+    $(id).classList.toggle("hidden", pred === null);
+  }
   if (mode === "morning") renderMorning();
 
   if (r) {
@@ -284,9 +315,62 @@ function render() {
   // IOB, last dose, and today's TIR are not in the snapshot yet (contracts
   // request to Chris, see journal); the tiles stay "—" until they are.
   renderAlarm(num, arrow);
+  renderWatch();
   renderPair();
   renderDoctor();
   if (mode === "detail") drawGraph();
+  updateIdle();
+}
+
+// --- idle screen ---
+// Shown only while the Pi's presence is Away (nobody in the radar's range for
+// AWAY_AFTER_MIN; never at night, backend rule) AND nothing needs a person:
+// any alarm state other than idle (warning, low, acknowledged, re-armed,
+// stale, high) or a reading below the low threshold keeps the normal screen.
+// Waking because someone is back plays the 2 s leaves-up sequence; waking
+// because of an alarm or a low is instant (the alarm takeover is above it
+// anyway). It only reads state and sends nothing.
+const WAKE_MS = 2000;
+let idleShown = false;
+let wakeTimer = null;
+
+function needsPerson() {
+  const a = state.alarm || {};
+  if (a.state && a.state !== "idle") return true;
+  const r = state.latest;
+  const low = (state.settings && Number(state.settings.low_threshold)) || 70;
+  return !!(r && typeof r.glucose_mgdl === "number" && r.glucose_mgdl < low); // stale or not
+}
+
+function isIdle() {
+  const pr = state.presence;
+  return !!pr && pr.mode === "away" && !needsPerson();
+}
+
+function updateIdle() {
+  const el = $("idle");
+  if (isIdle()) {
+    if (wakeTimer) { clearTimeout(wakeTimer); wakeTimer = null; } // left again mid-wake
+    el.classList.remove("waking", "instant");
+    el.classList.add("on");
+    idleShown = true;
+    return;
+  }
+  if (needsPerson() && (idleShown || wakeTimer)) { // alarm or low: gone now, no animation
+    if (wakeTimer) { clearTimeout(wakeTimer); wakeTimer = null; }
+    el.classList.add("instant");
+    el.classList.remove("on", "waking");
+    idleShown = false;
+    return;
+  }
+  if (!idleShown) return;
+  idleShown = false; // someone is back: leaves sweep up, then the main screen
+  el.classList.remove("instant");
+  el.classList.add("waking");
+  wakeTimer = setTimeout(() => {
+    wakeTimer = null;
+    el.classList.remove("on", "waking");
+  }, WAKE_MS);
 }
 
 // --- doctor-message takeover (R4, invariant 8) ---
@@ -328,6 +412,36 @@ async function answerDoctor(verb) {
   if (res.cancelled) return;
   state.doctorMsg = res.ok ? "sent — waiting for your Irin" : res.reason;
   render();
+}
+
+// --- Step Watch strip (R1): where the watch is, as a glance; the app carries every input ---
+
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const dayLabel = (iso) => { const [, m, d] = String(iso).slice(0, 10).split("-").map(Number); return m ? `${MONTHS[m - 1]} ${d}` : ""; };
+// While the snapshot does not carry plan_state (contracts.StateSnapshot has no
+// such field yet: FOR CHRIS), the strip applies the Pi's own step_watch rules to
+// the snapshot's active_plan on the Pi's date: the current step is the latest
+// planned_start on or before today, day 1 is its planned start, the next step
+// is the earliest later one. A plan_state message always wins.
+function planFromActive(plan, today) {
+  if (!plan || plan.status !== "active" || !today || !Array.isArray(plan.steps)) return {};
+  const started = plan.steps.filter((s) => s.planned_start <= today).sort((a, b) => a.planned_start.localeCompare(b.planned_start));
+  const later = plan.steps.filter((s) => s.planned_start > today).sort((a, b) => a.planned_start.localeCompare(b.planned_start));
+  const cur = started[started.length - 1];
+  const utc = (iso) => { const [y, m, d] = iso.slice(0, 10).split("-").map(Number); return Date.UTC(y, m - 1, d); };
+  const days = (a, b) => Math.round((utc(a) - utc(b)) / 86400000);
+  return { active: true, drug_label: plan.drug_label, dose_label: cur ? cur.dose_label : null,
+    day_in_step: cur ? days(today, cur.planned_start) + 1 : null, next_step_on: later[0] ? later[0].planned_start : null };
+}
+function renderWatch() {
+  const w = typeof (state.planState || {}).active === "boolean" ? state.planState : planFromActive(state.activePlan, state.piDate);
+  const on = w.active === true && typeof w.dose_label === "string";
+  $("watch-strip").classList.toggle("hidden", !on);
+  if (!on) return;
+  const parts = [`Step Watch · ${w.drug_label || ""} ${w.dose_label}`.replace(/\s+/g, " ")];
+  if (typeof w.day_in_step === "number") parts.push(`day ${w.day_in_step}`);
+  if (w.next_step_on) parts.push(`next step ${dayLabel(w.next_step_on)}`);
+  $("watch-strip").textContent = parts.join(" · ");
 }
 
 // --- Share with my doctor (R1): the QR screen ---
@@ -797,7 +911,7 @@ function drawGraph() {
   // DOTTED forecast: latest reading -> predicted value at +horizon
   if (fc) {
     const ft = toMs(fc.timestamp) + fc.horizon_min * 60000;
-    ctx.strokeStyle = fc.predicted_mgdl < TARGET_LOW ? "#ff3b30" : "#9ab";
+    ctx.strokeStyle = PREDICTION_COLOR;  // the same colour as the prediction text under the number
     ctx.lineWidth = Math.max(2, fs * 0.18);
     ctx.lineCap = "round";
     ctx.setLineDash([0.1, fs * 0.55]);

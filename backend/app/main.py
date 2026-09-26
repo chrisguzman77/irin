@@ -26,6 +26,7 @@ from pydantic import BaseModel, Field
 
 from . import store
 from .alarm import AlarmEngine, Transition
+from .backlight import BacklightController
 from .auth import require_fresh_pin, require_pin
 from .clock import clock
 from .config import REPO_ROOT, config
@@ -110,7 +111,7 @@ def _hal():
 
     return get_hal()
 
-runtime.presence = PresenceMachine(runtime.settings)
+runtime.presence = PresenceMachine(runtime.settings, away_after_min=config.AWAY_AFTER_MIN)
 runtime.outputs = GatedOutputs(_hal(), runtime.presence)  # Away gates room outputs only, here
 runtime.alarm = AlarmEngine(runtime.settings, hal=runtime.outputs)
 runtime.forecaster = Forecaster()
@@ -411,6 +412,12 @@ runtime.alarm.on_transition(_broadcast_transition)
 runtime.alarm_events = AlarmEventRecorder(is_demo=lambda: runtime.mode == "replay",
                                           brain_only=lambda: config.IRIN_BRAIN_ONLY)
 runtime.alarm.on_transition(runtime.alarm_events)  # R2 observes; it never calls back into alarm.py
+# The backlight: dim in the night window, full by day and whenever a low alarm
+# sounds. It observes alarm transitions (never raises into them) and the tick
+# below follows the night window; it writes through the output gate.
+runtime.backlight = BacklightController(runtime.outputs, lambda: runtime.scheduler.display_mode(),
+                                        lambda: runtime.alarm.state)
+runtime.alarm.on_transition(runtime.backlight.update)
 
 
 def _broadcast_presence(state: PresenceState) -> None:
@@ -439,9 +446,24 @@ async def _alarm_tick_loop() -> None:
             raw = runtime.outputs.get_presence()
             runtime.presence.sample(raw)
             runtime.alarm_events.sample(raw)  # the same raw radar sample, aggregated per episode (B7)
+            runtime.backlight.update()  # follows the night window (writes only on a change)
         except Exception:
             logging.getLogger("irin.main").exception("tick failed; continuing")
         await clock.sleep(ALARM_TICK_CLOCK_SECONDS)
+
+
+async def _presence_fast_loop() -> None:
+    """Optional, only when PRESENCE_SAMPLE_SECONDS is shorter than the alarm
+    tick: extra raw radar samples for the presence machine alone, so a person
+    walking back in wakes the room outputs and the idle screen within seconds.
+    Alarm deadlines and R2's presence_during keep the 30 s tick above. Wall
+    seconds on purpose: at 60x replay a clock-second loop would spin."""
+    while True:
+        try:
+            runtime.presence.sample(runtime.outputs.get_presence())
+        except Exception:
+            logging.getLogger("irin.main").exception("presence sample failed; continuing")
+        await asyncio.sleep(config.PRESENCE_SAMPLE_SECONDS)
 
 
 @asynccontextmanager
@@ -478,8 +500,11 @@ async def lifespan(app: FastAPI):
     sched_task = asyncio.create_task(runtime.scheduler.run())
     forward_task = asyncio.create_task(runtime.forwarder.run())
     relay_task = asyncio.create_task(runtime.relay_client.run())
+    tasks = [tick_task, sched_task, forward_task, relay_task]
+    if config.PRESENCE_SAMPLE_SECONDS < ALARM_TICK_CLOCK_SECONDS:
+        tasks.append(asyncio.create_task(_presence_fast_loop()))
     yield
-    for task in (tick_task, sched_task, forward_task, relay_task):
+    for task in tasks:
         task.cancel()
         try:
             await task

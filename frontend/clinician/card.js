@@ -17,7 +17,12 @@ function section(title) {
   return s;
 }
 
-/** @returns {HTMLElement} the card, ready to insert */
+// Actions whose flow belongs to a later step: shown, never sendable yet.
+const LATER = { resources: "arrives with R13" };
+
+/** @param {object} card a SignalCard
+ * @param {{actions?: boolean, sample?: boolean, onAction?: (key: string) => void}} opts
+ * @returns {HTMLElement} the card, ready to insert */
 export function renderCard(card, opts = {}) {
   const m = cardModel(card, opts);
   const root = el("article", `sc-card ${m.statusCls}`);
@@ -94,14 +99,21 @@ export function renderCard(card, opts = {}) {
   root.append(n);
 
   if (m.actions.length) {
-    const s = section("Actions (arrive with the relay)");
+    // m.actions are the labels of card.allowed_actions, in the same order; the
+    // inbox passes onAction(key) to make them live, a preview leaves them off.
+    const live = typeof opts.onAction === "function";
+    const s = section(live ? "Actions" : "Actions (preview)");
     const a = el("div", "sc-actions");
-    for (const label of m.actions) {
-      const b = el("button", "sc-action", label);
+    const keys = card.allowed_actions || [];
+    m.actions.forEach((label, i) => {
+      const key = String(keys[i]);
+      const later = LATER[key];
+      const b = el("button", "sc-action", later ? `${label} (${later})` : label);
       b.type = "button";
-      b.disabled = true;
+      b.disabled = !live || !!later;
+      if (live && !later) b.addEventListener("click", () => opts.onAction(key));
       a.append(b);
-    }
+    });
     s.append(a);
     root.append(s);
   }
