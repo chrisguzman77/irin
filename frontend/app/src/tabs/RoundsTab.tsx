@@ -1,42 +1,54 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import SignalCard from "../components/SignalCard";
-import { useDevice } from "../lib/device";
-import RecallCards from "./device/RecallCards";
+import { listCards, listPairings, type CardRecord, type Pairing } from "../lib/cards";
 import type { SignalCard as Card } from "../lib/contracts";
+import { useDevice } from "../lib/device";
 import standing from "../fixtures/signal_card_standing.json";
 import step from "../fixtures/signal_card_step.json";
+import RecallCards from "./device/RecallCards";
 
-// Irin Rounds tab (justin.md R3). Built so far: "What my doctor sees", the
-// card renderer shared with the clinician inbox. Until the device sends real
-// cards (Chris's R-steps and the relay) it shows the two SAMPLE cards
-// (backend/tests/fixtures), labeled "Sample card" and DEMO. Pairing status,
-// check-in status, glucagon, and the step timeline arrive with their endpoints.
+// Irin Rounds tab (justin.md R3): this morning's recall questions, then "What
+// my doctor sees": the cards the device actually sealed (GET /api/rounds/cards,
+// refreshed on card_sent), each with who received it. Until the first real
+// card exists it shows the two SAMPLE cards, labeled "Sample card" and DEMO.
+// Pairing status, glucagon, and the step timeline arrive next.
 const SAMPLES = [
   { key: "standing", label: "Basal Check", card: standing as unknown as Card },
   { key: "step", label: "Step check", card: step as unknown as Card },
 ] as const;
 
-export default function RoundsTab() {
+const KIND: Record<string, string> = {
+  basal_check: "Basal Check", hypo_response: "Hypo Response", follow_up: "Follow-up", early_check: "Early check",
+  step_check: "Step check", step_gate: "Step gate", safety: "Safety", graduation: "Graduation", baseline_note: "Baseline note",
+};
+/** "Jan 15, 07:05" from a naive Pi timestamp, read as text */
+function when(iso: string | null | undefined): string {
+  if (!iso) return "";
+  const M = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const [y, m, d] = iso.slice(0, 10).split("-").map(Number);
+  return y ? `${M[m - 1]} ${d}, ${iso.slice(11, 16)}` : "";
+}
+
+function Delivery({ rec, names }: { rec: CardRecord; names: Map<string, string> }) {
+  const at = when(rec.card.generated_at ?? rec.stored_at);
+  if (rec.status === "sent") {
+    const to = rec.recipients.map((id) => names.get(id) ?? "your doctor").join(", ");
+    return <p className="text-sm text-emerald-400">Sent to {to}{at ? ` · ${at}` : ""}</p>;
+  }
+  if (rec.status === "unsent") return <p className="text-sm text-amber-300">Not delivered yet: your Irin keeps retrying{at ? ` · ${at}` : ""}</p>;
+  if (rec.status === "no_recipient") return <p className="text-sm text-neutral-400">Not sent: no doctor is paired{at ? ` · ${at}` : ""}</p>;
+  return <p className="text-sm text-neutral-400">{rec.status}{at ? ` · ${at}` : ""}</p>;
+}
+
+function Samples() {
   const [which, setWhich] = useState<(typeof SAMPLES)[number]["key"]>("standing");
   const sample = SAMPLES.find((s) => s.key === which) ?? SAMPLES[0];
-  const { target, socket } = useDevice();
-  const snap = socket.snapshot;
   return (
-    <section className="flex flex-col gap-4">
-      {target.status === "ready" && (
-        <RecallCards
-          lows={socket.recallDue}
-          baseUrl={target.url}
-          demo={snap?.mode === "replay"}
-        />
-      )}
-      <div>
-        <h2 className="text-xl font-semibold">What my doctor sees</h2>
-        <p className="text-sm text-neutral-400">
-          Your Irin has not sent your doctor a card yet. These are sample cards, shown exactly as your doctor&apos;s inbox
-          draws them.
-        </p>
-      </div>
+    <>
+      <p className="text-sm text-neutral-400">
+        Your Irin has not sent your doctor a card yet. These are sample cards, shown exactly as your doctor&apos;s inbox
+        draws them.
+      </p>
       <div className="flex gap-2">
         {SAMPLES.map((s) => (
           <button
@@ -53,9 +65,79 @@ export default function RoundsTab() {
         ))}
       </div>
       <SignalCard card={sample.card} sample />
-      <p className="text-xs text-neutral-500">
-        Pairing with your doctor, today&apos;s check-in, and the step timeline arrive with the Rounds backend.
-      </p>
+    </>
+  );
+}
+
+export default function RoundsTab() {
+  const { target, socket } = useDevice();
+  const snap = socket.snapshot;
+  const base = target.status === "ready" ? target.url : null;
+  const [cards, setCards] = useState<CardRecord[] | null>(null);
+  const [pairings, setPairings] = useState<Pairing[]>([]);
+  const [error, setError] = useState(false);
+  const [open, setOpen] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!base) return;
+    let alive = true;
+    Promise.all([listCards(base), listPairings(base)])
+      .then(([c, p]) => {
+        if (!alive) return;
+        setCards(c);
+        setPairings(p);
+        setError(false);
+      })
+      .catch(() => alive && setError(true));
+    return () => {
+      alive = false;
+    };
+  }, [base, socket.cardsVersion]);
+
+  const names = new Map(pairings.map((p) => [p.doctor_id, p.doctor_display_name]));
+  const real = cards ?? [];
+  const latest = real[0];
+
+  return (
+    <section className="flex flex-col gap-4">
+      {base && <RecallCards lows={socket.recallDue} baseUrl={base} demo={snap?.mode === "replay"} />}
+      <h2 className="text-xl font-semibold">What my doctor sees</h2>
+      {error && <p className="text-sm text-red-400">Could not load the cards from your Irin.</p>}
+      {!base || cards === null || real.length === 0 ? (
+        base && cards === null && !error ? <p className="text-neutral-400">Loading…</p> : <Samples />
+      ) : (
+        <>
+          <Delivery rec={latest} names={names} />
+          <SignalCard card={latest.card} />
+          {real.length > 1 && (
+            <div className="flex flex-col gap-2">
+              <h3 className="text-sm uppercase tracking-wider text-neutral-400">Earlier cards</h3>
+              <ul className="flex flex-col gap-2">
+                {real.slice(1).map((r) => (
+                  <li key={`${r.card.card_id}-${r.stored_at}`} className="flex flex-col gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setOpen(open === r.card.card_id ? null : r.card.card_id)}
+                      className="w-full flex items-center gap-2 bg-neutral-900 rounded-lg px-4 py-3 text-left"
+                    >
+                      <span className="flex-1 font-medium">{KIND[r.card.kind] ?? r.card.kind}</span>
+                      {r.card.is_demo && <span className="bg-amber-400 text-black text-xs font-bold px-2 py-0.5 rounded">DEMO</span>}
+                      <span className="text-sm text-neutral-400">{when(r.card.generated_at ?? r.stored_at)}</span>
+                    </button>
+                    {open === r.card.card_id && (
+                      <>
+                        <Delivery rec={r} names={names} />
+                        <SignalCard card={r.card} />
+                      </>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </>
+      )}
+      <p className="text-xs text-neutral-500">Pairing with your doctor and the step timeline arrive next.</p>
     </section>
   );
 }
