@@ -1,5 +1,5 @@
 {
-  "card_id": "step_watch:step_check:p1:1",
+  "card_id": "step_watch:step_check:p1:1:2020-01-31:2020-02-04",
   "schema_version": "0",
   "program": "step_watch",
   "kind": "step_check",
@@ -11,7 +11,14 @@
   ],
   "confidence": {
     "low_point_shift": "measured",
-    "tolerance": "reported"
+    "baseline_nights": "measured",
+    "coverage_pct": "measured",
+    "tbr_pct": "measured",
+    "near_misses": "measured",
+    "ketone_risk_episodes": "measured",
+    "tolerance": "reported",
+    "adherence": "reported",
+    "unfelt_lows": "reported"
   },
   "source": "irin_bedside",
   "patient_pseudonym": "Patient 7",
@@ -19,24 +26,67 @@
   "step_index": 1,
   "period_start": "2020-01-31",
   "period_end": "2020-02-04",
-  "headline": "Step 2 (5 mg), days 3 to 7. Overnight low point down 22 mg/dL from baseline, 2 near-misses, time below range 4.0%. One low not remembered. Rough stomach 3 of 5 days.",
+  "headline": "Step 2 (5 mg), days 3 to 7. Overnight low point down 22 mg/dL from baseline, 2 near-misses, time below range 4.0%. 1 low not remembered. Rough stomach 3 of 5 days.",
   "metrics": {
+    "low_point_shift": -22.0,
+    "window_low_point": 76.0,
+    "baseline_low_point": 98.0,
+    "baseline_nights": 7,
     "coverage_pct": 96.5,
-    "low_point_shift": -22,
-    "tbr_pct": 4.03,
+    "insufficient": false,
+    "tbr_pct": 4.0,
     "near_misses": 2,
-    "unfelt_lows": 1,
-    "rough_days": 3
+    "ketone_risk_episodes": 0,
+    "tolerance": {
+      "fine": 2,
+      "rough": 3,
+      "cant_eat": 0,
+      "missing": 0
+    },
+    "adherence": {
+      "logged": 1,
+      "expected": 1,
+      "missed": 0,
+      "dose_mismatch": false
+    },
+    "unfelt_lows": 1
   },
-  "nights": [],
+  "nights": [
+    {
+      "night_date": "2020-01-31",
+      "reason_codes": [
+        "clean"
+      ],
+      "code_source": "logged",
+      "low_point_mgdl": 74.0,
+      "near_miss_count": 1,
+      "coverage_pct": 97.2
+    }
+  ],
   "excluded_counts": {},
   "tolerance_days": [
     {
       "date": "2020-01-31",
       "gi": "rough"
+    },
+    {
+      "date": "2020-02-01",
+      "gi": "rough"
+    },
+    {
+      "date": "2020-02-02",
+      "gi": "fine"
+    },
+    {
+      "date": "2020-02-03",
+      "gi": "rough"
+    },
+    {
+      "date": "2020-02-04",
+      "gi": "fine"
     }
   ],
-  "narrative": "Template narrative.",
+  "narrative": "Days 3 to 7 on 5 mg. The overnight low point sat 22 mg/dL below the baseline weeks, with 2 near-misses and 4.0% of readings below range; 1 low was not remembered the next morning. Stomach was rough on 3 of 5 days; the weekly dose was logged as planned.",
   "allowed_actions": [
     "proceed",
     "hold_step",
