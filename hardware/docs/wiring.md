@@ -103,9 +103,11 @@ Open:
   (2.25 m), no-one duration 5 s, set 2026-09-26. DEMO = gate 1 (1.5 m), set
   at table setup. Mount (SmartiPi cradle or printed housing) not yet
   recorded.
-- Radar never dropped to empty in two 40 s tests at gate 2 (radar_watch.py
-  held PRESENT throughout). Not yet known whether the tester left the range,
-  or the cooler fan / a loose mount holds it on. Diagnose with the app's live
-  view in an empty room: a target at 0-0.3 m = fan or vibration (move it a
-  few cm and fix it rigidly), 1-2 m = something real in range, beyond
-  2.25 m = the settings did not save.
+- Radar check PASSED 2026-09-26 at HOME (gate 2, 5 s): radar_watch.py held
+  PRESENT through 26 s of sitting still and dropped to empty 14 s after the
+  tester was cued to leave (walk-out time + the 5 s no-one duration), then
+  stayed empty. Two earlier "never drops" runs were the tester still in
+  range. If it ever holds PRESENT in an empty room, check the app's live
+  view: a target at 0-0.3 m = fan or vibration (move it a few cm and fix it
+  rigidly), 1-2 m = something real in range, beyond the gate = the settings
+  did not save. Re-walk the boundary at gate 1 at the demo table.
