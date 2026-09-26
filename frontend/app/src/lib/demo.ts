@@ -15,6 +15,8 @@ export interface ScenarioList {
   scenarios: string[];
   current: string | null;
   speed: number;
+  /** whether the replay feed is paused; false when the Pi does not say */
+  paused: boolean;
 }
 
 export async function listScenarios(base: string): Promise<ScenarioList> {
@@ -25,6 +27,7 @@ export async function listScenarios(base: string): Promise<ScenarioList> {
     scenarios: Array.isArray(b.scenarios) ? b.scenarios : [],
     current: typeof b.current === "string" ? b.current : null,
     speed: typeof b.speed === "number" ? b.speed : 1,
+    paused: b.paused === true,
   };
 }
 
