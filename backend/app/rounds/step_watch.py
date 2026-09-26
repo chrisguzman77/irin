@@ -7,17 +7,23 @@ Windows (nights keyed by their evening date, like the ledger): baseline = the
 14 nights before the plan start with coverage >= 85%, needing 5 such nights
 else "baseline thin"; early check on day 3 of the first step (nights 1-3,
 labeled limited data); step check on day 7 of each step (days 3-7); step
-gate 3 days before each planned step-up (proceed or hold); graduation after
-4 consecutive green weeks at the maintenance dose.
+gate 3 days before each planned step-up (proceed or hold); on the last step
+(the maintenance dose) a check every 7 days, and graduation, with a final
+card comparing the four maintenance weeks to baseline, after 4 consecutive
+green ones.
 
 Status, evaluated in order: RED at any coverage on a level 2 low, a re-armed
 low alarm, or a ketone-risk episode on a can't-eat day; INSUFFICIENT under
 70% window coverage (no conclusions; red still sent); AMBER lows (low-point
 shift <= -15, near-misses >= 2, TBR > 4%), awareness (a nocturnal low
 reported unfelt or not remembered, or two inferred unfelt lows unanswered),
-tolerance (rough or can't eat on >= 3 of 5 days), highs (>= 2 ketone-risk
-episodes); GREEN otherwise. Holds of 2 / 4 / 8 weeks shift every later
-planned start and stack. A card never contains a dose recommendation."""
+tolerance (rough or can't eat on >= 3 of the last 5 days), highs (>= 2
+ketone-risk episodes); GREEN otherwise. A red is also looked for every
+morning over the night that just closed, and when a low alarm re-arms, so
+it never waits for a due day; it is keyed to its events, so the budget
+deduplicates it per event. Holds of 2 / 4 / 8 weeks shift every planned
+start after the step the doctor decided on and stack. A card never contains
+a dose recommendation."""
 
 from __future__ import annotations
 
@@ -29,7 +35,6 @@ from ..contracts import TitrationPlan, TitrationStep
 
 BASELINE_NIGHTS = 14
 BASELINE_MIN = 5
-BASELINE_COVERAGE = 85.0
 EARLY_CHECK_DAY = 3
 STEP_CHECK_DAY = 7
 GATE_DAYS_BEFORE = 3
@@ -38,9 +43,11 @@ SHIFT_FIRES = -15.0
 NEAR_MISSES_FIRE = 2
 TBR_FIRES = 4.0
 TOLERANCE_DAYS = 3
+TOLERANCE_WINDOW = 5  # rough on 3 of the LAST 5 days, whatever the window length
 KETONE_HIGHS = 2
 COVERAGE_INSUFFICIENT = 70.0
 HOLD_WEEKS = (2, 4, 8)
+WEEKLY_DRUGS = ("glp1", "gip_glp1", "weekly_basal")
 
 
 @dataclass
@@ -57,10 +64,24 @@ class StepEvaluation:
     tolerance_days: list[dict[str, Any]] = field(default_factory=list)
     nights: list[dict[str, Any]] = field(default_factory=list)
     limited: bool = False  # the early check: labeled limited data
-    red_event_key: str | None = None
+    red_event_key: str | None = None  # every red event in the window, "+"-joined (the budget dedupes on any overlap)
 
 
 # ---------------------------------------------------------------- the plan's calendar
+
+
+def validate_plan(plan: TitrationPlan) -> None:
+    """A plan the calendar can follow: steps 0..n-1 in order, starts strictly
+    increasing, the plan starting on its first step. Raises ValueError."""
+    if not plan.steps:
+        raise ValueError("a plan needs at least one step")
+    if [s.index for s in plan.steps] != list(range(len(plan.steps))):
+        raise ValueError("step indices must be 0..n-1 in order")
+    starts = [s.planned_start for s in plan.steps]
+    if any(b <= a for a, b in zip(starts, starts[1:])):
+        raise ValueError("planned starts must be strictly increasing")
+    if plan.started_at != starts[0]:
+        raise ValueError("started_at must be the first step's planned start")
 
 
 def current_step(plan: TitrationPlan, today: date) -> TitrationStep | None:
@@ -83,6 +104,10 @@ def baseline_dates(plan: TitrationPlan) -> tuple[date, date]:
     return plan.started_at - timedelta(days=BASELINE_NIGHTS), plan.started_at - timedelta(days=1)
 
 
+def is_last(plan: TitrationPlan, step: TitrationStep) -> bool:
+    return bool(plan.steps) and step.index == plan.steps[-1].index
+
+
 def due_kinds(plan: TitrationPlan, today: date) -> list[tuple[str, TitrationStep, tuple[date, date]]]:
     """Which cards fall due on `today` (the evening date of the night that just
     closed): (kind, step, (window_start, window_end)) each."""
@@ -97,14 +122,32 @@ def due_kinds(plan: TitrationPlan, today: date) -> list[tuple[str, TitrationStep
         due.append(("early_check", step, (step.planned_start, today)))  # nights 1-3
     if d == STEP_CHECK_DAY:
         due.append(("step_check", step, (step.planned_start + timedelta(days=2), today)))  # days 3-7
+    elif is_last(plan, step) and d > STEP_CHECK_DAY and d % STEP_CHECK_DAY == 0:
+        due.append(("step_check", step, (today - timedelta(days=6), today)))  # a maintenance week
     nxt = next_step(plan, today)
     if nxt is not None and today == nxt.planned_start - timedelta(days=GATE_DAYS_BEFORE):
         due.append(("step_gate", step, (today - timedelta(days=6), today)))  # the last 7 nights before the gate
     return due
 
 
+def budget_key(plan: TitrationPlan, kind: str, step: TitrationStep, today: date) -> str:
+    """The noise budget's key: one early check per plan, one check per step (per
+    week on the maintenance step), one gate per planned step-up (a hold moves
+    the step-up, so the gate before the new date is a new gate)."""
+    base = f"{plan.plan_id}:{step.index}"
+    if kind == "early_check":
+        return f"{base}:early"
+    if kind == "step_gate":
+        nxt = next_step(plan, today)
+        return f"{base}:gate:{nxt.planned_start.isoformat() if nxt else 'none'}"
+    if kind == "graduation":
+        return f"{plan.plan_id}:graduation"
+    d = day_in_step(step, today)
+    return base if d <= STEP_CHECK_DAY else f"{base}:w{d // STEP_CHECK_DAY}"
+
+
 def apply_hold(plan: TitrationPlan, hold_weeks: int, from_index: int | None = None) -> TitrationPlan:
-    """Every planned start after the current (or given) step moves by the hold; holds stack."""
+    """Every planned start after the given step moves by the hold; holds stack."""
     if hold_weeks not in HOLD_WEEKS:
         raise ValueError(f"hold_weeks must be one of {HOLD_WEEKS}")
     shift = timedelta(weeks=hold_weeks)
@@ -114,11 +157,6 @@ def apply_hold(plan: TitrationPlan, hold_weeks: int, from_index: int | None = No
 
 
 # ---------------------------------------------------------------- the rules
-
-
-def baseline_thin(baseline_records) -> bool:
-    good = [r for r in baseline_records if r.coverage_pct >= BASELINE_COVERAGE and "stale" not in r.reason_codes]
-    return len(good) < BASELINE_MIN
 
 
 def evaluate_window(plan: TitrationPlan, kind: str, step: TitrationStep, window_records, baseline_records,
@@ -136,25 +174,29 @@ def evaluate_window(plan: TitrationPlan, kind: str, step: TitrationStep, window_
     for k in ("unfelt_lows", "inferred_unfelt_unanswered", "answered", "no_answer", "nocturnal_lows", "rearms"):
         values[k] = aware[k]
         confidence[k] = aware_conf[k]
-    values["baseline_thin"] = baseline_thin(baseline_records)
+    values["baseline_thin"] = values["baseline_nights"] < BASELINE_MIN  # George counts the non-stale baseline nights
     tol = values["tolerance"]
     rough_days = tol["rough"] + tol["cant_eat"]
-    level2 = sum(int(r.level2_count or 0) for r in window_records)
-    values["level2_lows"] = level2
+    recent = set(window_dates[-TOLERANCE_WINDOW:])
+    rough_recent = sum(1 for c in symptom_checks if c.date in recent and c.gi in ("rough", "cant_eat"))
+    cant_eat_days = sorted(c.date for c in symptom_checks if c.date in set(window_dates) and c.gi == "cant_eat")
+    level2_nights = [r.night_date for r in window_records if int(r.level2_count or 0) > 0]
+    values["level2_lows"] = sum(int(r.level2_count or 0) for r in window_records)
     confidence["level2_lows"] = "measured"
     ketone = values.get("ketone_risk_episodes") or 0
 
     flags: list[str] = []
-    red_key = None
-    # RED, at any coverage
-    if level2 > 0:
+    red_keys: list[str] = []
+    # RED, at any coverage, keyed to its events
+    if level2_nights:
         flags.append("level2")
+        red_keys += [f"level2:{d.isoformat()}" for d in level2_nights]
     if values["rearms"] > 0:
         flags.append("rearm")
-        rearmed = [a for a in alarm_events if (a.rearm_count or 0) > 0]
-        red_key = max(rearmed, key=lambda a: a.started_at).event_id if rearmed else None
-    if ketone >= 1 and tol["cant_eat"] >= 1:
+        red_keys += [a.event_id for a in alarm_events if (a.rearm_count or 0) > 0]
+    if ketone >= 1 and cant_eat_days:
         flags.append("ketone_risk")
+        red_keys += [f"ketone:{d.isoformat()}" for d in cant_eat_days]
     common = dict(metrics=values, confidence=confidence, step_index=step.index, tolerance_days=[
         {"date": d.isoformat(), "gi": next((c.gi for c in symptom_checks if c.date == d), "missing")} for d in window_dates],
         nights=[{"night_date": r.night_date.isoformat(), "reason_codes": list(r.reason_codes), "code_source": r.code_source,
@@ -164,14 +206,15 @@ def evaluate_window(plan: TitrationPlan, kind: str, step: TitrationStep, window_
     label = f"Step {step.index + 1} ({step.dose_label})"
     if flags:
         parts = []
-        if level2:
-            parts.append(f"{level2} level 2 low{'s' if level2 > 1 else ''} (under 54)")
+        if level2_nights:
+            n = values["level2_lows"]
+            parts.append(f"{n} level 2 low{'s' if n > 1 else ''} (under 54)")
         if values["rearms"]:
             parts.append(f"{values['rearms']} re-armed low alarm{'s' if values['rearms'] > 1 else ''}")
         if "ketone_risk" in flags:
             parts.append("a ketone-risk episode on a can't-eat day")
         return StepEvaluation(kind="safety", status="red", flags=flags, headline=f"{label}: {'; '.join(parts)}.",
-                              period_start=period[0], period_end=period[1], red_event_key=red_key, **common)
+                              period_start=period[0], period_end=period[1], red_event_key="+".join(red_keys), **common)
     coverage = values.get("coverage_pct")
     if coverage is None or coverage < COVERAGE_INSUFFICIENT:
         cov = f"{coverage:.0f}%" if coverage is not None else "unknown"
@@ -183,7 +226,7 @@ def evaluate_window(plan: TitrationPlan, kind: str, step: TitrationStep, window_
         flags.append("lows")
     if values["unfelt_lows"] >= 1 or values["inferred_unfelt_unanswered"] >= 2:
         flags.append("awareness")
-    if rough_days >= TOLERANCE_DAYS:
+    if rough_recent >= TOLERANCE_DAYS:
         flags.append("tolerance")
     if ketone >= KETONE_HIGHS:
         flags.append("highs")
@@ -197,6 +240,8 @@ def evaluate_window(plan: TitrationPlan, kind: str, step: TitrationStep, window_
     days = f"days {day_in_step(step, window_dates[0])} to {day_in_step(step, window_dates[-1])}"
     if kind == "early_check":
         days = f"days 1 to {len(window_dates)}, limited data"
+    elif kind == "graduation":
+        days = "four green weeks at the maintenance dose, watch complete"
     sentences = [f"{label}, {days}."]
     if shift is not None:
         sentences.append(f"Overnight low point {'down' if shift < 0 else 'up'} {abs(shift):.0f} mg/dL from baseline, "
@@ -219,17 +264,22 @@ def graduated(green_weeks: int) -> bool:
 
 # ---------------------------------------------------------------- the service (state, check-ins, the due cards)
 
+import json as _json
 import logging as _logging
 from typing import Callable
 
 from .. import store as _store
 from ..clock import clock as _clock
-from ..contracts import DoctorMessage, LowEventRecall, SymptomCheck, Treatment
+from ..contracts import DoctorMessage, SymptomCheck
 from . import noise as _noise
 from .cards import CardSender, assemble
 from .nights_adapter import NightsAdapter
 
 _log = _logging.getLogger("irin.rounds.step_watch")
+
+
+def greens_key(plan_id: str) -> str:
+    return f"step_watch:green:{plan_id}"
 
 
 @dataclass
@@ -241,16 +291,36 @@ class StepWatch:
     brain_only: Callable[[], bool] = lambda: False
     on_plan_state: Callable[[dict], None] | None = None  # plan_state broadcast
     on_checkin_due: Callable[[dict], None] | None = None  # symptom_check_due broadcast
-    green_weeks: dict[str, int] = field(default_factory=dict)  # plan_id -> consecutive green step checks
 
     # --- the plan ---
 
     def active_plan(self) -> TitrationPlan | None:
         demo = self.is_demo()
-        for p in _store.select_plans():
-            if p.status == "active" and p.is_demo == demo:
-                return p
-        return None
+        active = [p for p in _store.select_plans() if p.status == "active" and p.is_demo == demo]
+        return max(active, key=lambda p: p.started_at) if active else None
+
+    def greens(self, plan: TitrationPlan) -> list[str]:
+        """The consecutive green step checks so far (their budget keys), persisted per plan."""
+        raw = _store.get_kv(greens_key(plan.plan_id))
+        return list(_json.loads(raw)) if raw else []
+
+    def green_weeks(self, plan: TitrationPlan) -> int:
+        """Consecutive green weeks AT the maintenance dose: the last step's checks only."""
+        if not plan.steps:
+            return 0
+        prefix = f"{plan.plan_id}:{plan.steps[-1].index}"
+        return sum(1 for k in self.greens(plan) if k == prefix or k.startswith(prefix + ":w"))
+
+    def _record_check(self, plan: TitrationPlan, key: str, status: str) -> None:
+        """A green step check counts once (a re-run of the same morning never
+        counts twice); anything else breaks the run."""
+        greens = self.greens(plan)
+        if status == "green":
+            if key not in greens:
+                greens.append(key)
+        else:
+            greens = []
+        _store.set_kv(greens_key(plan.plan_id), _json.dumps(greens))
 
     def plan_state(self) -> dict[str, Any]:
         plan = self.active_plan()
@@ -263,7 +333,7 @@ class StepWatch:
                 "step_index": step.index if step else None, "dose_label": step.dose_label if step else None,
                 "day_in_step": day_in_step(step, today) if step else None,
                 "next_step_on": nxt.planned_start.isoformat() if nxt else None,
-                "green_weeks": self.green_weeks.get(plan.plan_id, 0), "is_demo": plan.is_demo}
+                "green_weeks": self.green_weeks(plan), "is_demo": plan.is_demo}
 
     def _changed(self) -> None:
         if self.on_plan_state is not None:
@@ -276,9 +346,13 @@ class StepWatch:
         """R9's confirm hook: applies plan_create / plan_update / proceed / hold_step / end_watch."""
         demo = self.is_demo()
         if msg.kind in ("plan_create", "plan_update"):
+            validate_plan(msg.plan)
             plan = msg.plan.model_copy(update={"status": "active", "is_demo": demo})
+            for old in _store.select_plans():  # one active watch per world: a new plan replaces the old one
+                if old.status == "active" and old.is_demo == demo and old.plan_id != plan.plan_id:
+                    _store.upsert_plan(old.model_copy(update={"status": "ended"}))
             _store.upsert_plan(plan)
-            self.green_weeks.pop(plan.plan_id, None)
+            _store.set_kv(greens_key(plan.plan_id), "[]")
             _log.info("step watch %s: %s", plan.plan_id, msg.kind)
         else:
             plan = self.active_plan()
@@ -286,7 +360,8 @@ class StepWatch:
                 _log.warning("%s without an active watch: nothing to apply", msg.kind)
                 return
             if msg.kind == "hold_step":
-                step = current_step(plan, _clock.now().date())
+                # the step the doctor decided on (the gate's), not the one running when the patient confirmed
+                step = current_step(plan, msg.created_at.date())
                 _store.upsert_plan(apply_hold(plan, int(msg.hold_weeks), from_index=step.index if step else None))
             elif msg.kind == "end_watch":
                 _store.upsert_plan(plan.model_copy(update={"status": "ended"}))
@@ -300,7 +375,7 @@ class StepWatch:
         if plan is None:
             return False
         today = today or _clock.now().date()
-        return _store.select_symptom_check(today) is None
+        return _store.select_symptom_check(today, self.is_demo()) is None
 
     def checkin(self, gi: str, today: date | None = None) -> SymptomCheck:
         today = today or _clock.now().date()
@@ -310,7 +385,7 @@ class StepWatch:
 
     def checkin_status(self) -> dict[str, Any]:
         today = _clock.now().date()
-        done = _store.select_symptom_check(today)
+        done = _store.select_symptom_check(today, self.is_demo())
         return {"symptom_check_due": self.checkin_due(today), "symptom_check_today": done.gi if done else None}
 
     # --- the cards ---
@@ -330,7 +405,7 @@ class StepWatch:
         return {
             "window_records": [r for r in _store.select_night_records(w0, w1) if r.is_demo == demo],
             "baseline_records": [r for r in _store.select_night_records(b0, b1) if r.is_demo == demo],
-            "symptom_checks": [c for c in _store.select_symptom_checks(w0, w1) if c.is_demo == demo],
+            "symptom_checks": _store.select_symptom_checks(w0, w1, demo),
             "injections": [t for t in self.adapter.treatments_for(day_start - timedelta(days=7), day_end) if t.kind == "glp1_dose"],
             "recalls": [r for r in _store.select_recalls(w0) if r.is_demo == demo],
             "low_events": [e for e in _store.select_low_events(w0, w1) if e.is_demo == demo],
@@ -338,8 +413,9 @@ class StepWatch:
             "window_readings": [r for r in self.adapter.readings_for(day_start, day_end)
                                 if not r.is_stale and day_start <= r.timestamp < day_end],
             "window_dates": dates,
-            # weekly drugs: one shot per full week of the fetched span (the window plus the 7 days before it)
-            "expected_injections": (len(dates) + 7) // 7 if plan.drug_class in ("glp1", "gip_glp1", "weekly_basal") else None,
+            # a weekly GLP-1 logs glp1_dose: one shot per full week of the fetched span (the window plus the
+            # 7 days before it); a weekly basal is logged as basal insulin and is not counted here
+            "expected_injections": (len(dates) + 7) // 7 if plan.drug_class in ("glp1", "gip_glp1") else None,
         }
 
     def evaluate(self, plan: TitrationPlan, kind: str, step: TitrationStep, window: tuple[date, date]) -> StepEvaluation:
@@ -350,41 +426,59 @@ class StepWatch:
                                expected_injections=inp["expected_injections"],
                                alarm_source="inferred" if self.brain_only() else "measured")
 
+    async def _send(self, plan: TitrationPlan, ev: StepEvaluation, key: str, history: list) -> dict[str, Any]:
+        verdict = _noise.allow(ev.kind, "step_watch", ev.status, _clock.now(), history, active_watch=True, event_key=key)
+        entry = {"kind": ev.kind, "status": ev.status, "flags": ev.flags, "headline": ev.headline,
+                 "step_index": ev.step_index, "budget": verdict.reason, "sent": None}
+        if verdict.allowed:
+            card = assemble(program="step_watch", kind=ev.kind, status=ev.status, flags=ev.flags, metrics=ev.metrics,
+                            confidence=ev.confidence, period_start=ev.period_start, period_end=ev.period_end,
+                            headline=ev.headline, device_id=self.device_id, is_demo=plan.is_demo,
+                            source="irin_brain" if self.brain_only() else "irin_bedside", nights=ev.nights,
+                            tolerance_days=ev.tolerance_days, plan_id=plan.plan_id, step_index=ev.step_index,
+                            resource_categories=["gi_side_effect_education"] if "tolerance" in ev.flags else [])
+            try:
+                entry["sent"] = await self.sender.send(card, event_key=key)
+            except Exception:
+                _log.exception("step watch card failed")
+                entry["sent"] = {"status": "failed"}
+            history.append(_noise.Sent(ev.kind, "step_watch", ev.status, _clock.now(), key))
+        return entry
+
+    async def safety(self, night: date, history: list | None = None) -> list[dict[str, Any]]:
+        """The red rule over ONE night (the one that just closed, or the one in
+        progress when a low alarm re-arms): sent at once, keyed to its events."""
+        plan = self.active_plan()
+        step = current_step(plan, night) if plan is not None else None
+        if plan is None or step is None:
+            return []
+        ev = self.evaluate(plan, "safety", step, (night, night))
+        if ev.status != "red":
+            return []
+        history = history if history is not None else _noise.history_from_store(_store.select_cards(limit=500))
+        return [await self._send(plan, ev, ev.red_event_key or f"{plan.plan_id}:{step.index}:red", history)]
+
     async def run(self, today: date | None = None) -> list[dict[str, Any]]:
-        """The due cards for `today` (the evening date of the night that just closed):
-        evaluated, budgeted, sent. Red safety cards go out on their own key."""
+        """The night that just closed (`today` is its evening date): the red rule
+        over that night, then the due cards, then graduation once the last step
+        has four green weeks. Re-running a morning sends nothing twice."""
         plan = self.active_plan()
         if plan is None:
             return []
         today = today or _clock.now().date()
-        out = []
         history = _noise.history_from_store(_store.select_cards(limit=500))
+        out = await self.safety(today, history)
         for kind, step, window in due_kinds(plan, today):
             ev = self.evaluate(plan, kind, step, window)
-            key = ev.red_event_key or f"{plan.plan_id}:{step.index}:red" if ev.status == "red" else f"{plan.plan_id}:{step.index}"
-            verdict = _noise.allow(ev.kind, "step_watch", ev.status, _clock.now(), history, active_watch=True, event_key=key)
-            entry = {"kind": ev.kind, "status": ev.status, "flags": ev.flags, "headline": ev.headline,
-                     "step_index": step.index, "budget": verdict.reason, "sent": None}
-            if ev.kind == "step_check":
-                self.green_weeks[plan.plan_id] = self.green_weeks.get(plan.plan_id, 0) + 1 if ev.status == "green" else 0
-            if verdict.allowed:
-                card = assemble(program="step_watch", kind=ev.kind, status=ev.status, flags=ev.flags, metrics=ev.metrics,
-                                confidence=ev.confidence, period_start=ev.period_start, period_end=ev.period_end,
-                                headline=ev.headline, device_id=self.device_id, is_demo=plan.is_demo,
-                                source="irin_brain" if self.brain_only() else "irin_bedside", nights=ev.nights,
-                                tolerance_days=ev.tolerance_days, plan_id=plan.plan_id, step_index=step.index,
-                                resource_categories=["gi_side_effect_education"] if "tolerance" in ev.flags else [])
-                try:
-                    entry["sent"] = await self.sender.send(card, event_key=key)
-                except Exception:
-                    _log.exception("step watch card failed")
-                    entry["sent"] = {"status": "failed"}
-                history.append(_noise.Sent(ev.kind, "step_watch", ev.status, _clock.now(), key))
-            out.append(entry)
-        last = plan.steps[-1] if plan.steps else None
-        if last and current_step(plan, today) is last and graduated(self.green_weeks.get(plan.plan_id, 0)) and plan.status == "active":
+            key = budget_key(plan, kind, step, today)
+            if kind == "step_check":
+                self._record_check(plan, key, ev.status)
+            out.append(await self._send(plan, ev, key, history))
+        step = current_step(plan, today)
+        if step is not None and is_last(plan, step) and graduated(self.green_weeks(plan)) and plan.status == "active":
+            window = (max(step.planned_start, today - timedelta(days=7 * GRADUATION_GREEN_WEEKS - 1)), today)
+            ev = self.evaluate(plan, "graduation", step, window)
+            out.append(await self._send(plan, ev, budget_key(plan, "graduation", step, today), history))
             _store.upsert_plan(plan.model_copy(update={"status": "graduated"}))
-            out.append({"kind": "graduation", "status": "green", "step_index": last.index, "budget": "sent", "sent": None,
-                        "headline": f"Four green weeks at {last.dose_label}: the watch is complete."})
             self._changed()
         return out

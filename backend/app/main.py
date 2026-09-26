@@ -290,6 +290,8 @@ def _red_rules_on_alarm_event(event: AlarmEvent) -> None:
     tonight = runtime.ledger.night_ended_on(clock.now().date()) if clock.now().time() < parse_hhmm(runtime.settings.night_window_start) \
         else clock.now().date()
     _schedule(runtime.standing.run(today=tonight, only="hypo_response", event_key=event.event_id))
+    if runtime.step_watch is not None and (event.rearm_count or 0) > 0:
+        _schedule(runtime.step_watch.safety(tonight))  # during a watch Hypo Response is absorbed into this red (invariant 10)
 
 
 runtime.ledger.on_record = _evaluate_after_ledger
@@ -756,25 +758,31 @@ class CheckinRequest(BaseModel):
     gi: Literal["fine", "rough", "cant_eat"]
 
 
-@app.get("/api/rounds/plan")
+def _watch() -> StepWatch:
+    if runtime.step_watch is None:
+        raise HTTPException(status_code=503, detail="step watch not started")
+    return runtime.step_watch
+
+
+@app.get("/api/rounds/plan", dependencies=[Depends(require_pin)])
 async def rounds_plan() -> dict:
-    """The active watch (this mode's), or {active: false}."""
-    plan = runtime.step_watch.active_plan()
-    return {**runtime.step_watch.plan_state(), "plan": plan.model_dump(mode="json") if plan else None}
+    """The active watch (this mode's), or {active: false}. PIN: it is a prescription schedule."""
+    plan = _watch().active_plan()
+    return {**_watch().plan_state(), "plan": plan.model_dump(mode="json") if plan else None}
 
 
-@app.get("/api/rounds/checkin")
+@app.get("/api/rounds/checkin", dependencies=[Depends(require_pin)])
 async def rounds_checkin_status() -> dict:
-    return runtime.step_watch.checkin_status()
+    return _watch().checkin_status()
 
 
 @app.post("/api/rounds/checkin", dependencies=[Depends(require_pin)])
 async def rounds_checkin(req: CheckinRequest) -> dict:
     """The one-tap stomach check-in during a watch: fine | rough | cant_eat. Missing is never fine."""
-    if runtime.step_watch.active_plan() is None:
+    if _watch().active_plan() is None:
         raise HTTPException(status_code=409, detail="no active watch")
-    check = runtime.step_watch.checkin(req.gi)
-    return {**check.model_dump(mode="json"), **runtime.step_watch.checkin_status()}
+    check = _watch().checkin(req.gi)
+    return {**check.model_dump(mode="json"), **_watch().checkin_status()}
 
 
 class WatchEvaluateRequest(BaseModel):
@@ -784,7 +792,7 @@ class WatchEvaluateRequest(BaseModel):
 @app.post("/api/rounds/step_watch/evaluate", dependencies=[Depends(require_pin)])
 async def rounds_step_watch_evaluate(req: WatchEvaluateRequest) -> list[dict]:
     """Run the watch's due cards for a date now (the seek's catch-up, the demo panel)."""
-    return await runtime.step_watch.run(today=req.today)
+    return await _watch().run(today=req.today)
 
 
 class EvaluateRequest(BaseModel):

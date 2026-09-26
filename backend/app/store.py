@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS alarm_events (event_id TEXT PRIMARY KEY, json TEXT NO
 CREATE TABLE IF NOT EXISTS night_records (night_date TEXT PRIMARY KEY, json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS low_events (low_event_id TEXT PRIMARY KEY, json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS low_event_recalls (low_event_id TEXT PRIMARY KEY, json TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS symptom_checks (date TEXT PRIMARY KEY, json TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS symptom_checks (date TEXT NOT NULL, is_demo INTEGER NOT NULL, json TEXT NOT NULL, PRIMARY KEY (date, is_demo));
 CREATE TABLE IF NOT EXISTS cards (card_id TEXT PRIMARY KEY, json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS plans (plan_id TEXT PRIMARY KEY, json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS pairings (id INTEGER PRIMARY KEY AUTOINCREMENT, json TEXT NOT NULL);
@@ -47,6 +47,9 @@ def connect(path: str | Path | None = None) -> sqlite3.Connection:
 
 def init_db(path: str | Path | None = None) -> None:
     with connect(path) as conn:
+        cols = [r["name"] for r in conn.execute("PRAGMA table_info(symptom_checks)").fetchall()]
+        if cols and "is_demo" not in cols:  # the R10 work-in-progress table was keyed by date alone
+            conn.execute("DROP TABLE symptom_checks")
         conn.executescript(SCHEMA)
         # columns added after the first Pi database was created (ALTER is idempotent by try)
         try:
@@ -498,25 +501,26 @@ def upsert_symptom_check(check: SymptomCheck, conn: sqlite3.Connection | None = 
     own = conn is None
     conn = conn or connect()
     with conn:
-        conn.execute("INSERT OR REPLACE INTO symptom_checks VALUES (?, ?)", (check.date.isoformat(), check.model_dump_json()))
+        conn.execute("INSERT OR REPLACE INTO symptom_checks VALUES (?, ?, ?)",
+                     (check.date.isoformat(), int(check.is_demo), check.model_dump_json()))
     if own:
         conn.close()
 
 
-def select_symptom_check(day: date, conn: sqlite3.Connection | None = None) -> SymptomCheck | None:
+def select_symptom_check(day: date, is_demo: bool, conn: sqlite3.Connection | None = None) -> SymptomCheck | None:
     own = conn is None
     conn = conn or connect()
-    r = conn.execute("SELECT json FROM symptom_checks WHERE date = ?", (day.isoformat(),)).fetchone()
+    r = conn.execute("SELECT json FROM symptom_checks WHERE date = ? AND is_demo = ?", (day.isoformat(), int(is_demo))).fetchone()
     if own:
         conn.close()
     return SymptomCheck.model_validate_json(r["json"]) if r else None
 
 
-def select_symptom_checks(since: date, until: date, conn: sqlite3.Connection | None = None) -> list[SymptomCheck]:
+def select_symptom_checks(since: date, until: date, is_demo: bool, conn: sqlite3.Connection | None = None) -> list[SymptomCheck]:
     own = conn is None
     conn = conn or connect()
-    rows = conn.execute("SELECT json FROM symptom_checks WHERE date >= ? AND date <= ? ORDER BY date",
-                        (since.isoformat(), until.isoformat())).fetchall()
+    rows = conn.execute("SELECT json FROM symptom_checks WHERE date >= ? AND date <= ? AND is_demo = ? ORDER BY date",
+                        (since.isoformat(), until.isoformat(), int(is_demo))).fetchall()
     if own:
         conn.close()
     return [SymptomCheck.model_validate_json(r["json"]) for r in rows]

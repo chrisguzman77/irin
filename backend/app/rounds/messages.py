@@ -24,6 +24,7 @@ from typing import Any, Callable
 from .. import store
 from ..clock import clock
 from ..contracts import DoctorMessage, Pairing, Settings, Treatment
+from .step_watch import validate_plan
 from . import crypto
 
 log = logging.getLogger("irin.rounds.messages")
@@ -81,8 +82,13 @@ class DoctorMessages:
                 raise MessageError(400, f"insulin_change needs insulin and new_units in (0, {MAX_UNITS:g}]")
         if msg.kind == "hold_step" and msg.hold_weeks not in HOLD_WEEKS:
             raise MessageError(400, f"hold_step needs hold_weeks in {HOLD_WEEKS}")
-        if msg.kind in ("plan_create", "plan_update") and msg.plan is None:
-            raise MessageError(400, f"{msg.kind} needs a plan")
+        if msg.kind in ("plan_create", "plan_update"):
+            if msg.plan is None:
+                raise MessageError(400, f"{msg.kind} needs a plan")
+            try:
+                validate_plan(msg.plan)
+            except ValueError as e:
+                raise MessageError(400, f"{msg.kind}: {e}") from e
 
     def receive(self, envelopes: list[dict[str, Any]]) -> list[DoctorMessage]:
         """The relay poll's messages. Known ids are skipped; the rest are opened,

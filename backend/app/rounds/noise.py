@@ -15,7 +15,7 @@ from typing import Any
 STANDING_INTERVAL = timedelta(days=14)
 RED_CAP = timedelta(hours=12)
 STANDING_KINDS = ("basal_check", "hypo_response", "follow_up")
-PER_STEP_KINDS = ("step_check", "step_gate")
+PER_STEP_KINDS = ("early_check", "step_check", "step_gate")  # one each per key (plan, step, gate date)
 
 
 @dataclass(frozen=True)
@@ -31,22 +31,29 @@ class Sent:
 @dataclass(frozen=True)
 class Verdict:
     allowed: bool
-    reason: str  # sent | digest | interval | red_cap | red_duplicate | watch | insufficient | per_step | program_day
+    reason: str  # sent | digest | interval | red_cap | red_duplicate | watch | insufficient | per_step | per_plan | program_day
+
+
+def _keys(event_key: str | None) -> set[str]:
+    """A red's key names every event it covers, "+"-joined."""
+    return set(event_key.split("+")) if event_key else set()
 
 
 def allow(kind: str, program: str, status: str, now: datetime, history: list[Sent], *,
           active_watch: bool = False, event_key: str | None = None) -> Verdict:
     if status == "insufficient" and kind != "follow_up":
         return Verdict(False, "insufficient")  # Follow-up alone ships "not enough data yet" (budgeted like amber)
-    if program == "standing" and active_watch:
+    if program == "standing" and active_watch and kind != "follow_up":
         return Verdict(False, "watch")  # Basal Check suspended; Hypo Response absorbed into the watch's safety card
     if status == "red":
         for s in history:
-            if s.kind == kind and event_key is not None and s.event_key == event_key:
-                return Verdict(False, "red_duplicate")
+            if s.kind == kind and event_key is not None and _keys(s.event_key) & _keys(event_key):
+                return Verdict(False, "red_duplicate")  # any shared event: the same episode, already told
             if s.kind == kind and s.status == "red" and now - s.sent_at < RED_CAP:
                 return Verdict(False, "red_cap")
         return Verdict(True, "sent")
+    if kind == "graduation":  # the watch's final card, whatever its colour: once per plan
+        return Verdict(False, "per_plan") if any(s.kind == kind and s.event_key == event_key for s in history) else Verdict(True, "sent")
     if status == "green":
         return Verdict(False, "digest")
     # amber
@@ -68,7 +75,9 @@ def history_from_store(docs: list[dict[str, Any]]) -> list[Sent]:
         if d.get("status") not in ("sent", "unsent"):  # an unsent card is still on its way: it counts
             continue
         c = d["card"]
-        key = f"{c.get('plan_id')}:{c.get('step_index')}" if c.get("plan_id") is not None else d.get("event_key")
+        # the key the card was sent under (a red's events, a step's check, week or gate); a row stored
+        # before keys were kept falls back to the plan and step
+        key = d.get("event_key") or (f"{c.get('plan_id')}:{c.get('step_index')}" if c.get("plan_id") is not None else None)
         out.append(Sent(kind=c["kind"], program=c["program"], status=c["status"],
                         sent_at=datetime.fromisoformat(d["stored_at"]), event_key=key))
     return out

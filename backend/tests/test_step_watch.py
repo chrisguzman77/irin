@@ -24,7 +24,10 @@ from app.rounds import step_watch as mod
 from app.rounds.ledger import Ledger
 from app.rounds.low_events import LowEventDetector
 from app.rounds.nights_adapter import NightsAdapter
-from app.rounds.step_watch import StepWatch, apply_hold, due_kinds, evaluate_window, graduated
+from app.rounds.messages import DoctorMessages, MessageError
+from app.rounds.noise import Sent, allow
+from app.rounds.step_watch import (StepWatch, apply_hold, budget_key, due_kinds, evaluate_window, graduated,
+                                   validate_plan)
 from tests.test_ledger import Sources
 
 SCEN = Path(__file__).resolve().parents[2] / "demo" / "scenarios"
@@ -119,7 +122,7 @@ def test_coverage_70_passes_69_is_insufficient_and_a_red_is_still_sent():
     assert e.status == "insufficient" and e.flags == [] and "under 70%" in e.headline and e.metrics["insufficient"] is True
     red = ev(rdg=readings(n=993), window=[night(WINDOW[0], level2=1)] + [night(d) for d in WINDOW[1:]])
     assert red.kind == "safety" and red.status == "red" and red.flags == ["level2"]
-    assert red.headline == "Step 2 (5 mg): 1 level 2 low (under 54)." and red.red_event_key is None
+    assert red.headline == "Step 2 (5 mg): 1 level 2 low (under 54)." and red.red_event_key == "level2:2020-02-14"
 
 
 def test_red_on_a_rearm_is_keyed_to_the_episode_and_on_ketone_risk_with_cant_eat():
@@ -281,35 +284,170 @@ def test_checkin_is_one_tap_and_a_missing_day_is_never_fine(db):
     assert sw.checkin("rough") == SymptomCheck(date=date(2020, 2, 18), gi="rough", is_demo=True)
     assert sw.checkin_status() == {"symptom_check_due": False, "symptom_check_today": "rough"}
     sw.checkin("fine")  # the second tap of the day replaces the first
-    assert store.select_symptom_checks(date(2020, 2, 18), date(2020, 2, 18)) == [SymptomCheck(date=date(2020, 2, 18), gi="fine", is_demo=True)]
+    assert store.select_symptom_checks(date(2020, 2, 18), date(2020, 2, 18), True) == [SymptomCheck(date=date(2020, 2, 18), gi="fine", is_demo=True)]
+    store.upsert_symptom_check(SymptomCheck(date=date(2020, 2, 18), gi="cant_eat", is_demo=False))  # the other world, same date
+    assert sw.checkin_status() == {"symptom_check_due": False, "symptom_check_today": "fine"}
+    assert store.select_symptom_check(date(2020, 2, 18), False).gi == "cant_eat"
     e = ev(checks=[SymptomCheck(date=WINDOW[4], gi="rough", is_demo=True)])
     assert e.metrics["tolerance"]["missing"] == 4 and [d["gi"] for d in e.tolerance_days] == ["missing"] * 4 + ["rough"]
 
 
-def test_four_green_step_checks_graduate_and_an_amber_resets_the_count(db):
-    p = plan(n_steps=2)  # 2.5 mg from 01-15, 5 mg (maintenance) from 02-12
-    store.upsert_plan(p)
+def test_four_green_maintenance_weeks_graduate_with_a_final_card(db):
+    """A two-step plan: 2.5 mg from 01-15, the maintenance 5 mg from 02-12. Weekly
+    checks on the last step (days 7, 14, 21, 28); the count survives a restart and
+    a re-run of the same morning; graduation on day 28 sends the final card once."""
+    store.upsert_plan(plan(n_steps=2))
     for d in BASE:
         store.upsert_night_record(night(d))
-    src = Sources(readings=readings(), treatments=[Treatment(timestamp=datetime(2020, 2, 12, 9), kind="glp1_dose", dose_label="5 mg", confirmed=True)])
-    sw = watch(src)
+    days = [date(2020, 2, 12) + timedelta(days=i) for i in range(28)]
+    for d in days:
+        store.upsert_night_record(night(d))
+    src = Sources(readings=readings(n=288 * 30, t0=datetime(2020, 2, 12)),
+                  treatments=[Treatment(timestamp=datetime(2020, 2, 12, 9) + timedelta(days=7 * i), kind="glp1_dose",
+                                        dose_label="5 mg", confirmed=True) for i in range(5)])
+    sender = FakeSender()
+    sw = watch(src, sender)
     states = []
     sw.on_plan_state = states.append
-    clock.set(speed=60.0, start=datetime(2020, 2, 19, 7, 5))
-    for d in WINDOW:
-        store.upsert_night_record(night(d, low_point=80.0))  # -20: amber
-    sw.green_weeks["p1"] = 2
-    out = run(sw, date(2020, 2, 18))
-    assert [e["kind"] for e in out] == ["step_check"] and out[0]["status"] == "amber" and out[0]["budget"] == "sent"
-    assert sw.green_weeks["p1"] == 0 and store.select_plans()[0].status == "active"
-    for d in WINDOW:
-        store.upsert_night_record(night(d))  # green
-    sw.green_weeks["p1"] = 3
-    out = run(sw, date(2020, 2, 18))
+    seen = []
+    for d in days[:14]:
+        clock.set(speed=60.0, start=datetime.combine(d + timedelta(days=1), datetime.min.time()).replace(hour=7, minute=5))
+        seen += [(d, e["kind"], e["status"], e["budget"]) for e in run(sw, d)]
+    assert seen == [(date(2020, 2, 18), "step_check", "green", "digest"), (date(2020, 2, 25), "step_check", "green", "digest")]
+    assert sw.green_weeks(sw.active_plan()) == 2 and store.get_kv("step_watch:green:p1") == '["p1:1", "p1:1:w2"]'
+    assert run(sw, date(2020, 2, 25))[0]["budget"] == "digest" and sw.green_weeks(sw.active_plan()) == 2  # a re-run counts nothing
+    sw = watch(src, sender)  # a restart: the count is in the store, not in memory
+    sw.on_plan_state = states.append
+    assert sw.green_weeks(sw.active_plan()) == 2 and sw.plan_state()["green_weeks"] == 2
+    clock.set(speed=60.0, start=datetime(2020, 3, 4, 7, 5))
+    assert [(e["kind"], e["budget"]) for e in run(sw, date(2020, 3, 3))] == [("step_check", "digest")]
+    assert store.select_plans()[0].status == "active" and sender.sent == []  # day 21: three weeks, not four
+    clock.set(speed=60.0, start=datetime(2020, 3, 11, 7, 5))
+    out = run(sw, date(2020, 3, 10))
     assert [(e["kind"], e["status"], e["budget"]) for e in out] == [("step_check", "green", "digest"), ("graduation", "green", "sent")]
     assert store.select_plans()[0].status == "graduated" and sw.active_plan() is None and states[-1] == {"active": False}
-    assert "Four green weeks at 5 mg" in out[1]["headline"] and len(sw.sender.sent) == 1
-    assert run(sw, date(2020, 2, 18)) == []
+    [(card, key)] = sender.sent
+    assert key == "p1:graduation" and card.kind == "graduation" and (card.period_start, card.period_end) == (date(2020, 2, 12), date(2020, 3, 10))
+    assert card.headline.startswith("Step 2 (5 mg), four green weeks at the maintenance dose, watch complete. Overnight low point")
+    assert card.metrics["baseline_nights"] == 14 and "proceed" not in card.allowed_actions or card.allowed_actions
+    assert run(sw, date(2020, 3, 10)) == []  # graduated: nothing more
+    assert allow("graduation", "step_watch", "green", clock.now(), [Sent("graduation", "step_watch", "green", clock.now(), "p1:graduation")],
+                 active_watch=True, event_key="p1:graduation").reason == "per_plan"
+
+
+def test_an_amber_check_breaks_the_green_run_and_earlier_steps_never_count(db):
+    store.upsert_plan(plan(n_steps=2))
+    for d in BASE:
+        store.upsert_night_record(night(d))
+    sw = watch(Sources(readings=readings(n=288 * 12, t0=datetime(2020, 1, 17))))
+    for d in [date(2020, 1, 17) + timedelta(days=i) for i in range(5)]:
+        store.upsert_night_record(night(d))
+    clock.set(speed=60.0, start=datetime(2020, 1, 22, 7, 5))
+    assert run(sw, date(2020, 1, 21))[0]["status"] == "green"
+    assert store.get_kv("step_watch:green:p1") == '["p1:0"]' and sw.green_weeks(sw.active_plan()) == 0  # step 1 is not maintenance
+    for d in WINDOW:
+        store.upsert_night_record(night(d, low_point=80.0))  # -20: amber
+    sw.adapter.readings_for = Sources(readings=readings()).readings_for
+    clock.set(speed=60.0, start=datetime(2020, 2, 19, 7, 5))
+    assert run(sw, date(2020, 2, 18))[0]["status"] == "amber"
+    assert store.get_kv("step_watch:green:p1") == "[]"
+
+
+def test_a_red_on_a_non_due_day_is_sent_at_once_and_deduplicated_per_event(db):
+    store.upsert_plan(plan())
+    for d in BASE:
+        store.upsert_night_record(night(d))
+    src = Sources(readings=readings(n=288 * 12, t0=datetime(2020, 2, 19)))
+    sender = FakeSender()
+    sw = watch(src, sender)
+    day10 = date(2020, 2, 21)  # day 10 of step 2: nothing is due
+    assert due_kinds(sw.active_plan(), day10) == []
+    store.upsert_night_record(night(day10, level2=1))
+    clock.set(speed=60.0, start=datetime(2020, 2, 22, 7, 5))
+    [e] = run(sw, day10)
+    assert e["kind"] == "safety" and e["status"] == "red" and e["budget"] == "sent" and e["headline"] == "Step 2 (5 mg): 1 level 2 low (under 54)."
+    assert sender.sent[-1][1] == "level2:2020-02-21" and sender.sent[-1][0].kind == "safety"
+    assert run(sw, day10)[0]["budget"] == "red_duplicate" and len(sender.sent) == 1
+    # a second, distinct level-2 low the next night is its own event (the 12 h cap has passed)
+    store.upsert_night_record(night(day10 + timedelta(days=1), level2=1))
+    clock.set(speed=60.0, start=datetime(2020, 2, 23, 7, 5))
+    assert run(sw, day10 + timedelta(days=1))[0]["budget"] == "sent" and len(sender.sent) == 2
+    # a re-armed low alarm at 03:00 is a red NOW (main's alarm-event hook calls safety()); the 07:05
+    # run of the same night, which also sees a level 2, shares the event and is not sent again
+    night_date = date(2020, 2, 23)
+    alarm = AlarmEvent(event_id="ae-r", tier="actual_low", started_at=datetime(2020, 2, 24, 2, 40), rearm_count=1,
+                       crossed_actual=True, is_demo=True)
+    store.upsert_alarm_event(alarm)
+    clock.set(speed=60.0, start=datetime(2020, 2, 24, 3, 10))
+    [e] = asyncio.run(sw.safety(night_date))
+    assert e["budget"] == "sent" and sender.sent[-1][1] == "ae-r" and "1 re-armed low alarm" in e["headline"]
+    store.upsert_night_record(night(night_date, level2=1))
+    clock.set(speed=60.0, start=datetime(2020, 2, 24, 7, 5))
+    [e] = run(sw, night_date)
+    assert e["budget"] == "red_duplicate" and len(sender.sent) == 3
+    # a live-world red never reaches the demo watch
+    store.upsert_night_record(night(date(2020, 2, 24), level2=1).model_copy(update={"is_demo": False}))
+    clock.set(speed=60.0, start=datetime(2020, 2, 25, 7, 5))
+    assert run(sw, date(2020, 2, 24)) == []
+
+
+def test_a_hold_applies_from_the_doctors_decision_date_and_the_gate_returns(db):
+    sw = watch(Sources())
+    store.upsert_plan(plan())
+    clock.set(speed=60.0, start=datetime(2020, 2, 13, 9, 0))  # the patient confirms on day 2 of step 2
+    sw.on_plan_message(DoctorMessage(message_id="m", kind="hold_step", hold_weeks=4, created_at=datetime(2020, 2, 9, 18, 0)))
+    p = sw.active_plan()
+    assert p.steps[1].planned_start == date(2020, 3, 11) and p.steps[2].planned_start == date(2020, 4, 8)  # the held step moved
+    assert p.steps[0].planned_start == date(2020, 1, 15)
+    # the gate before the postponed step-up is a new gate: its key names the new date
+    assert due_kinds(p, date(2020, 3, 8)) == [("step_gate", p.steps[0], (date(2020, 3, 2), date(2020, 3, 8)))]
+    old_key, new_key = budget_key(plan(), "step_gate", STEP0, date(2020, 2, 9)), budget_key(p, "step_gate", p.steps[0], date(2020, 3, 8))
+    assert (old_key, new_key) == ("p1:0:gate:2020-02-12", "p1:0:gate:2020-03-11")
+    history = [Sent("step_gate", "step_watch", "amber", datetime(2020, 2, 10, 7, 5), old_key)]
+    assert allow("step_gate", "step_watch", "amber", datetime(2020, 3, 9, 7, 5), history, active_watch=True, event_key=new_key).allowed
+    assert not allow("step_gate", "step_watch", "amber", datetime(2020, 3, 9, 7, 5), history, active_watch=True, event_key=old_key).allowed
+    assert budget_key(p, "early_check", p.steps[0], date(2020, 1, 17)) == "p1:0:early"
+    assert not allow("early_check", "step_watch", "amber", datetime(2020, 1, 18), [Sent("early_check", "step_watch", "amber", datetime(2020, 1, 18), "p1:0:early")],
+                     active_watch=True, event_key="p1:0:early").allowed
+
+
+def test_a_new_plan_replaces_the_active_one_and_a_broken_plan_is_refused(db):
+    sw = watch(Sources())
+    clock.set(speed=60.0, start=datetime(2020, 2, 18, 7, 5))
+    store.upsert_plan(plan())
+    store.set_kv("step_watch:green:p1", '["p1:0"]')
+    p2 = plan().model_copy(update={"plan_id": "p2"})
+    sw.on_plan_message(DoctorMessage(message_id="m", kind="plan_create", plan=p2, created_at=clock.now()))
+    assert sw.active_plan().plan_id == "p2" and {p.plan_id: p.status for p in store.select_plans()} == {"p1": "ended", "p2": "active"}
+    bad = [plan().model_copy(update={"started_at": date(2020, 1, 14)}),
+           plan().model_copy(update={"steps": [plan().steps[0], plan().steps[2]]}),
+           plan().model_copy(update={"steps": list(reversed(plan().steps))}),
+           plan().model_copy(update={"steps": []})]
+    for b in bad:
+        with pytest.raises(ValueError):
+            validate_plan(b)
+        with pytest.raises(MessageError):
+            DoctorMessages._validate_kind(DoctorMessage(message_id="m", kind="plan_create", plan=b, created_at=clock.now()))
+    validate_plan(p2)
+
+
+def test_tolerance_counts_the_last_5_days_of_a_gate_window():
+    gate = [date(2020, 2, 3) + timedelta(days=i) for i in range(7)]
+    rdg = readings(n=288 * 7, t0=datetime(2020, 2, 3))
+    early = [SymptomCheck(date=d, gi="rough", is_demo=True) for d in gate[:3]]  # days 1-3 of the window, none in the last 5
+    e = ev(kind="step_gate", step=STEP0, dates=gate, rdg=rdg, checks=early)
+    assert e.status == "green" and e.kind == "step_gate" and e.headline.endswith("Rough stomach 3 of 7 days.")
+    late = [SymptomCheck(date=d, gi="rough", is_demo=True) for d in gate[2:5]]  # 3 of the last 5
+    assert ev(kind="step_gate", step=STEP0, dates=gate, rdg=rdg, checks=late).flags == ["tolerance"]
+
+
+def test_follow_up_is_shared_with_the_watch_and_a_weekly_basal_counts_no_shots(db):
+    assert allow("follow_up", "standing", "amber", datetime(2020, 2, 18), [], active_watch=True).allowed
+    assert allow("basal_check", "standing", "amber", datetime(2020, 2, 18), [], active_watch=True).reason == "watch"
+    sw = watch(Sources(readings=readings()))
+    p = plan().model_copy(update={"drug_class": "weekly_basal"})
+    assert sw._inputs(p, (WINDOW[0], WINDOW[-1]))["expected_injections"] is None
+    assert sw._inputs(plan(), (WINDOW[0], WINDOW[-1]))["expected_injections"] == 1
 
 
 def test_the_synthetic_titration_reproduces_the_worked_example(db):
@@ -386,7 +524,8 @@ def test_a_watch_suspends_basal_check_and_the_endpoints_are_gated(monkeypatch):
 
     monkeypatch.setattr(auth.config, "PIN", "1234")
     with TestClient(main.app) as c:
-        assert c.get("/api/rounds/plan").json() == {"active": False, "plan": None}
+        assert c.get("/api/rounds/plan").status_code == 401 and c.get("/api/rounds/checkin").status_code == 401
+        assert c.get("/api/rounds/plan", headers=H).json() == {"active": False, "plan": None}
         assert c.post("/api/rounds/checkin", json={"gi": "rough"}, headers=H).status_code == 409
         today = main.runtime.ledger.night_ended_on(main.clock.now().date())
         seed_nights(today, [42, 45, 50, 40, 42, 44, -5, -10, None, None, None, None, None, None])
@@ -394,9 +533,11 @@ def test_a_watch_suspends_basal_check_and_the_endpoints_are_gated(monkeypatch):
         store.upsert_plan(plan(started=today - timedelta(days=10)))
         assert main.runtime.standing.active_watch() is True
         r = c.post("/api/rounds/evaluate", json={"today": today.isoformat()}, headers=H)
-        assert r.status_code == 200 and {e["kind"]: e["budget"] for e in r.json()}["basal_check"] == "watch"
+        budgets = {e["kind"]: e["budget"] for e in r.json()}
+        assert r.status_code == 200 and budgets["basal_check"] == "watch" and budgets["hypo_response"] == "watch"
         assert c.get("/api/rounds/cards").json() == []
-        assert c.get("/api/rounds/plan").json()["plan"]["plan_id"] == "p1" and c.get("/api/rounds/checkin").json()["symptom_check_due"] is True
+        assert c.get("/api/rounds/plan", headers=H).json()["plan"]["plan_id"] == "p1"
+        assert c.get("/api/rounds/checkin", headers=H).json()["symptom_check_due"] is True
         assert c.post("/api/rounds/checkin", json={"gi": "rough"}).status_code == 401
         r = c.post("/api/rounds/checkin", json={"gi": "rough"}, headers=H)
         assert r.status_code == 200 and r.json()["symptom_check_today"] == "rough" and r.json()["symptom_check_due"] is False
