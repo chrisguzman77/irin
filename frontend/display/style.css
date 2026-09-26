@@ -112,9 +112,9 @@ body.alarm-high::after { content: ""; position: fixed; inset: 0; pointer-events:
   background: rgba(255, 176, 0, 0.12); box-shadow: inset 0 0 0 0.8vh var(--amber); }
 
 /* Idle screen: below the alarm (20) and the flags (25), above everything else.
-   Slow fade in, quick fade out so someone walking in sees the number at once. */
+   Slow fade in, near-instant fade out so someone walking in sees the number at once. */
 #idle { position: fixed; inset: 0; z-index: 19; background: #1d2b3a; pointer-events: none;
-  opacity: 0; visibility: hidden; transition: opacity 0.4s ease, visibility 0s linear 0.4s; }
+  opacity: 0; visibility: hidden; transition: opacity 0.2s ease-out, visibility 0s linear 0.2s; }
 #idle.on { opacity: 1; visibility: visible; transition: opacity 1.5s ease; }
 #idle img { display: block; width: 100%; height: 100%; object-fit: cover; }
 
