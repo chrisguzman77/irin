@@ -32,6 +32,10 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
 #trend { font-size: min(10vw, 18vh); color: #bbb; }
 #units { font-size: 2.6vh; color: var(--dim); margin-top: 0.5vh; }
 #reading-time { font-size: 2.4vh; color: var(--dim); margin-top: 1vh; }
+/* The 30-min prediction: under the number, smaller, and the same colour as the
+   graph's dotted line (PREDICTION_COLOR in display.js). */
+.prediction { color: #B1D2BD; font-size: 3.4vh; font-weight: 500; margin-top: 0.8vh; text-align: center; }
+#night-prediction { font-size: 2.6vh; margin-top: 1.5vh; opacity: 0.7; }  /* dimmed like the rest of the night screen */
 
 /* Stale or disconnected: the number is never shown as fresh. */
 body.is-stale #glucose, body.is-stale #trend,

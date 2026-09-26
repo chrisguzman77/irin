@@ -242,6 +242,20 @@ const screenMode = () => (state.clockSynced ? state.displayMode : "detail");
 
 const isDisconnected = () => !state.connected && Date.now() - state.downSince > DISCONNECT_BANNER_MS;
 
+// The 30-min prediction, shown as TEXT under the current number and as the
+// DOTTED graph line, in one colour. forecast_v1 is a 20th-percentile forecast
+// ("how low it could plausibly get"), so the words say "could be as low as",
+// never a bare "predicted". It updates on every forecast_update (each new
+// reading, ~5 min) and, like the dotted line, only on fresh data (invariant 1).
+const PREDICTION_COLOR = "#B1D2BD";
+
+function predictionText() {
+  const r = state.latest;
+  const fc = state.forecast;
+  if (!fc || !r || r.is_stale || isDisconnected() || fc.predicted_mgdl == null) return null;
+  return `could be as low as ${Math.round(fc.predicted_mgdl)} in ${fc.horizon_min ?? 30} min`;
+}
+
 function render() {
   const r = state.latest;
   const stale = !r || r.is_stale;
@@ -275,6 +289,11 @@ function render() {
   $("night-trend").textContent = $("morning-trend").textContent = arrow;
   const now = state.piClock ?? (r ? toMs(r.timestamp) : null);
   $("night-clock").textContent = now === null ? "--:--" : hhmm(now);
+  const pred = predictionText();
+  for (const id of ["prediction", "night-prediction"]) {
+    $(id).textContent = pred ?? "";
+    $(id).classList.toggle("hidden", pred === null);
+  }
   if (mode === "morning") renderMorning();
 
   if (r) {
@@ -854,7 +873,7 @@ function drawGraph() {
   // DOTTED forecast: latest reading -> predicted value at +horizon
   if (fc) {
     const ft = toMs(fc.timestamp) + fc.horizon_min * 60000;
-    ctx.strokeStyle = fc.predicted_mgdl < TARGET_LOW ? "#ff3b30" : "#9ab";
+    ctx.strokeStyle = PREDICTION_COLOR;  // the same colour as the prediction text under the number
     ctx.lineWidth = Math.max(2, fs * 0.18);
     ctx.lineCap = "round";
     ctx.setLineDash([0.1, fs * 0.55]);
