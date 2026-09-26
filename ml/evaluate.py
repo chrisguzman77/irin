@@ -4,9 +4,9 @@ actual alarm rule (ml/events.py), swept over predicted thresholds 70/75/80.
 
 Baselines (forecasters on the 16-feature matrix, like the model):
   A persistence   current
-  B linear trend  current + 30 x roc15
+  B linear trend  current + 30 x roc15 (a missing slot: the 10-min, then 30-min rate)
   C weighted ROC  current + 30 x (3 r1 + 2 r2 + 1 r3) / 6, r = the last three
-                  5-min rates, newest first
+                  5-min rates, newest first (falls back to B on a missing slot)
 Baselines have no training, so they are also scored over the full history
 (more events, steadier numbers). Reads ml/data/clean.csv and dataset.csv;
 writes the sweep plot to ml/data/processed/ (gitignored). Prints summaries
@@ -21,10 +21,9 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from ml.build_dataset import drop_collisions
 from ml.events import (FCST_FROM_MIN, FCST_TO_MIN, MAX_LEAD_MIN, MIN_LEAD_MIN, NEAR_MISS_MGDL, forecasts,
                        replay_events, summarize)
-from ml.models.features import FEATURE_NAMES
+from ml.models.features import FEATURE_NAMES, drop_collisions
 
 HOLDOUT_DAYS = 56
 THRESHOLDS = (70.0, 75.0, 80.0)
@@ -37,14 +36,23 @@ def persistence(X: np.ndarray) -> np.ndarray:
 
 
 def linear_trend(X: np.ndarray) -> np.ndarray:
-    return X[:, _F["current"]] + 30 * X[:, _F["roc15"]]
+    """current + 30 x the 15-min rate; with that slot empty, the 10-min rate,
+    then the 30-min rate; NaN (no forecast) when all three are missing."""
+    cur = X[:, _F["current"]]
+    rate = X[:, _F["roc15"]]
+    rate = np.where(np.isnan(rate), (cur - X[:, _F["lag10"]]) / 10, rate)
+    rate = np.where(np.isnan(rate), X[:, _F["roc30"]], rate)
+    return cur + 30 * rate
 
 
 def weighted_roc(X: np.ndarray) -> np.ndarray:
+    """current + 30 x (3 r1 + 2 r2 + r3) / 6; falls back to linear_trend when
+    any of the three 5-min rates needs an empty slot."""
     r1 = X[:, _F["roc5"]]
     r2 = (X[:, _F["lag5"]] - X[:, _F["lag10"]]) / 5
     r3 = (X[:, _F["lag10"]] - X[:, _F["lag15"]]) / 5
-    return X[:, _F["current"]] + 30 * (3 * r1 + 2 * r2 + r3) / 6
+    out = X[:, _F["current"]] + 30 * (3 * r1 + 2 * r2 + r3) / 6
+    return np.where(np.isnan(out), linear_trend(X), out)
 
 
 BASELINES = {"A persistence": persistence, "B linear 15m": linear_trend, "C weighted ROC": weighted_roc}
@@ -58,7 +66,9 @@ def point_metrics(rows: pd.DataFrame, forecast) -> dict:
     X = rows[FEATURE_NAMES].to_numpy(float)
     err = np.abs(forecast(X) - rows.y_abs.to_numpy(float))
     low = rows.y_abs.to_numpy() < 100
-    return {"mae": float(err.mean()), "mae_lt100": float(err[low].mean()) if low.any() else None, "n": len(err)}
+    has = ~np.isnan(err)                                   # a baseline may have no forecast on a holey window
+    return {"mae": float(err[has].mean()), "mae_lt100": float(err[has & low].mean()) if (has & low).any() else None,
+            "n": int(has.sum()), "no_forecast": int((~has).sum())}
 
 
 def _pct(v):
@@ -131,10 +141,10 @@ def main() -> None:
           f"\n  false = warning cleared with no crossing; near = lowest actual during it < {NEAR_MISS_MGDL:.0f}, far = >= {NEAR_MISS_MGDL:.0f}")
 
     print("\nPOINT METRICS, held-out rows (absolute mg/dL at t+30)")
-    print("  name              MAE    MAE(true<100)")
+    print("  name              MAE    MAE(true<100)  no forecast")
     for name, f in BASELINES.items():
         m = point_metrics(held_rows, f)
-        print(f"  {name:<16} {m['mae']:5.2f}   {_num(m['mae_lt100'], '5.2f')}")
+        print(f"  {name:<16} {m['mae']:5.2f}   {_num(m['mae_lt100'], '5.2f')}          {m['no_forecast']}")
 
     full, held = {}, {}
     for name, f in BASELINES.items():

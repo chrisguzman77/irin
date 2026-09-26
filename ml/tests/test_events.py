@@ -82,17 +82,27 @@ def test_single_reading_under_70_is_a_low_and_new_event_needs_two_above():
     assert len(rep["lows"]) == 2
 
 
+def test_dropped_reading_keeps_forecasting():
+    # one missing slot at minute 100: every reading still gets a forecast
+    mins = grid(20) + grid(20, start=5 * 21)
+    x = np.array([100.0] * 40)
+    preds = forecasts(times(mins), x, linear_trend)
+    assert np.isnan(preds[:12]).all()                                # the stretch's warm-up hour
+    assert not np.isnan(preds[12:]).any()                            # straight through the dropped reading
+
+
 def test_gap_breaks_the_consecutive_count():
-    # the two below-threshold forecasts are on either side of a missing reading
-    mins = grid(20) + grid(20, start=5 * 21)                         # one missing slot at minute 100
-    x = [100.0] * 40
-    rep = run(x, minutes=mins, forecast=lambda X: np.full(len(X), 60.0))
-    # the window after the hole is invalid for 12 readings, so warnings start only
-    # once two valid forecasts in a row exist on each side
-    starts = [int((w["time"] - T0).astype(np.int64) // 60) for w in rep["warnings"]]
-    assert starts[0] == 5 * 13                                        # readings 12 and 13 (first two valid)
-    preds = forecasts(times(mins), np.asarray(x), lambda X: np.full(len(X), 60.0))
-    assert np.isnan(preds[20:32]).all()                              # no forecast across the hole
+    # a 35-min interval is a gap: new stretch, no forecast for its first hour,
+    # and one below-threshold forecast on each side never adds up to a warning
+    mins = grid(14) + grid(14, start=5 * 13 + 35)
+    x = np.array([100.0] * 28)
+    preds = forecasts(times(mins), x, lambda X: np.full(len(X), 60.0))
+    assert np.isnan(preds[:12]).all() and not np.isnan(preds[12:14]).any()
+    assert np.isnan(preds[14:26]).all() and not np.isnan(preds[26:]).any()
+    only_edges = np.full(28, np.nan)
+    only_edges[13], only_edges[26] = 60.0, 60.0                     # last before the gap, first after
+    rep = replay_events(times(mins), x, only_edges)
+    assert rep["warnings"] == []
 
 
 def test_crossing_right_after_gap_is_unforecastable():

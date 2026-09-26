@@ -12,10 +12,14 @@ Pending step 3b (model vs baseline B on events at the chosen threshold).
 The replay runs every reading through the backend's warning rule
 (backend/app/alarm.py, Idle -> Pending), not a proxy for it.
 
-- **Forecast:** the predicted glucose 30 min ahead, made only when the last
-  13 readings sit on a strict 5-min grid (60 min, no missing reading, no gap;
-  `features.window_ok`). No valid window means no forecast, on the device and
-  here.
+- **Forecast:** the predicted glucose 30 min ahead, made from the last 60 min
+  as 13 five-minute slots (`features.slot_windows`, the same code the Pi runs
+  via `latest_window`). A dropped reading leaves its slot empty (NaN, never
+  interpolated; XGBoost treats it as missing). A window is usable when the
+  current reading is present, no more than 5 slots in a row are empty, and no
+  gap (over 30 min without a reading) falls inside it; a stretch's first hour
+  after a gap has no forecast. No usable window means no forecast, on the
+  device and here.
 - **Warning:** starts on 2 consecutive forecasts below the threshold; clears
   on 2 consecutive forecasts at or above it; a reading with no forecast
   breaks both counts and leaves a warning that is on unchanged. No warning

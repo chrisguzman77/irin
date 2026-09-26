@@ -14,7 +14,7 @@ The rule, as alarm.py states it:
   - it clears on 2 consecutive forecasts back at or above the threshold;
   - it escalates (ends as a true warning) when the actual value crosses 70;
   - no warning starts during an actual low (actual_low outranks predicted_low).
-A reading with no valid 60-min window (features.window_ok) has no forecast:
+A reading with no usable 60-min slot window (features.slot_windows) has no forecast:
 it breaks both consecutive counts and leaves the warning state unchanged.
 
 Low event: the first reading under 70 (a single reading counts, George's
@@ -40,9 +40,8 @@ import argparse
 from typing import Callable
 
 import numpy as np
-from numpy.lib.stride_tricks import sliding_window_view
 
-from ml.models.features import WINDOW_LEN, _hours, features, window_ok
+from ml.models.features import _hours, features, grid_slots, slot_windows
 
 LOW = 70.0
 MIN_LEAD_MIN = 10.0
@@ -67,19 +66,19 @@ def local_hours(ts: np.ndarray) -> np.ndarray:
 
 
 def forecasts(ts: np.ndarray, mgdl: np.ndarray, forecast: Callable[[np.ndarray], np.ndarray]) -> np.ndarray:
-    """Predicted value 30 min ahead at every reading; NaN where the last 13
-    readings fail window_ok (no forecast on the device either)."""
+    """Predicted value 30 min ahead at every reading; NaN where the reading has
+    no usable slot window (features.slot_windows, the rule the Pi applies) or
+    the forecaster itself returns NaN (a baseline missing the lag it needs)."""
     t = np.asarray(ts, dtype="datetime64[s]")
     x = np.asarray(mgdl, dtype=float)
     out = np.full(len(x), np.nan)
-    if len(x) < WINDOW_LEN:
+    keep, gslot, stretch = grid_slots(t.astype(np.int64))
+    if not len(gslot):
         return out
-    w_ts = sliding_window_view(t.astype(np.int64), WINDOW_LEN)
-    w_x = sliding_window_view(x, WINDOW_LEN)
-    ok = window_ok(w_ts)
-    idx = np.flatnonzero(ok) + WINDOW_LEN - 1
+    windows, ok = slot_windows(gslot, stretch, x[keep])
+    idx = np.flatnonzero(keep)[ok]
     if len(idx):
-        out[idx] = forecast(features(w_x[ok], local_hours(t[idx])))
+        out[idx] = forecast(features(windows[ok], local_hours(t[idx])))
     return out
 
 

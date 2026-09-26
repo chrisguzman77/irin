@@ -40,18 +40,31 @@ def test_no_row_across_a_31_min_gap():
     assert not ((t >= gap_end) & (t - pd.Timedelta(minutes=60) < gap_end)).any()
 
 
-def test_one_missing_reading_removes_exactly_the_rows_that_need_it():
+def test_one_missing_reading_costs_only_its_own_row_and_its_label_row():
     n = 60
     mins = regular(n)
     hole = 30
     ts, x = series([150.0] * (n - 1), mins[:hole] + mins[hole + 1:])
     rows, s = build(ts, x)
     full, _ = build(*series([150.0] * n, mins))
-    # rows needing slot 30: windows ending at 30..42 (13) plus labels at 30 (t = slot 24)
+    # lost: the row AT slot 30 (no reading) and the row whose label is slot 30 (t = slot 24)
     lost = set(full.timestamp) - set(rows.timestamp)
     lost_slots = sorted(int((t - ts[0]).total_seconds() // 300) for t in lost)
-    assert lost_slots == [24] + list(range(30, 43))
-    assert s["stretches"] == 1 and s["no_window_hole"] == 12
+    assert lost_slots == [24, 30]
+    assert s["stretches"] == 1 and s["no_window_hole"] == 0
+    assert s["window_with_missing_slot"] == 12                         # windows ending at slots 31..42
+    assert s["nan_cells"] == 0 and s["rows_touching_gap"] == 0 and s["inputs_all_at_or_before_t"]
+    # windows ending at 31..42 see slot 30 empty; at t = slot 33 it is the lag15 slot -> NaN
+    row = rows[rows.timestamp == ts[0] + pd.Timedelta(minutes=5 * 33)].iloc[0]
+    assert np.isnan(row.lag15) and not np.isnan(row.lag10)
+
+
+def test_six_missing_readings_is_a_gap_and_splits_the_stretch():
+    n = 60
+    mins = regular(n)
+    ts, x = series([150.0] * (n - 6), mins[:30] + mins[36:])         # 35 min between readings
+    rows, s = build(ts, x)
+    assert s["stretches"] == 2 and s["rows_touching_gap"] == 0
 
 
 def test_future_values_never_change_features():
@@ -75,4 +88,4 @@ def test_collision_pair_is_dropped_not_guessed():
     ts, x = series([100.0] * 41, mins)
     rows, s = build(ts, x)
     assert s["collision_dropped"] == 2
-    assert s["nan_cells"] == 0
+    assert s["nan_cells"] == 0 and s["window_with_missing_slot"] > 0   # the pair's slots are NaN, never guessed
