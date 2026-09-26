@@ -22,8 +22,29 @@ DEVICE_ID / DEVICE_TOKEN; one hackathon device). Body:
 ```
 
 Upsert on (device_id, timestamp): sending the same batch twice stores one
-row per reading. Demo readings carry is_demo and land under a separate demo
-device_id so real dashboards never show replay data.
+row per reading. Rows with is_demo land under `<device_id>-demo` (the cloud
+routes them, the Pi only flags them) so real dashboards never show replay
+data. The body's device_id must equal the header's. 503 when Tiger is
+unreachable: the Pi keeps its cursor and retries next tick.
+
+### Column contract (cloud/ingest.py writes, cloud/sql/001 creates)
+
+Timestamps are the Pi's naive LOCAL time exactly as its API serves them, in
+`timestamp` (without time zone) columns, so the 22:00-origin night buckets
+need no time-zone arithmetic. Every primary key includes the time column
+(a hypertable's unique indexes must), and the upsert conflicts on it.
+
+| table | columns | primary key |
+|---|---|---|
+| readings | device_id text, time timestamp, mgdl real, trend text, source text, is_demo bool | (device_id, time) |
+| alarm_events | device_id, started_at timestamp, event_id text, tier text, acknowledged_at timestamp, ack_source text, escalated bool, rearm_count int, crossed_actual bool, presence_during text, is_demo bool | (device_id, started_at, event_id) |
+| low_events | device_id, started_at timestamp, low_event_id text, night_date date, nadir_mgdl real, nadir_at timestamp, minutes_below_70 int, auc_below_70 real, recovery_slope real, carbs_logged_within_30min bool, inferred_unfelt bool, alarm_event_id text, is_demo bool | (device_id, started_at, low_event_id) |
+| treatments | device_id, time timestamp, kind text, insulin_units real, carbs_g real, dose_label text, text text, confirmed bool, is_demo bool | (device_id, time, kind) |
+
+`cloud/tests/test_ingest.py` creates these four tables as plain tables in a
+scratch schema (the same columns, no hypertable) and needs a reachable
+TIGER_URI (the compose file's timescaledb, or a scratch schema on Tiger
+Cloud); it skips otherwise.
 
 ## Dashboard endpoints (C3) — `GET /v1/dash/{name}?days=` (owner bearer)
 

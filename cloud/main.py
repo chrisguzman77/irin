@@ -12,10 +12,16 @@ to over WhatsApp), RELAY_KEY (audio/render from the relay), DOMAIN.
 from __future__ import annotations
 
 import hmac
+import logging
 import os
 
-from fastapi import FastAPI, Header, HTTPException
+import psycopg
+from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+
+from ingest import IngestBatch, ingest as ingest_batch
+
+log = logging.getLogger("irin.cloud")
 
 TIGER_URI = os.environ.get("TIGER_URI", "postgresql://postgres:postgres@localhost:5432/irin")
 DEVICE_ID = os.environ.get("DEVICE_ID", "")
@@ -57,7 +63,17 @@ async def health() -> dict:
 
 
 @app.post("/v1/ingest")
-async def ingest(): _stub("C1 ingest (device token; upsert on (device_id, timestamp))")
+async def ingest(batch: IngestBatch, device_id: str = Depends(require_device_token)) -> dict:
+    """C1: the Pi's 5-minute batch. The body's device_id must be the header's;
+    demo rows are routed to <device_id>-demo inside ingest(). 503 when Tiger is
+    unreachable so the Pi keeps its cursor and retries next tick."""
+    if batch.device_id != device_id:
+        raise HTTPException(status_code=400, detail="device_id does not match the token")
+    try:
+        return ingest_batch(batch)
+    except psycopg.Error as e:
+        log.warning("ingest failed: %s", type(e).__name__)
+        raise HTTPException(status_code=503, detail="storage unavailable; retry")
 
 
 @app.get("/v1/dash/{name}")

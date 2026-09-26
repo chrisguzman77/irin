@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS pairings (id INTEGER PRIMARY KEY AUTOINCREMENT, json 
 CREATE TABLE IF NOT EXISTS doctor_messages (message_id TEXT PRIMARY KEY, json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS family_stories (story_id TEXT PRIMARY KEY, json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS reports (night_date TEXT PRIMARY KEY, json TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 """
 
 
@@ -148,3 +149,21 @@ def select_reports(limit: int = 30, conn: sqlite3.Connection | None = None) -> l
     if own:
         conn.close()
     return [MorningReport.model_validate_json(r["json"]) for r in rows]
+
+
+def get_kv(key: str, conn: sqlite3.Connection | None = None) -> str | None:
+    own = conn is None
+    conn = conn or connect()
+    r = conn.execute("SELECT value FROM kv WHERE key = ?", (key,)).fetchone()
+    if own:
+        conn.close()
+    return r["value"] if r else None
+
+
+def set_kv(key: str, value: str, conn: sqlite3.Connection | None = None) -> None:
+    own = conn is None
+    conn = conn or connect()
+    with conn:
+        conn.execute("INSERT OR REPLACE INTO kv VALUES (?, ?)", (key, value))
+    if own:
+        conn.close()

@@ -33,6 +33,7 @@ from .datasource.nightscout import NightscoutDataSource
 from .datasource.replay import ReplayDataSource
 from .demo import bind as bind_demo, restore_live_settings, router as demo_router
 from .forecast import Forecaster
+from .forward import Forwarder, from_config as forwarder_from_config
 from .outputs import GatedOutputs
 from .presence import PresenceMachine, PresenceState
 from .reports import ReportBuilder, SmtpMailer
@@ -67,6 +68,7 @@ class Runtime:
     outputs: "GatedOutputs | None" = None
     scheduler: "Scheduler | None" = None
     reports: "ReportBuilder | None" = None
+    forwarder: "Forwarder | None" = None
 
 
 runtime = Runtime(mode="nightscout" if config.DATASOURCE == "nightscout" else "replay",
@@ -146,6 +148,27 @@ def _morning_report_job(night_date: date) -> None:
 
 runtime.scheduler.register("morning_report", lambda: runtime.settings.night_window_end, _morning_report_job)
 
+
+# --- the forwarder to Irin Cloud (C1): outbound, batched, its own task, never in the alarm path ---
+
+
+def _rows_since(since: datetime) -> list[dict]:
+    """New readings for the cloud: the store in live mode (the poller writes it),
+    the scenario's served rows in replay (flagged is_demo by the forwarder)."""
+    ds = runtime.datasource
+    if isinstance(ds, ReplayDataSource):
+        rows = [ds._to_reading(r) for r in ds._available(clock.now()) if r[0] > since]
+    else:
+        rows = [r for r in store.select_readings(since) if r.timestamp > since]
+    return [r.model_dump(mode="json") for r in rows]
+
+
+def _treatment_rows_since(since: datetime) -> list[dict]:
+    return [t.model_dump(mode="json") for t in store.select_treatments(since) if t.timestamp > since]
+
+
+runtime.forwarder = forwarder_from_config(_rows_since, _treatment_rows_since, lambda: runtime.mode == "replay")
+
 ALARM_TICK_CLOCK_SECONDS = 30.0
 _broadcast_tasks: set[asyncio.Task] = set()  # references held so a broadcast is never GC'd mid-flight
 
@@ -197,8 +220,9 @@ async def lifespan(app: FastAPI):
     hub.start()
     tick_task = asyncio.create_task(_alarm_tick_loop())
     sched_task = asyncio.create_task(runtime.scheduler.run())
+    forward_task = asyncio.create_task(runtime.forwarder.run())
     yield
-    for task in (tick_task, sched_task):
+    for task in (tick_task, sched_task, forward_task):
         task.cancel()
         try:
             await task
@@ -390,6 +414,12 @@ async def set_presence(req: PresenceOverride) -> PresenceState:
 @app.get("/api/presence", response_model=PresenceState)
 async def presence_state() -> PresenceState:
     return runtime.presence.state
+
+
+@app.get("/api/forwarder")
+async def forwarder_state() -> dict:
+    """The cloud forwarder: enabled, cursor, batches sent, failures (the under-the-hood panel)."""
+    return runtime.forwarder.status()
 
 
 @app.get("/api/scheduler")
