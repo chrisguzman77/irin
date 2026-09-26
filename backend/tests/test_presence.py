@@ -65,9 +65,13 @@ def test_radar_absence_alone_never_sets_away_at_night(pm):
     clock.set(speed=60.0, start=NIGHT)
     absent_for(m, 4 * 60, step=5)  # four hours of an "empty" room at night (02:00-06:00)
     assert m.state.mode == "home"
-    clock.set(speed=60.0, start=datetime(2020, 1, 2, 7, 0))  # the window ends: the day rule applies
-    absent_for(m, AWAY_AFTER_MIN)
-    assert m.state.mode == "away"
+    clock.set(speed=60.0, start=datetime(2020, 1, 2, 7, 0))  # the window ends
+    m.sample(False)
+    assert m.state.mode == "home"  # overnight absence never counts the instant the window closes
+    absent_for(m, AWAY_AFTER_MIN - 1)
+    assert m.state.mode == "home"
+    absent_for(m, 1)
+    assert m.state.mode == "away"  # 15 fresh daytime minutes
 
 
 def test_toggle_always_wins(pm):
@@ -82,6 +86,19 @@ def test_toggle_always_wins(pm):
     assert m.state.mode == "home" and m.state.source == "radar"
     absent_for(m, AWAY_AFTER_MIN)
     assert m.state.mode == "away"  # radar back in charge
+
+
+def test_override_changed_behind_the_machines_back_is_honored(pm):
+    m, settings = pm
+    settings.presence_override = "away"  # a future /api/settings write, not set_override
+    m.sample(True)
+    assert m.state.mode == "away" and m.state.source == "toggle"
+    absent_for(m, 30)
+    settings.presence_override = "auto"
+    m.sample(False)
+    assert m.state.mode == "home"  # the stale timer was cleared, not honored
+    absent_for(m, AWAY_AFTER_MIN)
+    assert m.state.mode == "away"
 
 
 def test_toggle_away_works_at_night_too(pm):
@@ -150,6 +167,19 @@ def test_away_suppresses_room_outputs_only_and_return_replays_them(gated):
     assert [c for c in hal.calls if c[0] in ("play_sound", "set_leds")] == []  # nothing in the room
     m.sample(True)  # someone walks in
     assert ("set_leds", "full") in hal.calls and ("play_sound", "alarm_urgent", 1.0) in hal.calls
+
+
+def test_escalation_while_away_replays_the_strobe_on_return(gated):
+    from app.alarm import ESCALATION_MIN
+
+    m, hal, out, eng = gated
+    absent_for(m, AWAY_AFTER_MIN)
+    eng.process_reading(reading(60))
+    clock.advance(ESCALATION_MIN * 60)
+    eng.tick()
+    hal.calls.clear()
+    m.sample(True)
+    assert ("set_leds", "strobe") in hal.calls and ("play_sound", "alarm_urgent", 1.0) in hal.calls
 
 
 def test_ack_while_away_clears_the_remembered_sound(gated):

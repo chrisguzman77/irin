@@ -10,7 +10,12 @@ Rules:
 - The manual toggle (Settings.presence_override: home | away) always wins
   over every automatic input; "auto" hands control back to the radar.
 - A raw sample of None (mock not driven, hal error) is no evidence either
-  way and never counts toward Away.
+  way: it never starts or advances the absence timer, and only a real False
+  sample can decide Away.
+- The absence timer restarts when the night window ends: absence
+  accumulated overnight never counts the moment the window closes (the
+  radar may simply be missing a sleeper), so Away needs 15 fresh daytime
+  minutes.
 - Returning re-enables outputs immediately (outputs.py replays the last
   requested state, so a still-active alarm sounds the moment presence
   returns).
@@ -69,18 +74,21 @@ class PresenceMachine:
 
     def sample(self, raw: bool | None) -> PresenceState:
         """Feed one raw radar sample."""
-        if self.settings.presence_override != "auto":
-            self._set(self.settings.presence_override, "toggle")
+        override = self.settings.presence_override
+        if override != "auto":
+            self._set(override, "toggle")  # the toggle always wins (even if set behind our back)
             return self.state
+        if self.state.source == "toggle":  # settings went back to auto without set_override
+            self.set_override("auto")
         now = clock.now()
         if raw is True:
             self._absent_since = None
             self._set("home", "radar")
         elif raw is False:
-            if self._absent_since is None:
-                self._absent_since = now
             night = in_window(now.time(), self.settings.night_window_start, self.settings.night_window_end)
-            if not night and now - self._absent_since >= timedelta(minutes=AWAY_AFTER_MIN):
+            if night or self._absent_since is None:
+                self._absent_since = now  # at night the timer never accumulates; it restarts at window end
+            elif now - self._absent_since >= timedelta(minutes=AWAY_AFTER_MIN):
                 self._set("away", "radar")
         # raw is None: no evidence, nothing changes
         return self.state
