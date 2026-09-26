@@ -7,14 +7,46 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <div id="badge" class="badge hidden">DEMO</div>
-  <div id="stale" class="stale hidden">STALE</div>
-  <main>
-    <div id="glucose">---</div>
-    <div id="trend"></div>
-    <div id="meta">waiting for /api/latest</div>
+  <header id="flags">
+    <div id="badge-demo" class="flag flag-demo hidden">DEMO</div>
+    <div id="badge-clock" class="flag flag-clock hidden">clock not set</div>
+    <div id="banner-stale" class="flag flag-stale hidden">STALE — no new reading</div>
+    <div id="banner-disconnected" class="flag flag-disc hidden">DISCONNECTED — number may be old</div>
+  </header>
+
+  <main id="detail">
+    <section id="now">
+      <div id="reading">
+        <span id="glucose">---</span>
+        <span id="trend" aria-label="trend"></span>
+      </div>
+      <div id="units">mg/dL</div>
+      <div id="reading-time">waiting for device</div>
+    </section>
+
+    <section id="graph-wrap">
+      <canvas id="graph" aria-label="last 3 hours"></canvas>
+    </section>
+
+    <section id="tiles">
+      <div class="tile" id="tile-iob">
+        <div class="tile-label">IOB</div>
+        <div class="tile-value" id="iob">—</div>
+        <div class="tile-note" id="iob-note">not yet sent by device</div>
+      </div>
+      <div class="tile" id="tile-dose">
+        <div class="tile-label">Last dose</div>
+        <div class="tile-value" id="dose">—</div>
+        <div class="tile-note" id="dose-note">not yet sent by device</div>
+      </div>
+      <div class="tile" id="tile-tir">
+        <div class="tile-label">Today in range</div>
+        <div class="tile-value" id="tir">—</div>
+        <div class="tile-note" id="tir-note">not yet sent by device</div>
+      </div>
+    </section>
   </main>
-  <footer>WebSocket wiring: Chris</footer>
+
   <script src="display.js"></script>
 </body>
 </html>
