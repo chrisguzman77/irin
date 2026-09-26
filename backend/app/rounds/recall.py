@@ -72,9 +72,8 @@ class MorningRecall:
         chosen = deepest(night)
         keep = {e.low_event_id for e in chosen}
         night_ids = {e.low_event_id for e in night}
-        known = {e.low_event_id for e in store.select_low_events(date.min)}
-        for r in store.select_recalls(date.min):
-            if r.answer is None and r.is_demo == demo and r.low_event_id not in keep and (r.low_event_id in night_ids or r.low_event_id not in known):
+        for r in store.select_recalls(date.min):  # only THIS night's demoted questions: never another night's, never answered
+            if r.answer is None and r.is_demo == demo and r.low_event_id in night_ids and r.low_event_id not in keep:
                 store.delete_recall(r.low_event_id)
         rows: list[LowEventRecall] = []
         for e in chosen:
@@ -98,19 +97,20 @@ class MorningRecall:
                         "prefill_treated": e.carbs_logged_within_30min, "answer_until": answer_deadline(r.asked_at).isoformat()})
         return out
 
-    def pending(self, now: datetime | None = None) -> list[dict[str, Any]]:
-        """This morning's open questions (asked today, unanswered, before noon), this world's."""
-        now = now or clock.now()
+    def _of_morning(self, day: date) -> list[LowEventRecall]:
+        """The questions that close on `day` (the morning they belong to), this world's, oldest first."""
         demo = self.is_demo()
-        rows = [r for r in store.select_recalls(now.date()) if r.is_demo == demo and r.asked_at.date() == now.date() and is_open(r, now)]
-        return self._items(sorted(rows, key=lambda r: r.asked_at))
+        rows = [r for r in store.select_recalls(day - timedelta(days=1)) if r.is_demo == demo and answer_deadline(r.asked_at).date() == day]
+        return sorted(rows, key=lambda r: r.asked_at)
+
+    def pending(self, now: datetime | None = None) -> list[dict[str, Any]]:
+        """This morning's open questions (unanswered, before noon), this world's."""
+        now = now or clock.now()
+        return self._items([r for r in self._of_morning(now.date()) if is_open(r, now)])
 
     def morning(self, day: date | None = None) -> list[dict[str, Any]]:
-        """Every question asked on `day` with its answer so far (the app shows answers after a reload)."""
-        day = day or clock.now().date()
-        demo = self.is_demo()
-        rows = [r for r in store.select_recalls(day) if r.is_demo == demo and r.asked_at.date() == day]
-        return self._items(sorted(rows, key=lambda r: r.asked_at))
+        """Every question of the morning `day` with its answer so far (the app shows answers after a reload)."""
+        return self._items(self._of_morning(day or clock.now().date()))
 
     def status(self) -> dict[str, Any]:
         return {"recalls": self.pending()}
@@ -141,8 +141,7 @@ class MorningRecall:
         """The noon job: nothing to write (an unanswered question stays answer =
         None, reported as "no answer"); the open list empties and is announced."""
         day = day or clock.now().date()
-        demo = self.is_demo()
-        left = [r for r in store.select_recalls(day) if r.is_demo == demo and r.asked_at.date() == day and r.answer is None]
+        left = [r for r in self._of_morning(day) if r.answer is None]
         if left:
             log.info("%d morning question(s) unanswered by noon: recorded as no answer", len(left))
         self._announce()

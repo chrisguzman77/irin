@@ -264,14 +264,15 @@ def _ledger_job(morning: date) -> None:
 def _build_night_record(night_date: date) -> NightRecord | None:
     """The ledger row, then the night's low events (R4) from the same inputs."""
     try:
+        # the low events first, so the evaluation the ledger row triggers never reads the previous rebuild's rows
+        runtime.low_events.detect(night_date)
         record = runtime.ledger.build_night(night_date)
     except Exception:
         logging.getLogger("irin.main").exception("night ledger failed for %s", night_date)
         return None
     try:
-        events = runtime.low_events.detect(night_date)
         # R11: one question per low, the two deepest, asked AT the window end: a night rebuilt days later is born closed
-        runtime.recall.create(night_date, events, asked_at=record.window_end)
+        runtime.recall.create(night_date, runtime.low_events.detect(night_date), asked_at=record.window_end)
     except Exception:
         logging.getLogger("irin.main").exception("low events failed for %s; the ledger row stands", night_date)
     return record

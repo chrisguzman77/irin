@@ -192,6 +192,12 @@ def test_an_old_night_rebuilt_is_born_closed_and_the_deadline_is_the_next_noon(d
     assert answer_deadline(datetime(2020, 1, 2, 7, 0)) == datetime(2020, 1, 2, 12, 0)
     assert answer_deadline(datetime(2020, 1, 2, 12, 0)) == datetime(2020, 1, 3, 12, 0)  # a window ending at noon or later
     assert answer_deadline(datetime(2020, 1, 1, 23, 0)) == datetime(2020, 1, 2, 12, 0)  # a window ending before midnight
+    late = low(5, 44.0, night=date(2020, 1, 5))
+    store.upsert_low_event(late)
+    clock.set(speed=60.0, start=datetime(2020, 1, 6, 8, 0))
+    rc.create(date(2020, 1, 5), [late], asked_at=datetime(2020, 1, 5, 23, 0))  # a window ending at 23:00: it is the 01-06 morning's question
+    assert [i["recall"]["low_event_id"] for i in rc.pending()] == [late.low_event_id] and rc.morning(date(2020, 1, 6)) == rc.pending()
+    assert rc.morning(date(2020, 1, 5)) == [] and rc.close(date(2020, 1, 6)) == 1
     assert ANSWER_UNTIL_HHMM == "12:00"
     unsynced = MorningRecall(is_demo=lambda: True, clock_synced=lambda: False)
     clock.set(speed=60.0, start=MORNING + timedelta(hours=1))
@@ -218,7 +224,7 @@ def test_a_late_answer_reruns_hypo_response_and_sends_one_card(db):
     clock.set(speed=60.0, start=datetime(2020, 1, 15, 11, 0))
     rc.answer(event.low_event_id, "dont_remember")
     assert [c.kind for c, _ in sender.sent] == ["hypo_response"] and sender.sent[0][0].status == "red"
-    assert "1 unfelt" not in sender.sent[0][0].headline or True  # the red headline lists counts; the green one carries the rate
+    assert "1 of 1 answered lows reported unfelt" in sender.sent[0][0].headline
     rc.answer(event.low_event_id, "woke_no_symptoms")  # still an unfelt low: the same red, not a second card
     assert len(sender.sent) == 1
     assert sender.sent[0][0].metrics["unfelt_lows"] == 1 and sender.sent[0][0].metrics["answered"] == 1
