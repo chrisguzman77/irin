@@ -49,7 +49,7 @@ def _eq(a: str, b: str) -> bool:
 def require_source_key(x_source_key: str | None = Header(default=None, alias="X-Source-Key")) -> str:
     """One source key = one device (the hackathon has one Pi); a key may only
     touch the pairings it registered."""
-    _rate_limit("public")  # before auth too, so guessing is throttled
+    _rate_limit("auth-attempts")  # guessing is throttled on its own bucket, never the Pi's or the inbox's
     keys = RELAY_SOURCE_KEYS or [k for k in os.environ.get("RELAY_SOURCE_KEYS", "").split(",") if k]
     if not x_source_key or not any(_eq(x_source_key, k) for k in keys):
         raise HTTPException(status_code=401, detail="bad source key")
@@ -65,7 +65,7 @@ def _owned(doc: dict | None, source_key: str) -> dict:
 
 
 def _bearer_pairing(authorization: str | None) -> dict:
-    _rate_limit("public")
+    _rate_limit("auth-attempts")
     if not authorization or not authorization.lower().startswith("bearer "):
         raise HTTPException(status_code=401, detail="bearer required")
     token = authorization.split(" ", 1)[1].strip()

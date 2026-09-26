@@ -263,27 +263,25 @@ runtime.scheduler.register("ledger", lambda: runtime.settings.night_window_end, 
 # --- the Standing Cards engine (R8): 07:05 on clock.py, and the red rule on every closed alarm episode ---
 
 
-def _evaluate_at() -> str:
-    """Five minutes after the night window ends (the ledger has just been written)."""
-    t = parse_hhmm(runtime.settings.night_window_end)
-    m = (t.hour * 60 + t.minute + 5) % (24 * 60)
-    return f"{m // 60:02d}:{m % 60:02d}"
-
-
-def _evaluate_job(morning: date) -> None:
+def _evaluate_after_ledger(record: NightRecord) -> None:
+    """The morning evaluation runs right after the ledger row is written (the
+    plan's 07:05), never before it: the ledger job is its trigger."""
     if runtime.standing is None:
         return
-    _schedule(runtime.standing.run(today=runtime.ledger.night_ended_on(morning)))
+    _schedule(runtime.standing.run(today=record.night_date))
 
 
 def _red_rules_on_alarm_event(event: AlarmEvent) -> None:
-    """A closed episode may make Hypo Response red: re-run just that rule, keyed to the episode."""
+    """A closed episode may make Hypo Response red: re-run just that rule, keyed to
+    the episode, over the window ending on the night in progress."""
     if runtime.standing is None or event.tier not in ("predicted_low", "actual_low"):
         return
-    _schedule(runtime.standing.run(only="hypo_response", event_key=event.event_id))
+    tonight = runtime.ledger.night_ended_on(clock.now().date()) if clock.now().time() < parse_hhmm(runtime.settings.night_window_start) \
+        else clock.now().date()
+    _schedule(runtime.standing.run(today=tonight, only="hypo_response", event_key=event.event_id))
 
 
-runtime.scheduler.register("evaluate", _evaluate_at, _evaluate_job)
+runtime.ledger.on_record = _evaluate_after_ledger
 
 
 # --- doctor / buddy pairing (R5): the QR handshake through the relay, confirmed with a FRESH PIN ---

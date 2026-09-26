@@ -113,25 +113,31 @@ class CardSender:
     device_id: str
     on_sent: Callable[[dict], None] | None = None  # card_sent broadcast
     pending: dict[str, SignalCard] = field(default_factory=dict)  # undelivered, retried on the relay tick
+    event_keys: dict[str, str | None] = field(default_factory=dict)  # card_id -> the red's event, kept for retries
 
     def __post_init__(self) -> None:
         try:  # a restart keeps retrying what the relay never took
             for doc in store.select_cards(limit=500):
                 if doc.get("status") == "unsent":
                     self.pending[doc["card"]["card_id"]] = SignalCard.model_validate(doc["card"])
+                    self.event_keys[doc["card"]["card_id"]] = doc.get("event_key")
         except Exception:
             log.exception("could not reload unsent cards")
 
-    async def send(self, card: SignalCard) -> dict[str, Any]:
+    async def send(self, card: SignalCard, event_key: str | None = None) -> dict[str, Any]:
         """Seal to every paired peer of the card's world and post. Stored either
-        way; a failed post is retried on the next relay tick."""
+        way (with the red's event key, so the budget can deduplicate after a
+        restart); a failed post is retried on the next relay tick."""
+        if event_key is not None:
+            self.event_keys[card.card_id] = event_key
+        event_key = self.event_keys.get(card.card_id)
         peers = self.recipients(card.is_demo)
         delivered, failed = [], []
         for p in peers:
             ok = await self.post(envelope(card, p.doctor_id, p.doctor_pk, self.device_id))
             (delivered if ok else failed).append(p.doctor_id)
         status = "sent" if delivered and not failed else "unsent" if peers else "no_recipient"
-        store.upsert_card(card, status=status, recipients=delivered)
+        store.upsert_card(card, status=status, recipients=delivered, event_key=event_key)
         if failed:
             self.pending[card.card_id] = card
         elif card.card_id in self.pending:

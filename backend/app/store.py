@@ -395,11 +395,11 @@ def select_pairings(conn: sqlite3.Connection | None = None) -> list[Pairing]:
 
 
 def upsert_card(card: SignalCard, status: str = "unsent", recipients: list[str] | None = None,
-                conn: sqlite3.Connection | None = None) -> None:
+                event_key: str | None = None, conn: sqlite3.Connection | None = None) -> None:
     own = conn is None
     conn = conn or connect()
     doc = {"card": card.model_dump(mode="json"), "status": status, "recipients": list(recipients or []),
-           "stored_at": card.generated_at.isoformat()}
+           "stored_at": card.generated_at.isoformat(), "event_key": event_key}
     with conn:
         conn.execute("INSERT OR REPLACE INTO cards VALUES (?, ?)", (card.card_id, json.dumps(doc)))
     if own:

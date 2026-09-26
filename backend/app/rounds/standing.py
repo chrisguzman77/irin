@@ -57,7 +57,8 @@ class Evaluation:
 def _window_values(night_records, low_events, recalls, alarm_events, alarm_source: str) -> tuple[dict, dict]:
     from ml.models.nights import standing_window
 
-    return standing_window(night_records, low_events, recalls, alarm_events=alarm_events, alarm_source=alarm_source)
+    values, confidence = standing_window(night_records, low_events, recalls, alarm_events=alarm_events, alarm_source=alarm_source)
+    return dict(values), dict(confidence)
 
 
 def _night_rows(night_records) -> list[dict[str, Any]]:
@@ -87,24 +88,30 @@ def evaluate_basal_check(night_records, low_events, recalls, thresholds: Thresho
     near = values["near_misses"]
     common = dict(kind="basal_check", metrics=values, confidence=confidence, nights=_night_rows(night_records),
                   excluded_counts=_excluded_counts(values), period_start=start, period_end=end)
-    if clean < thresholds.clean_nights_min or rise is None:
+    if clean < thresholds.clean_nights_min:
         return Evaluation(status="insufficient", flags=[],
                           headline=f"{clean} clean nights of {values['nights']}; {thresholds.clean_nights_min} are needed before a basal check.",
                           **common)
+    if rise is None:
+        return Evaluation(status="insufficient", flags=[],
+                          headline=f"{clean} clean nights of {values['nights']}, but no overnight rise could be measured.", **common)
+    # near-misses count on clean nights only (never from stale or excluded nights, invariant 9)
+    near_clean = sum(int(r.near_miss_count or 0) for r in night_records if r.reason_codes == ["clean"] and r.coverage_pct >= 85)
+    values["near_misses_clean"] = near_clean
+    confidence["near_misses_clean"] = confidence.get("near_misses", alarm_source)
     flags: list[str] = []
     if abs(rise) > thresholds.rise_min_mgdl and (share or 0) >= thresholds.same_direction_min:
         flags.append("rise_high" if rise > 0 else "rise_low")
-    if near >= thresholds.near_miss_too_high:
-        if "rise_low" not in flags:
-            flags.append("rise_low")
+    if near_clean >= thresholds.near_miss_too_high and not flags:
+        flags.append("rise_low")  # possibly too high: lows nearly happened
     same = round((share or 0) * clean)
     direction = "rose" if rise > 0 else "fell"
     if flags:
         headline = (f"{clean} clean nights of {values['nights']}; median overnight rise {rise:+.0f} mg/dL, "
-                    f"{same} of {clean} in the same direction; {near} near-misses.")
+                    f"{same} of {clean} in the same direction; {near_clean} near-misses on clean nights.")
         return Evaluation(status="amber", flags=flags, headline=headline, **common)
     headline = (f"{clean} clean nights of {values['nights']}; glucose {direction} a median {abs(rise):.0f} mg/dL overnight, "
-                f"within the band; {near} near-misses.")
+                f"within the band; {near_clean} near-misses on clean nights.")
     return Evaluation(status="green", flags=[], headline=headline, **common)
 
 
@@ -136,9 +143,11 @@ def evaluate_hypo_response(night_records, low_events, recalls, alarm_events, set
             parts.append(f"median acknowledgement {ack:.0f} min")
         parts.append(f"{values['unfelt_lows']} of {values['answered']} answered lows reported unfelt")
         return Evaluation(status="red", flags=flags, headline="; ".join(parts) + f" in {values['nights']} nights.", **common)
+    answered, unanswered = values["answered"], values["no_answer"]
+    ack_text = f"median acknowledgement {ack:.0f} min" if ack is not None else "no acknowledgement time measured"
     return Evaluation(status="green", flags=flags,
-                      headline=f"{values['nocturnal_lows']} nocturnal lows in {values['nights']} nights, all answered promptly.",
-                      **common)
+                      headline=(f"{values['nocturnal_lows']} nocturnal lows in {values['nights']} nights; {answered} morning "
+                                f"answers, {unanswered} unanswered; {ack_text}."), **common)
 
 
 def evaluate_follow_up(before, after_7, after_14, thresholds: Thresholds = Thresholds(), *, alarm_source: str = "measured") -> Evaluation:
@@ -153,8 +162,8 @@ def evaluate_follow_up(before, after_7, after_14, thresholds: Thresholds = Thres
                "after7_rise_median": a7_vals["rise_median_clean"], "after14_clean_nights": a14_vals["clean_nights"],
                "after14_rise_median": a14_vals["rise_median_clean"],
                "excluded_nights": (b_vals["excluded_nights"] or []) + (a14_vals["excluded_nights"] or [])}
-    label = b_conf["clean_nights"]
-    confidence = {k: label for k in metrics if k != "excluded_nights"}
+    confidence = {k: (a_conf["clean_nights"] if k.startswith("after") else b_conf["clean_nights"])
+                  for k in metrics if k != "excluded_nights"}
     common = dict(kind="follow_up", metrics=metrics, confidence=confidence, nights=_night_rows(list(before) + list(after_14)),
                   excluded_counts=_excluded_counts(metrics), period_start=start, period_end=end)
     need = thresholds.follow_up_clean_per_side
@@ -164,7 +173,7 @@ def evaluate_follow_up(before, after_7, after_14, thresholds: Thresholds = Thres
                           f"{need} clean nights on one side of the change.", **common)
     delta = metrics["after14_rise_median"] - metrics["before_rise_median"]
     metrics["rise_change"] = delta
-    confidence["rise_change"] = label
+    confidence["rise_change"] = a_conf["clean_nights"]
     status = "green" if abs(metrics["after14_rise_median"]) <= thresholds.rise_min_mgdl else "amber"
     return Evaluation(status=status, flags=[] if status == "green" else ["rise_high" if metrics["after14_rise_median"] > 0 else "rise_low"],
                       headline=(f"Median overnight rise {metrics['before_rise_median']:+.0f} mg/dL before the change, "

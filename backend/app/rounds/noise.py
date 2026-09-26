@@ -36,8 +36,8 @@ class Verdict:
 
 def allow(kind: str, program: str, status: str, now: datetime, history: list[Sent], *,
           active_watch: bool = False, event_key: str | None = None) -> Verdict:
-    if status == "insufficient":
-        return Verdict(False, "insufficient")
+    if status == "insufficient" and kind != "follow_up":
+        return Verdict(False, "insufficient")  # Follow-up alone ships "not enough data yet" (budgeted like amber)
     if program == "standing" and active_watch:
         return Verdict(False, "watch")  # Basal Check suspended; Hypo Response absorbed into the watch's safety card
     if status == "red":
@@ -65,10 +65,10 @@ def history_from_store(docs: list[dict[str, Any]]) -> list[Sent]:
     """store.select_cards() rows -> what the budget needs (sent cards only)."""
     out = []
     for d in docs:
-        if d.get("status") != "sent":
+        if d.get("status") not in ("sent", "unsent"):  # an unsent card is still on its way: it counts
             continue
         c = d["card"]
-        key = f"{c.get('plan_id')}:{c.get('step_index')}" if c.get("plan_id") is not None else c.get("event_key")
+        key = f"{c.get('plan_id')}:{c.get('step_index')}" if c.get("plan_id") is not None else d.get("event_key")
         out.append(Sent(kind=c["kind"], program=c["program"], status=c["status"],
                         sent_at=datetime.fromisoformat(d["stored_at"]), event_key=key))
     return out

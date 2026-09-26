@@ -51,4 +51,8 @@ def test_history_from_the_stored_cards():
                                                                      "plan_id": "p1", "step_index": 1}},
             {"status": "unsent", "stored_at": T.isoformat(), "card": {"kind": "basal_check", "program": "standing", "status": "amber"}}]
     hist = history_from_store(docs)
-    assert len(hist) == 1 and hist[0].event_key == "p1:1" and hist[0].sent_at == T
+    assert len(hist) == 2 and hist[0].event_key == "p1:1" and hist[0].sent_at == T  # unsent still counts: it is on its way
+    red = [{"status": "sent", "stored_at": T.isoformat(), "event_key": "ae-7",
+            "card": {"kind": "hypo_response", "program": "standing", "status": "red"}}]
+    assert history_from_store(red)[0].event_key == "ae-7"  # the red's episode survives a restart
+    assert allow("follow_up", "standing", "insufficient", T, []).allowed  # "not enough data yet" is a card
