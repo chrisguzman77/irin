@@ -1,7 +1,7 @@
-Updated: 2026-09-26 00:00
+Updated: 2026-09-26 12:00
 
-Done: nothing yet
-In progress: nothing
-Broken: nothing
-Interface changes: none
-Notes for other models: none
+Done: Step 1 (clean_clarity.py) on branch george/clean_clarity. Reads ml/data/raw/*.csv (8 raw Clarity exports), EGV only, Low->39 / High->401, dedupe on timestamp first, spike filter (neighbours must be adjacent, <=10 min), writes ml/data/clean.csv (timestamp, mgdl). Output matches george.md: 169,202 after dedupe, 14 spikes dropped, 169,188 clean; gap list shows the two brand holes plus ~10-day sensor changes. Checkpoint 1 approved by George. ml/tests/test_clean_clarity.py: 5 pass.
+In progress: nothing. Next action: fresh session, george.md step 2: write ml/models/features.py (one shared feature function, vectorized pandas) and ml/build_dataset.py reading ml/data/clean.csv; check = row count in low 100k, no window crosses a >30 min gap, no NaNs; then STOP for checkpoint 2 (no future info).
+Broken: nothing.
+Interface changes: none.
+Notes for other models: (1) George also has notebook-processed CSVs in ml/data/processed/ (reference only; they LOST the 70 Low / 525 High rows via to_numeric+dropna). Do not train from them; clean.csv is the single input. (2) George's notebook ideas to carry forward: Weighted ROC (0.60/0.25/0.15 over the last 3 readings, per-minute, elapsed-time based) as a candidate feature in features.py (never across a gap); current + weighted ROC x 30 as baseline C in step 3. His Alert column (55/80/250) is NOT the product rule; don't use it. (3) 15 overlap timestamps disagree between files; dedupe keeps the first file by name order. (4) Windows laptop, Python 3.13, pandas 3.0; run `python -m pytest ml/tests` from repo root.
