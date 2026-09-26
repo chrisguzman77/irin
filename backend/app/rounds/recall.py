@@ -26,7 +26,8 @@ from ..contracts import LowEvent, LowEventRecall
 log = logging.getLogger("irin.rounds.recall")
 
 MAX_PER_MORNING = 2
-ANSWER_UNTIL = time(12, 0)  # noon of the morning the question was asked
+ANSWER_UNTIL = time(12, 0)  # the first noon after the question was asked
+ANSWER_UNTIL_HHMM = ANSWER_UNTIL.strftime("%H:%M")  # the scheduler's recall_close job reads this, so the two never drift
 
 
 class RecallError(Exception):
@@ -41,7 +42,10 @@ def deepest(events: list[LowEvent], n: int = MAX_PER_MORNING) -> list[LowEvent]:
 
 
 def answer_deadline(asked_at: datetime) -> datetime:
-    return datetime.combine(asked_at.date(), ANSWER_UNTIL)
+    """The first ANSWER_UNTIL strictly after asked_at (a night window ending after
+    noon, or a late boot, still gets its morning)."""
+    d = datetime.combine(asked_at.date(), ANSWER_UNTIL)
+    return d if d > asked_at else d + timedelta(days=1)
 
 
 def is_open(recall: LowEventRecall, now: datetime) -> bool:
@@ -53,15 +57,27 @@ class MorningRecall:
     is_demo: Callable[[], bool] = lambda: False
     on_due: Callable[[dict[str, Any]], None] | None = None  # recall_due broadcast
     on_answer: Callable[[LowEventRecall, LowEvent], None] | None = None  # re-run the morning's evaluation
+    clock_synced: Callable[[], bool] = lambda: True  # the Pi's wall clock is untrusted before NTP: no answers until then
 
     def create(self, night_date: date, events: list[LowEvent], asked_at: datetime | None = None) -> list[LowEventRecall]:
-        """At night-window end: the night's questions, the two deepest lows. A
-        recall that already exists (a rebuilt night, a restart) is kept with
-        its answer; nothing is asked twice."""
+        """At night-window end (`asked_at` = the window end, so a night rebuilt
+        days later is born closed and reads "no answer"): the night's questions,
+        the two deepest lows. A recall that already exists (a rebuilt night, a
+        restart) is kept with its answer; nothing is asked twice. An unanswered
+        question about a low the rebuilt night no longer ranks (or no longer
+        has) is withdrawn, so the cap holds."""
         asked_at = asked_at or clock.now()
         demo = self.is_demo()
+        night = [e for e in events if e.night_date == night_date and e.is_demo == demo]
+        chosen = deepest(night)
+        keep = {e.low_event_id for e in chosen}
+        night_ids = {e.low_event_id for e in night}
+        known = {e.low_event_id for e in store.select_low_events(date.min)}
+        for r in store.select_recalls(date.min):
+            if r.answer is None and r.is_demo == demo and r.low_event_id not in keep and (r.low_event_id in night_ids or r.low_event_id not in known):
+                store.delete_recall(r.low_event_id)
         rows: list[LowEventRecall] = []
-        for e in deepest([e for e in events if e.night_date == night_date and e.is_demo == demo]):
+        for e in chosen:
             existing = store.select_recall(e.low_event_id)
             if existing is None:
                 existing = LowEventRecall(low_event_id=e.low_event_id, asked_at=asked_at, is_demo=demo)
@@ -73,10 +89,9 @@ class MorningRecall:
         return rows
 
     def _items(self, recalls: list[LowEventRecall]) -> list[dict[str, Any]]:
-        events = {e.low_event_id: e for e in store.select_low_events(date.min)}
         out = []
         for r in recalls:
-            e = events.get(r.low_event_id)
+            e = store.select_low_event(r.low_event_id)
             if e is None:
                 continue
             out.append({"recall": r.model_dump(mode="json"), "low_event": e.model_dump(mode="json"),
@@ -106,12 +121,14 @@ class MorningRecall:
         recall = store.select_recall(low_event_id)
         if recall is None or recall.is_demo != self.is_demo():
             raise RecallError(404, "no such morning question")
+        if not self.clock_synced():
+            raise RecallError(409, "the clock is not set yet; try again in a minute")
         now = clock.now()
         if now >= answer_deadline(recall.asked_at):
             raise RecallError(409, "the question closed at noon; it is recorded as no answer")
         recall = recall.model_copy(update={"answer": answer, "answered_at": now})
         store.upsert_recall(recall)
-        event = next((e for e in store.select_low_events(date.min) if e.low_event_id == low_event_id), None)
+        event = store.select_low_event(low_event_id)
         if self.on_answer is not None and event is not None:
             try:
                 self.on_answer(recall, event)

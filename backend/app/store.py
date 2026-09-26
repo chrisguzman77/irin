@@ -346,6 +346,15 @@ def upsert_low_event(event: LowEvent, conn: sqlite3.Connection | None = None) ->
         conn.close()
 
 
+def select_low_event(low_event_id: str, conn: sqlite3.Connection | None = None) -> LowEvent | None:
+    own = conn is None
+    conn = conn or connect()
+    r = conn.execute("SELECT json FROM low_events WHERE low_event_id = ?", (low_event_id,)).fetchone()
+    if own:
+        conn.close()
+    return LowEvent.model_validate_json(r["json"]) if r else None
+
+
 def replace_low_events(night_date: date, events: list[LowEvent], conn: sqlite3.Connection | None = None) -> None:
     """One transaction: the night's previous rows go, the new set is written."""
     own = conn is None
@@ -440,6 +449,15 @@ def select_recall(low_event_id: str, conn: sqlite3.Connection | None = None) -> 
     if own:
         conn.close()
     return LowEventRecall.model_validate_json(r["json"]) if r else None
+
+
+def delete_recall(low_event_id: str, conn: sqlite3.Connection | None = None) -> None:
+    own = conn is None
+    conn = conn or connect()
+    with conn:
+        conn.execute("DELETE FROM low_event_recalls WHERE low_event_id = ?", (low_event_id,))
+    if own:
+        conn.close()
 
 
 def select_recalls(since: date, conn: sqlite3.Connection | None = None) -> list[LowEventRecall]:

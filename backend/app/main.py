@@ -50,7 +50,7 @@ from .rounds.evaluate import StandingEngine
 from .rounds.messages import DoctorMessages, MessageError
 from .rounds.pairing import PairingError, PairingService, RelayPairing
 from .rounds.relay_client import RelayClient
-from .rounds.recall import MorningRecall, RecallError
+from .rounds.recall import ANSWER_UNTIL_HHMM, MorningRecall, RecallError
 from .rounds.step_watch import StepWatch
 from .rounds.nights_adapter import NightsAdapter
 from .scheduler import Scheduler, basal_logged_on, timedatectl_synced
@@ -249,7 +249,8 @@ def _recall_answered(recall, event) -> None:
 
 
 # R11: the morning questions about the night's lows (asked at window end, open until noon)
-runtime.recall = MorningRecall(is_demo=lambda: runtime.mode == "replay", on_due=_recall_due, on_answer=_recall_answered)
+runtime.recall = MorningRecall(is_demo=lambda: runtime.mode == "replay", on_due=_recall_due, on_answer=_recall_answered,
+                               clock_synced=lambda: runtime.scheduler.clock_synced if runtime.scheduler else True)
 
 
 def _ledger_job(morning: date) -> None:
@@ -269,14 +270,15 @@ def _build_night_record(night_date: date) -> NightRecord | None:
         return None
     try:
         events = runtime.low_events.detect(night_date)
-        runtime.recall.create(night_date, events)  # R11: one question per low, the two deepest
+        # R11: one question per low, the two deepest, asked AT the window end: a night rebuilt days later is born closed
+        runtime.recall.create(night_date, events, asked_at=record.window_end)
     except Exception:
         logging.getLogger("irin.main").exception("low events failed for %s; the ledger row stands", night_date)
     return record
 
 
 runtime.scheduler.register("ledger", lambda: runtime.settings.night_window_end, _ledger_job)
-runtime.scheduler.register("recall_close", "12:00", lambda d: runtime.recall.close(d))  # unanswered = no answer, never fine
+runtime.scheduler.register("recall_close", ANSWER_UNTIL_HHMM, lambda d: runtime.recall.close(d))  # unanswered = no answer, never fine
 
 
 # --- the Standing Cards engine (R8): 07:05 on clock.py, and the red rule on every closed alarm episode ---
@@ -297,10 +299,7 @@ async def _evaluate_night(night_date: date) -> None:
 
 def _checkin_status() -> dict:
     """The stomach check-in and the open morning questions, one dict (the snapshot's todays_checkin_status)."""
-    out = runtime.step_watch.checkin_status() if runtime.step_watch is not None else {}
-    if runtime.recall is not None:
-        out.update(runtime.recall.status())
-    return out
+    return hub.checkin_status()
 
 
 def _evaluate_after_ledger(record: NightRecord) -> None:

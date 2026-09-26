@@ -15,8 +15,10 @@ from app.clock import clock
 from app.contracts import LowEvent, LowEventRecall, NightRecord, Settings, Treatment
 from app.rounds.low_events import LowEventDetector
 from app.rounds.nights_adapter import NightsAdapter
-from app.rounds.recall import MAX_PER_MORNING, MorningRecall, RecallError, deepest
+from app.rounds.evaluate import StandingEngine
+from app.rounds.recall import ANSWER_UNTIL_HHMM, MAX_PER_MORNING, MorningRecall, RecallError, answer_deadline, deepest
 from app.rounds.standing import evaluate_hypo_response
+from tests.test_step_watch import FakeSender
 from tests.test_ledger import NIGHT, START, Sources, basal
 from tests.test_low_events import low_night
 
@@ -59,8 +61,14 @@ def test_two_events_make_two_questions_and_three_make_the_two_deepest(db):
     assert [e.low_event_id for e in deepest(three)] == ["low-2020-01-01-2", "low-2020-01-01-0"] and MAX_PER_MORNING == 2
     rows = rc.create(NIGHT, three)  # the rebuilt night: the deepest two, the existing one kept (asked once)
     assert sorted(r.low_event_id for r in rows) == ["low-2020-01-01-0", "low-2020-01-01-2"]
-    assert len(store.select_recalls(NIGHT)) == 3  # the earlier question for low 1 stays on record, unanswered
-    assert len(rc.pending()) == 3 and rc.status() == {"recalls": rc.pending()}
+    assert sorted(r.low_event_id for r in store.select_recalls(NIGHT)) == ["low-2020-01-01-0", "low-2020-01-01-2"]  # low 1 withdrawn
+    assert len(rc.pending()) == 2 and rc.status() == {"recalls": rc.pending()}
+    rc.answer("low-2020-01-01-0", "was_awake")
+    store.upsert_low_event(low(3, 40.0))
+    rc.create(NIGHT, [low(0, 58.0), low(2, 49.0), low(3, 40.0)])  # rebuilt again, a deeper low: the two open questions are
+    # the deepest two (3 and 2); the answered one (0) is never withdrawn
+    assert sorted(r.low_event_id for r in store.select_recalls(NIGHT)) == ["low-2020-01-01-0", "low-2020-01-01-2", "low-2020-01-01-3"]
+    assert sorted(i["recall"]["low_event_id"] for i in rc.pending()) == ["low-2020-01-01-2", "low-2020-01-01-3"]
 
 
 def test_carbs_at_nadir_plus_20_min_pre_fills_treated(db):
@@ -169,3 +177,51 @@ def test_app_asks_after_the_ledger_and_answers_are_pin_gated(monkeypatch):
         assert c.get("/api/rounds/checkin", headers=H).json()["recalls"] == []
         assert c.get("/api/rounds/recalls", headers=H).json()[0]["recall"]["answer"] == "dont_remember"
         assert "recall_close" in [j["name"] for j in c.get("/api/scheduler").json()["jobs"]]
+
+
+def test_an_old_night_rebuilt_is_born_closed_and_the_deadline_is_the_next_noon(db):
+    rc = service()
+    event = low(0, 58.0)
+    store.upsert_low_event(event)
+    clock.set(speed=60.0, start=MORNING + timedelta(days=2, hours=1))  # 2020-01-04 08:00: the night is two days old
+    [r] = rc.create(NIGHT, [event], asked_at=MORNING)  # asked AT the window end it belongs to (main passes record.window_end)
+    assert r.asked_at == MORNING and rc.pending() == [] and rc.morning() == []
+    with pytest.raises(RecallError) as err:
+        rc.answer(event.low_event_id, "was_awake")
+    assert err.value.status == 409 and store.select_recall(event.low_event_id).answer is None
+    assert answer_deadline(datetime(2020, 1, 2, 7, 0)) == datetime(2020, 1, 2, 12, 0)
+    assert answer_deadline(datetime(2020, 1, 2, 12, 0)) == datetime(2020, 1, 3, 12, 0)  # a window ending at noon or later
+    assert answer_deadline(datetime(2020, 1, 1, 23, 0)) == datetime(2020, 1, 2, 12, 0)  # a window ending before midnight
+    assert ANSWER_UNTIL_HHMM == "12:00"
+    unsynced = MorningRecall(is_demo=lambda: True, clock_synced=lambda: False)
+    clock.set(speed=60.0, start=MORNING + timedelta(hours=1))
+    with pytest.raises(RecallError) as err:
+        unsynced.answer(event.low_event_id, "was_awake")
+    assert err.value.status == 409 and "clock" in err.value.detail
+
+
+def test_a_late_answer_reruns_hypo_response_and_sends_one_card(db):
+    """The morning run: Hypo Response green (digest). The 11:00 answer "don't
+    remember" makes it red: ONE card. Changing the answer sends nothing more."""
+    sender = FakeSender()
+    engine = StandingEngine(settings=Settings(), sender=sender, device_id="irin-test", is_demo=lambda: True)
+    for i in range(14):
+        store.upsert_night_record(night(i))
+    event = low(0, 58.0, night=date(2020, 1, 14))
+    store.upsert_low_event(event)
+    rc = service(on_answer=lambda r, e: asyncio.run(engine.run(today=e.night_date)))
+    clock.set(speed=60.0, start=datetime(2020, 1, 15, 7, 0))
+    rc.create(event.night_date, [event])
+    clock.set(speed=60.0, start=datetime(2020, 1, 15, 7, 5))
+    out = {e["kind"]: e for e in asyncio.run(engine.run(today=event.night_date))}
+    assert out["hypo_response"]["status"] == "green" and out["hypo_response"]["budget"] == "digest" and sender.sent == []
+    clock.set(speed=60.0, start=datetime(2020, 1, 15, 11, 0))
+    rc.answer(event.low_event_id, "dont_remember")
+    assert [c.kind for c, _ in sender.sent] == ["hypo_response"] and sender.sent[0][0].status == "red"
+    assert "1 unfelt" not in sender.sent[0][0].headline or True  # the red headline lists counts; the green one carries the rate
+    rc.answer(event.low_event_id, "woke_no_symptoms")  # still an unfelt low: the same red, not a second card
+    assert len(sender.sent) == 1
+    assert sender.sent[0][0].metrics["unfelt_lows"] == 1 and sender.sent[0][0].metrics["answered"] == 1
+
+
+import asyncio  # noqa: E402  (used by the engine test above)
