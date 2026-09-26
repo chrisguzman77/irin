@@ -1,0 +1,10 @@
+{
+  "type": "reading_update",
+  "payload": {
+    "timestamp": "2020-01-01T22:00:00",
+    "glucose_mgdl": 128.0,
+    "trend": "Flat",
+    "source": "replay",
+    "is_stale": false
+  }
+}

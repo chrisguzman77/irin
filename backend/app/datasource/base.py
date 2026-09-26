@@ -20,7 +20,9 @@ class DataSource(ABC):
 
     @abstractmethod
     async def history(self, minutes: int) -> list[Reading]:
-        """Readings from the last `minutes` of clock time, oldest first."""
+        """Readings from the last `minutes` of clock time, oldest first. History
+        rows carry is_stale=False: staleness belongs to get_latest(); gaps are
+        read from timestamps."""
 
     @abstractmethod
     async def seek(self, to: datetime) -> None:

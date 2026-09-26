@@ -1,0 +1,9 @@
+{
+  "alert_id": "a1",
+  "event_id": "e1",
+  "urgency": 3,
+  "confidence": "device_confirmed",
+  "created_at": "2020-01-01T22:00:00",
+  "status": "open",
+  "audio_url": null
+}

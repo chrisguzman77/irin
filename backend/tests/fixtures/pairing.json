@@ -1,0 +1,10 @@
+{
+  "device_id": "irin-dev-0001",
+  "doctor_id": "d1",
+  "doctor_display_name": "Dr. Patel",
+  "doctor_pk": "pk",
+  "status": "paired",
+  "confirmed_at": "2020-01-01T22:00:00",
+  "peer_kind": "doctor",
+  "is_demo": true
+}

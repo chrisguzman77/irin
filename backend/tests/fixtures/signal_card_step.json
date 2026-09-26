@@ -1,0 +1,52 @@
+{
+  "card_id": "step_watch:step_check:p1:1",
+  "schema_version": "0",
+  "program": "step_watch",
+  "kind": "step_check",
+  "status": "amber",
+  "flags": [
+    "lows",
+    "awareness",
+    "tolerance"
+  ],
+  "confidence": {
+    "low_point_shift": "measured",
+    "tolerance": "reported"
+  },
+  "source": "irin_bedside",
+  "patient_pseudonym": "Patient 7",
+  "plan_id": "p1",
+  "step_index": 1,
+  "period_start": "2020-01-31",
+  "period_end": "2020-02-04",
+  "headline": "Step 2 (5 mg), days 3 to 7. Overnight low point down 22 mg/dL from baseline, 2 near-misses, time below range 4.0%. One low not remembered. Rough stomach 3 of 5 days.",
+  "metrics": {
+    "coverage_pct": 96.5,
+    "low_point_shift": -22,
+    "tbr_pct": 4.03,
+    "near_misses": 2,
+    "unfelt_lows": 1,
+    "rough_days": 3
+  },
+  "nights": [],
+  "excluded_counts": {},
+  "tolerance_days": [
+    {
+      "date": "2020-01-31",
+      "gi": "rough"
+    }
+  ],
+  "narrative": "Template narrative.",
+  "allowed_actions": [
+    "proceed",
+    "hold_step",
+    "adjust_insulin",
+    "message",
+    "end_watch"
+  ],
+  "resource_categories": [
+    "gi_side_effect_education"
+  ],
+  "is_demo": true,
+  "generated_at": "2020-02-05T07:05:00"
+}

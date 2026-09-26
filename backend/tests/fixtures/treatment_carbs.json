@@ -1,0 +1,9 @@
+{
+  "timestamp": "2020-01-01T22:00:00",
+  "kind": "carbs",
+  "insulin_units": null,
+  "carbs_g": 30.0,
+  "dose_label": null,
+  "text": null,
+  "confirmed": false
+}

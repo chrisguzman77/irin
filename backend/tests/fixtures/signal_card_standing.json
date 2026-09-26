@@ -1,0 +1,51 @@
+{
+  "card_id": "standing:basal_check:2020-01-01:2020-01-14",
+  "schema_version": "0",
+  "program": "standing",
+  "kind": "basal_check",
+  "status": "amber",
+  "flags": [
+    "rise_high"
+  ],
+  "confidence": {
+    "rise_median": "measured",
+    "clean_nights": "inferred"
+  },
+  "source": "irin_bedside",
+  "patient_pseudonym": "Patient 7",
+  "plan_id": null,
+  "step_index": null,
+  "period_start": "2020-01-01",
+  "period_end": "2020-01-14",
+  "headline": "8 clean nights of 14; median overnight rise +42 mg/dL on 6 of 8.",
+  "metrics": {
+    "clean_nights": 8,
+    "rising_nights": 6,
+    "same_direction_share": 0.75,
+    "rise_median": 42
+  },
+  "nights": [
+    {
+      "date": "2020-01-01",
+      "reason_code": "clean",
+      "code_source": "inferred",
+      "rise": 40
+    }
+  ],
+  "excluded_counts": {
+    "late_meal": 3,
+    "stale": 2,
+    "treated_low": 1
+  },
+  "tolerance_days": [],
+  "narrative": "Eight clean nights of fourteen. On six of eight, glucose rose overnight; the median rise was 42 mg/dL.",
+  "allowed_actions": [
+    "adjust_basal",
+    "schedule_visit",
+    "ask_patient",
+    "dismiss"
+  ],
+  "resource_categories": [],
+  "is_demo": true,
+  "generated_at": "2020-01-15T07:05:00"
+}
