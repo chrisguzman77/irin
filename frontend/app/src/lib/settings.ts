@@ -25,7 +25,18 @@ export async function saveSettings(
   return { ok: false, reason };
 }
 
-const same = (a: unknown, b: unknown) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+/** Key-order-insensitive JSON, so the Pi's echo of a nested object (a family
+ * recipient, the LED colours) compares equal to what was sent. */
+function stable(v: unknown): string {
+  if (Array.isArray(v)) return `[${v.map(stable).join(",")}]`;
+  if (v && typeof v === "object")
+    return `{${Object.keys(v as object)
+      .sort()
+      .map((k) => `${JSON.stringify(k)}:${stable((v as Record<string, unknown>)[k] ?? null)}`)
+      .join(",")}}`;
+  return JSON.stringify(v ?? null);
+}
+const same = (a: unknown, b: unknown) => stable(a) === stable(b);
 
 /** The fields of `draft` that differ from the Pi's `current` settings. */
 export function changedFields(current: Settings, draft: Settings): Partial<Settings> {
