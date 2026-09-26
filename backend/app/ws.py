@@ -42,7 +42,21 @@ class Hub:
             settings=self.runtime.settings,
             mode=self.runtime.mode,
             clock_synced=self.runtime.scheduler.clock_synced if self.runtime.scheduler else True,
+            family_story_status=self._family_status(),
         )
+
+    def _family_status(self) -> list[dict]:
+        """Today's stories for the morning chip ("Sent to Mom"): the latest night's."""
+        try:
+            from . import store
+
+            latest = store.select_family_stories(limit=50)
+        except Exception:
+            return []
+        if not latest:
+            return []
+        night = latest[0].night_date
+        return [s.model_dump(mode="json") for s in latest if s.night_date == night]
 
     async def connect(self, ws: WebSocket) -> None:
         await ws.accept()

@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 import uuid
 from dataclasses import dataclass, field
 from datetime import date
@@ -37,6 +38,12 @@ log = logging.getLogger("irin.family_story")
 
 _CLOCK_TIME = re.compile(r"^\d{1,2}:\d{2}$")
 _MGDL = re.compile(r"mg\s*/\s*dl|mmol", re.IGNORECASE)
+_NUMBER_WORDS = re.compile(
+    r"\b(zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|"
+    r"sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|"
+    r"twenties|thirties|forties|fifties|sixties|seventies|eighties|nineties|hundreds|dozen|half|quarter)\b",
+    re.IGNORECASE)
+_NO_DATA_PHRASE = re.compile(r"didn.t have data|no data|did not have data", re.IGNORECASE)
 
 
 def _clock_words(hhmm: str | None) -> str:
@@ -45,8 +52,7 @@ def _clock_words(hhmm: str | None) -> str:
         return "overnight"
     h, m = (int(x) for x in hhmm.split(":"))
     suffix = "AM" if h < 12 else "PM"
-    hour = h % 12 or 12
-    return f"around {hour}:{m:02d} {suffix}" if m else f"around {hour} {suffix}"
+    return f"around {h % 12 or 12}:{m:02d} {suffix}"  # always H:MM, so no bare hour digit ever appears
 
 
 # --- the deterministic family template (the no-network path and the fallback) ---
@@ -83,12 +89,14 @@ def template_story(stats: dict, level: str, name: str) -> str:
 
 def validate_family_text(text: str, level: str, stats: dict) -> bool:
     """story_only: zero glucose values (any number that is not a clock time is
-    banned, and so is the unit); story_and_view: the ordinary no-invented-
-    numbers rule. Both: a no-data night is never told as fine."""
-    if not stats.get("readings") and "fine" in text.lower():
-        return False
+    banned, spelled-out numbers and fractions too, and so is the unit);
+    story_and_view: the ordinary no-invented-numbers rule. Both: a no-data
+    night must say Irin had no data and is never told as fine or quiet."""
+    if not stats.get("readings"):
+        if not _NO_DATA_PHRASE.search(text) or re.search(r"\b(fine|well|quiet|smooth)", text, re.IGNORECASE):
+            return False
     if level == "story_only":
-        if _MGDL.search(text):
+        if _MGDL.search(text) or _NUMBER_WORDS.search(text):
             return False
         return all(_CLOCK_TIME.match(tok) for tok in extract_numbers(text))
     return validate_narrative(text, stats)
@@ -124,6 +132,7 @@ class FamilyStoryService:
     model_call: Callable[[str, str], str] | None = None  # (prompt, system) -> text; default the direct Claude call
     narrative_backend: str | None = None  # None = config.NARRATIVE_BACKEND
     family_view_url: str = ""
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def _text(self, stats: dict, recipient: FamilyRecipient) -> str:
         fallback = template_story(stats, recipient.level, recipient.name)
@@ -177,7 +186,8 @@ class FamilyStoryService:
         body = story.text
         if story.level == "story_and_view" and self.family_view_url:
             body += f"\n\nSee the night: {self.family_view_url}"
-        body += "\n\nYou get this because you were added in Irin. To stop these emails, reply STOP or ask to be paused in Irin."
+        body += ("\n\nYou get this because you were added as family in Irin. To stop these emails, reply to this "
+                 "email and ask, or ask to be paused in Irin.")
         attachments = [Path(p) for p in [self.render_clip(story.text)] if p is not None]
         try:
             self.mailer.send(recipient.email, f"How last night went, {story.night_date.isoformat()}", body, attachments)
@@ -187,24 +197,40 @@ class FamilyStoryService:
         return story.model_copy(update={"status": "sent", "sent_at": clock.now()})
 
     def approve(self, story_id: str) -> FamilyStory | None:
-        """The patient's tap: send it (unless demo) and mark the recipient's first story approved."""
-        story = store.select_family_story(story_id)
-        if story is None or story.status != "pending_approval":
+        """The patient's tap: send it (unless demo) and mark the recipient's
+        first story approved. A story built at another level than the
+        recipient now has is skipped, never sent (a downgrade to story_only
+        must never deliver the story_and_view text)."""
+        with self._lock:
+            story = store.select_family_story(story_id)
+            if story is None or story.status != "pending_approval":
+                return story
+            recipient = self._recipient(story.recipient_id)
+            if recipient is None or recipient.level != story.level:
+                story = story.model_copy(update={"status": "skipped"})
+            else:
+                story = self._send(story, recipient)
+                if story.status == "sent":
+                    recipient.first_story_approved = True
+            store.upsert_family_story(story)
             return story
-        recipient = self._recipient(story.recipient_id)
-        if recipient is None:
-            story = story.model_copy(update={"status": "skipped"})
-        else:
-            story = self._send(story, recipient)
-            if story.status == "sent":
-                recipient.first_story_approved = True
-        store.upsert_family_story(story)
-        return story
 
     def skip(self, story_id: str) -> FamilyStory | None:
-        story = store.select_family_story(story_id)
-        if story is None or story.status != "pending_approval":
+        with self._lock:
+            story = store.select_family_story(story_id)
+            if story is None or story.status != "pending_approval":
+                return story
+            story = story.model_copy(update={"status": "skipped"})
+            store.upsert_family_story(story)
             return story
-        story = story.model_copy(update={"status": "skipped"})
-        store.upsert_family_story(story)
-        return story
+
+    def skip_pending(self, recipient_id: str) -> int:
+        """After an edit of a recipient's email or level: every pending story
+        for them is skipped; the next morning builds a fresh one at the new level."""
+        n = 0
+        with self._lock:
+            for story in store.select_family_stories(limit=500):
+                if story.recipient_id == recipient_id and story.status == "pending_approval":
+                    store.upsert_family_story(story.model_copy(update={"status": "skipped"}))
+                    n += 1
+        return n

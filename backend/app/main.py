@@ -249,6 +249,7 @@ async def _alarm_tick_loop() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     store.init_db()
+    _load_settings()
     await runtime.datasource.start()
     hub.start()
     tick_task = asyncio.create_task(_alarm_tick_loop())
@@ -440,7 +441,7 @@ async def set_presence(req: PresenceOverride) -> PresenceState:
     """The manual Home/Away toggle (Settings.presence_override). It always beats
     the radar; it gates room outputs only and never touches alarm logic."""
     state = runtime.presence.set_override(req.override)
-    await hub.broadcast(WSMessage(type="settings_change", payload=runtime.settings.model_dump(mode="json")))
+    await _settings_changed()
     return state
 
 
@@ -529,6 +530,8 @@ async def update_settings(patch: dict) -> Settings:
     unknown = set(patch) - set(Settings.model_fields)
     if unknown:
         raise HTTPException(status_code=400, detail=f"unknown settings: {sorted(unknown)}")
+    if "family_recipients" in patch:  # consent has its own routes (validated email, first story waits, revoke is final)
+        raise HTTPException(status_code=400, detail="family_recipients change only through /api/family/recipients")
     try:
         new = Settings.model_validate(_deep_merge(runtime.settings.model_dump(), patch))
         _check_settings(new)
@@ -539,7 +542,7 @@ async def update_settings(patch: dict) -> Settings:
         setattr(runtime.settings, name, getattr(new, name))
     if override_changed:
         runtime.presence.set_override(new.presence_override)
-    await hub.broadcast(WSMessage(type="settings_change", payload=runtime.settings.model_dump(mode="json")))
+    await _settings_changed()
     return runtime.settings
 
 
@@ -617,7 +620,30 @@ def _recipient_or_404(recipient_id: str) -> FamilyRecipient:
     raise HTTPException(status_code=404, detail="no such recipient")
 
 
+SETTINGS_KEY = "settings"
+
+
+def _persist_settings() -> None:
+    store.set_kv(SETTINGS_KEY, runtime.settings.model_dump_json())
+
+
+def _load_settings() -> None:
+    """At boot: the last saved Settings (thresholds, windows, family consent) come
+    back from the store; a fresh Pi starts with the defaults."""
+    raw = store.get_kv(SETTINGS_KEY)
+    if not raw:
+        return
+    try:
+        saved = Settings.model_validate_json(raw)
+    except Exception:
+        logging.getLogger("irin.main").exception("saved settings unreadable; defaults kept")
+        return
+    for name in Settings.model_fields:
+        setattr(runtime.settings, name, getattr(saved, name))
+
+
 async def _settings_changed() -> None:
+    _persist_settings()
     await hub.broadcast(WSMessage(type="settings_change", payload=runtime.settings.model_dump(mode="json")))
 
 
@@ -640,8 +666,14 @@ async def edit_recipient(recipient_id: str, req: RecipientPatch) -> FamilyRecipi
     r = _recipient_or_404(recipient_id)
     if r.state == "revoked":
         raise HTTPException(status_code=409, detail="a revoked recipient cannot be edited; add them again")
-    for k, v in req.model_dump(exclude_none=True).items():
+    changes = req.model_dump(exclude_none=True)
+    for k, v in changes.items():
         setattr(r, k, v)
+    if "email" in changes or "level" in changes:
+        # a new address or a new disclosure level is a new consent: the next story waits for a tap,
+        # and anything already pending at the old level is dropped
+        r.first_story_approved = False
+        await asyncio.to_thread(runtime.family.skip_pending, r.recipient_id)
     await _settings_changed()
     return r
 

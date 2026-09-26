@@ -209,3 +209,65 @@ def test_recipient_endpoints_and_the_demo_morning(client):
     assert c.post(f"/api/family/recipients/{rid}/revoke", headers=H).json()["state"] == "revoked"
     assert c.post(f"/api/family/recipients/{rid}", json={"name": "M"}, headers=H).status_code == 409
     assert c.post("/api/family/stories/nope/approve", headers=H).status_code == 404
+
+
+# --- review follow-ups ---
+
+
+def test_spelled_out_numbers_and_quiet_no_data_nights_are_rejected(stats):
+    assert not validate_family_text("They dipped into the fifties around 3:00 AM but treated it.", "story_only", stats)
+    assert not validate_family_text("About twenty minutes were low near 3:00 AM.", "story_only", stats)
+    assert not validate_family_text("Half the night was a bit low, all handled.", "story_only", stats)
+    assert validate_family_text("A low came around 3:00 AM; they caught it. How was the garden?", "story_only", stats)
+    for text in ("All quiet last night, nothing to report. How was the weekend?", "Last night went well.",
+                 "Irin didn't have data last night, but it was probably fine."):
+        assert not validate_family_text(text, "story_only", NO_DATA), text
+        assert not validate_family_text(text, "story_and_view", NO_DATA), text
+    assert validate_family_text("Irin didn't have data last night, so there is no story to tell.", "story_only", NO_DATA)
+    on_the_hour = {**stats, "low_at": "03:00"}
+    assert validate_family_text(template_story(on_the_hour, "story_only", "Mom"), "story_only", on_the_hour)
+
+
+def test_a_level_downgrade_after_build_never_delivers_the_higher_level_text(db, stats):
+    settings = Settings(family_recipients=recipients(("Mom", "story_and_view", "approve_each", "active", True)))
+    mailer = FakeMailer()
+    svc = service(settings, mailer)
+    [story] = svc.build(NIGHT, stats, is_demo=False)
+    assert "mg/dL" in story.text and story.status == "pending_approval"
+    settings.family_recipients[0].level = "story_only"  # the patient downgrades before tapping
+    assert svc.approve(story.story_id).status == "skipped" and mailer.sent == []
+    assert svc.skip_pending("r0") == 0  # nothing pending is left
+
+
+def test_editing_email_or_level_resets_consent_and_drops_pending_stories(client):
+    c = client
+    r = c.post("/api/family/recipients", json={"name": "Mom", "email": "mom@example.com", "send_mode": "automatic"}, headers=H).json()
+    rid = r["recipient_id"]
+    main.runtime.settings.family_recipients[0].first_story_approved = True
+    night = main.runtime.datasource.rows[-1][0].date().isoformat()
+    from app import store as st
+
+    st.upsert_family_story(main.FamilyStory(story_id="s-pending", night_date=night, recipient_id=rid, level="story_only",
+                                            text="A low came around 2:18 AM; they handled it.", status="pending_approval"))
+    r = c.post(f"/api/family/recipients/{rid}", json={"email": "other@example.com"}, headers=H).json()
+    assert r["first_story_approved"] is False and r["email"] == "other@example.com"
+    assert st.select_family_story("s-pending").status == "skipped"
+    assert c.post("/api/settings", json={"family_recipients": []}, headers=H).status_code == 400  # only the family routes
+
+
+def test_settings_and_consent_survive_a_restart(monkeypatch, tmp_path):
+    saved = main.runtime.settings.model_dump()
+    monkeypatch.setattr(auth.config, "PIN", "1234")
+    try:
+        with TestClient(main.app) as c:
+            c.post("/api/settings", json={"night_window_end": "08:00"}, headers=H)
+            rid = c.post("/api/family/recipients", json={"name": "Mom", "email": "mom@example.com"}, headers=H).json()["recipient_id"]
+        for name in Settings.model_fields:  # the process restarts with defaults in memory
+            setattr(main.runtime.settings, name, getattr(Settings(), name))
+        with TestClient(main.app) as c:  # the same database (conftest's temp db for this test)
+            assert c.get("/api/settings").json()["night_window_end"] == "08:00"
+            assert [x["recipient_id"] for x in c.get("/api/family/recipients").json()] == [rid]
+    finally:
+        restored = Settings.model_validate(saved)
+        for name in Settings.model_fields:
+            setattr(main.runtime.settings, name, getattr(restored, name))
