@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Irin Rounds Pairing</title>
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body>
+  <header class="top">
+    <h1>Irin Rounds <span class="muted">· pair with a patient</span></h1>
+    <span class="mock">mock Ascend</span>
+  </header>
+  <main class="pair">
+    <p id="demo" class="badge-demo" hidden>DEMO</p>
+    <section id="ask" hidden>
+      <p>A patient's Irin is offering to share its Clinical Signal Cards with you. Your browser makes its own key;
+        the cards are sealed to it and only this browser can open them.</p>
+      <form id="join">
+        <label>Your name as the patient will see it
+          <input id="name" name="name" maxlength="60" required autocomplete="name" placeholder="Dr. Scott">
+        </label>
+        <button type="submit">Join</button>
+      </form>
+    </section>
+    <section id="code" hidden>
+      <p>Tell the patient this code. They confirm it on their Irin, with their PIN.</p>
+      <p id="code4" class="code4"></p>
+      <p class="muted">Waiting for the patient to confirm…</p>
+    </section>
+    <section id="done" hidden>
+      <p><strong>Paired.</strong> New cards arrive in your inbox.</p>
+      <p><a href="../">Open the inbox</a></p>
+    </section>
+    <p id="msg" class="msg" role="status"></p>
+  </main>
+  <footer class="foot">Irin Rounds: a mock clinician inbox for the hackathon demo, not a medical device.</footer>
+  <!-- tweetnacl 1.0.3 (public domain, Unlicense), vendored: defines window.nacl -->
+  <script src="../nacl.min.js"></script>
+  <script type="module" src="../pair.js"></script>
+</body>
+</html>
