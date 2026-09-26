@@ -7,25 +7,28 @@ Vite's dev server. Nothing here imports rounds/ or buddy/."""
 from __future__ import annotations
 
 import asyncio
+import math
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from datetime import timedelta
 from typing import Literal
 
 from fastapi import Depends, FastAPI, HTTPException, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from . import store
 from .alarm import AlarmEngine, Transition
 from .auth import require_pin
 from .clock import clock
 from .config import REPO_ROOT, config
-from .contracts import FRESH_PIN_ENDPOINTS, AlarmState, Reading, Settings, WSMessage
+from .contracts import FRESH_PIN_ENDPOINTS, AlarmState, Reading, Settings, Treatment, WSMessage
 from .datasource.base import DataSource
 from .datasource.nightscout import NightscoutDataSource
 from .datasource.replay import ReplayDataSource
 from .forecast import Forecaster
+from .voice import MAX_CARBS_G, MAX_UNITS, VoiceLogger
 from .ws import Hub
 
 Mode = Literal["replay", "nightscout"]
@@ -49,6 +52,7 @@ class Runtime:
     hub: "Hub | None" = None
     alarm: "AlarmEngine | None" = None
     forecaster: "Forecaster | None" = None
+    voice: "VoiceLogger | None" = None
 
 
 runtime = Runtime(mode="nightscout" if config.DATASOURCE == "nightscout" else "replay",
@@ -57,6 +61,7 @@ hub = Hub(runtime)
 runtime.hub = hub
 runtime.alarm = AlarmEngine(runtime.settings)
 runtime.forecaster = Forecaster()
+runtime.voice = VoiceLogger()
 
 ALARM_TICK_CLOCK_SECONDS = 30.0
 _broadcast_tasks: set[asyncio.Task] = set()  # references held so a broadcast is never GC'd mid-flight
@@ -171,6 +176,7 @@ async def set_mode(req: ModeRequest) -> dict:
     await new.start()
     runtime.alarm.reset()  # switch semantics (step 12): alarm state back to idle
     runtime.forecaster.reset()
+    runtime.voice.reset()
     hub._last = None
     await hub.broadcast(WSMessage(type="mode_change", payload={"mode": runtime.mode}))
     return {"mode": runtime.mode, "changed": True}
@@ -186,6 +192,80 @@ async def acknowledge(req: AckRequest) -> dict:
     (the kiosk's big button = device, the app = app) for the R2 recorder."""
     changed = runtime.alarm.acknowledge(req.source)
     return {"acknowledged": changed, "alarm": runtime.alarm.state.model_dump(mode="json")}
+
+
+# --- logging (step 7): every path is PIN-gated; insulin is never stored without confirm ---
+
+
+async def _announce(stored: list[dict]) -> None:
+    for t in stored:
+        await hub.broadcast(WSMessage(type="treatment_logged", payload=t))
+
+
+class VoiceText(BaseModel):
+    text: str = Field(max_length=200)
+
+
+@app.post("/api/log/voice", dependencies=[Depends(require_pin)])
+async def log_voice(req: VoiceText) -> dict:
+    """Parse spoken text. Carbs-only entries are stored at once; any insulin
+    comes back as needs_confirm with an echo and a pending_id (10 s on clock.py)."""
+    result = runtime.voice.submit(req.text)
+    if result["status"] == "stored":
+        await _announce(result["stored"])
+    return result
+
+
+@app.post("/api/log/voice/{pending_id}/confirm", dependencies=[Depends(require_pin)])
+async def log_voice_confirm(pending_id: str) -> dict:
+    result = runtime.voice.confirm(pending_id)
+    if result["status"] == "stored":
+        await _announce(result["stored"])
+    return result
+
+
+@app.post("/api/log/voice/{pending_id}/cancel", dependencies=[Depends(require_pin)])
+async def log_voice_cancel(pending_id: str) -> dict:
+    return runtime.voice.cancel(pending_id)
+
+
+@app.post("/api/log", dependencies=[Depends(require_pin)])
+async def log_treatment(t: Treatment) -> dict:
+    """Structured logging from the app's forms (basal taken, carbs + units,
+    notes). The Treatment contract refuses insulin_units without
+    confirmed=True (422); `confirmed` is the client's assertion that its
+    echo-and-confirm screen was passed, which the server cannot see, so the
+    PIN gate is what makes that assertion trustworthy."""
+    ts = t.timestamp
+    if ts.tzinfo is not None:  # JS toISOString() sends Z; the Pi keeps naive local time
+        ts = ts.astimezone().replace(tzinfo=None)
+    if ts > clock.now() + timedelta(minutes=5):
+        raise HTTPException(status_code=400, detail="timestamp is in the future")
+    if t.insulin_units is not None:
+        if t.kind not in ("bolus", "basal"):
+            raise HTTPException(status_code=400, detail="insulin_units only on a bolus or basal")
+        if not (math.isfinite(t.insulin_units) and 0 < t.insulin_units <= MAX_UNITS):
+            raise HTTPException(status_code=400, detail=f"insulin_units must be in (0, {MAX_UNITS}]")
+    if t.carbs_g is not None:
+        if t.kind != "carbs":
+            raise HTTPException(status_code=400, detail="carbs_g only on a carbs entry")
+        if not (math.isfinite(t.carbs_g) and 0 < t.carbs_g <= MAX_CARBS_G):
+            raise HTTPException(status_code=400, detail=f"carbs_g must be in (0, {MAX_CARBS_G}]")
+    if t.kind in ("bolus", "basal") and t.insulin_units is None:
+        raise HTTPException(status_code=400, detail=f"a {t.kind} entry needs insulin_units")
+    if t.kind == "carbs" and t.carbs_g is None:
+        raise HTTPException(status_code=400, detail="a carbs entry needs carbs_g")
+    row = t.model_copy(update={"timestamp": ts})
+    store.insert_treatment(row)
+    payload = row.model_dump(mode="json")
+    await _announce([payload])
+    return {"status": "stored", "stored": [payload]}
+
+
+@app.get("/api/treatments", response_model=list[Treatment])
+async def treatments(hours: int = 24) -> list[Treatment]:
+    hours = max(1, min(hours, 24 * 14))
+    return store.select_treatments(clock.now() - timedelta(hours=hours))
 
 
 @app.get("/api/alarm", response_model=AlarmState)
