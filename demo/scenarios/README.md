@@ -1,6 +1,16 @@
 # Demo scenarios
 
-**Everything in this folder right now is SYNTHETIC.** `the_save.csv` is a
+**Everything in this folder right now is SYNTHETIC.**
+
+- `titration_synthetic.csv` + `.json` (George, step 7.3): 49 SYNTHETIC days from
+  2020-01-01, a 14-night baseline, tirzepatide step 1 (2.5 mg, 4 weeks), step 2 (5 mg)
+  through days 3-7 (days 44-48). Over step 2 days 3-7 against the baseline it gives the
+  chris.md R10 worked example exactly through ml/models/nights.py (coverage 1,390 / 1,440,
+  low point 98 -> 76, TBR 58 / 1,440, 2 near-misses, 1 low answered don't remember, rough
+  3 of 5); step 1 stays green. Regenerate with `python -m demo.make_scenarios`;
+  ml/tests/test_scenarios.py locks every number. (The plan said "about 3 weeks"; with
+  4-week steps the baseline, step 1, and step 2 days 3-7 take 49 days.)
+- `the_save.csv` is a
 placeholder the skeleton generated (timestamps start 2020-01-01, obviously
 fake): 8 hours of 5-minute readings, in range overnight, sliding to about
 55 mg/dL around hour 6, recovering after. George's date-shifted real
