@@ -153,8 +153,10 @@ async def send_fixture_card(req: SendCardRequest) -> dict:
     from .contracts import SignalCard
 
     card = SignalCard.model_validate(_json.loads((BACKEND_DIR / "tests" / "fixtures" / f"{req.fixture}.json").read_text()))
+    from .rounds.cards import pseudonym
+
     card = card.model_copy(update={"is_demo": True, "generated_at": clock.now(),
-                                   "patient_pseudonym": _runtime.cards.device_id and card.patient_pseudonym})
+                                   "patient_pseudonym": pseudonym(_runtime.cards.device_id)})
     return await _runtime.cards.send(card)
 
 

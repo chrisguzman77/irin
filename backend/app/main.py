@@ -267,21 +267,11 @@ def _role_url(configured: str, sub: str) -> str:
 
 
 def _broadcast_pairing_state(state: dict) -> None:
-    try:
-        task = asyncio.get_running_loop().create_task(hub.broadcast(WSMessage(type="pairing_state", payload=state)))
-    except RuntimeError:
-        return
-    _broadcast_tasks.add(task)
-    task.add_done_callback(_broadcast_tasks.discard)
+    _schedule(hub.broadcast(WSMessage(type="pairing_state", payload=state)))
 
 
 def _broadcast_card_sent(payload: dict) -> None:
-    try:
-        task = asyncio.get_running_loop().create_task(hub.broadcast(WSMessage(type="card_sent", payload=payload)))
-    except RuntimeError:
-        return
-    _broadcast_tasks.add(task)
-    task.add_done_callback(_broadcast_tasks.discard)
+    _schedule(hub.broadcast(WSMessage(type="card_sent", payload=payload)))
 
 
 def _make_relay_client() -> RelayClient:
@@ -300,6 +290,28 @@ def _make_pairing() -> PairingService:
 
 ALARM_TICK_CLOCK_SECONDS = 30.0
 _broadcast_tasks: set[asyncio.Task] = set()  # references held so a broadcast is never GC'd mid-flight
+_loop: asyncio.AbstractEventLoop | None = None  # captured in lifespan so worker threads can schedule broadcasts
+
+
+def _schedule(coro) -> None:
+    """Run a coroutine on the app's loop from the loop itself OR from a worker
+    thread (asyncio.to_thread callers such as the pairing handshake)."""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = _loop
+        if loop is None or loop.is_closed():
+            coro.close()
+            return
+        loop.call_soon_threadsafe(_schedule_on_loop, coro)
+        return
+    _schedule_on_loop(coro, loop)
+
+
+def _schedule_on_loop(coro, loop: asyncio.AbstractEventLoop | None = None) -> None:
+    task = (loop or asyncio.get_running_loop()).create_task(coro)
+    _broadcast_tasks.add(task)
+    task.add_done_callback(_broadcast_tasks.discard)
 
 
 def _broadcast_transition(t: Transition) -> None:
@@ -353,6 +365,8 @@ async def _alarm_tick_loop() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global _loop
+    _loop = asyncio.get_running_loop()
     store.init_db()
     _load_settings()
     runtime.pairing = _make_pairing()  # after init_db: it loads the stored pairings
@@ -448,7 +462,7 @@ async def set_mode(req: ModeRequest) -> dict:
     await new.start()
     runtime.alarm.reset()  # switch semantics (step 12): alarm state back to idle
     runtime.alarm_events.reset()  # an episode cut by the switch is dropped, never written
-    runtime.pairing.cancel()  # a pending QR token belongs to the old clock and the old is_demo
+    await asyncio.to_thread(runtime.pairing.cancel)  # its lock may be held by a relay call in a worker
     runtime.forecaster.reset()
     runtime.voice.reset()
     hub._last = None

@@ -18,7 +18,7 @@ from ..clock import clock
 
 log = logging.getLogger("irin.rounds.relay_client")
 
-POLL_LIVE_S = 60.0
+POLL_LIVE_S = 60.0  # WALL seconds: a relay is a real server, so the cadence is scaled by clock.speed
 POLL_DEMO_S = 5.0
 
 
@@ -114,7 +114,7 @@ class RelayClient:
                         await result
             except Exception:
                 log.exception("relay client tick raised")
-            await clock.sleep(POLL_DEMO_S if self.is_demo() else POLL_LIVE_S)
+            await clock.sleep((POLL_DEMO_S if self.is_demo() else POLL_LIVE_S) * clock.speed)  # wall seconds
 
     def status(self) -> dict[str, Any]:
         return {"enabled": self.enabled, "polls": self.polls, "failures": self.failures, "last_error": self.last_error}

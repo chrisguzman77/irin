@@ -188,3 +188,43 @@ def test_re_evaluation_replaces_the_stored_card(rig):
 
 def test_relay_client_poll_hands_pairings_and_messages_to_observers():
     asyncio.run(_test_relay_client_poll_hands_pairings_and_messages_to_observers())
+
+
+def test_unsent_cards_survive_a_restart(rig):
+    sender, relay, client, pairs, doc_sk, sent = rig
+    relay.fail = True
+    asyncio.run(sender.send(fixture_card()))
+    again = CardSender(recipients=sender.recipients, post=client.post_card, device_id="irin-test")  # a new process
+    assert list(again.pending) == [fixture_card().card_id]
+    relay.fail = False
+    assert asyncio.run(again.flush()) == 1 and relay.cards
+
+
+def test_poll_cadence_is_wall_time_at_replay_speed():
+    from app.rounds import relay_client as rc
+
+    assert rc.POLL_DEMO_S * 60 == 300  # 5 wall seconds at 60x = 300 clock seconds per sleep
+    import inspect
+
+    assert "* clock.speed" in inspect.getsource(rc.RelayClient.run)
+
+
+def test_pairing_state_broadcast_reaches_the_loop_from_a_worker_thread(monkeypatch):
+    import json
+
+    from fastapi.testclient import TestClient
+
+    from app import auth, main
+    from tests.test_pairing import FakeRelay
+    from app.rounds.pairing import RelayPairing
+
+    monkeypatch.setattr(auth.config, "PIN", "1234")
+    relay = FakeRelay()
+    with TestClient(main.app) as c:
+        main.runtime.pairing.relay = RelayPairing("http://relay.test", "src-key", transport=relay.transport())
+        with c.websocket_connect("/ws") as ws:
+            ws.receive_text()  # the snapshot
+            assert c.post("/api/pair/start", json={}, headers={"X-PIN": "1234"}).status_code == 200  # runs in a worker
+            msg = json.loads(ws.receive_text())
+            assert msg["type"] == "pairing_state" and msg["payload"]["status"] == "awaiting_scan"
+        main.runtime.pairing.pending = None

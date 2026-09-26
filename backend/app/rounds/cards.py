@@ -114,6 +114,14 @@ class CardSender:
     on_sent: Callable[[dict], None] | None = None  # card_sent broadcast
     pending: dict[str, SignalCard] = field(default_factory=dict)  # undelivered, retried on the relay tick
 
+    def __post_init__(self) -> None:
+        try:  # a restart keeps retrying what the relay never took
+            for doc in store.select_cards(limit=500):
+                if doc.get("status") == "unsent":
+                    self.pending[doc["card"]["card_id"]] = SignalCard.model_validate(doc["card"])
+        except Exception:
+            log.exception("could not reload unsent cards")
+
     async def send(self, card: SignalCard) -> dict[str, Any]:
         """Seal to every paired peer of the card's world and post. Stored either
         way; a failed post is retried on the next relay tick."""
