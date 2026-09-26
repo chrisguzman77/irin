@@ -72,8 +72,9 @@ async def _broadcast(msg_type: str, payload: dict) -> None:
 async def list_scenarios() -> dict:
     """Read-only, any mode: the CSVs a demo may play."""
     names = sorted(p.stem for p in SCENARIOS_DIR.glob("*.csv"))
-    current = Path(_runtime.datasource.path).stem if _runtime and isinstance(_runtime.datasource, ReplayDataSource) else None
-    return {"scenarios": names, "current": current, "speed": clock.speed}
+    replay = _runtime.datasource if _runtime and isinstance(_runtime.datasource, ReplayDataSource) else None
+    return {"scenarios": names, "current": Path(replay.path).stem if replay else None, "speed": clock.speed,
+            "paused": bool(replay is not None and replay._paused_at is not None)}
 
 
 class ScenarioRequest(BaseModel):

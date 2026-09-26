@@ -89,7 +89,9 @@ def test_speed_changes_multiplier_without_moving_the_clock(client):
 
 
 def test_pause_makes_the_feed_stale_honestly(client):
+    assert client.get("/api/demo/scenarios").json()["paused"] is False
     assert client.post("/api/demo/pause", json={"paused": True}, headers=H).status_code == 200
+    assert client.get("/api/demo/scenarios").json()["paused"] is True  # the panel reads it back after a reload
     first = client.get("/api/latest").json()
     clock.advance(15 * 60)
     later = client.get("/api/latest").json()
