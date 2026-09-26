@@ -65,6 +65,28 @@ Deviations from the map, and why:
   display's power plug covers pin 4. This is the fallback the map allows.
   Radar ground still goes to Pi pin 9; grounds are common via Pi pin 20 → J16.
 
+## Software side (what the code assumes about this wiring)
+
+| Part | Code | Assumes |
+|---|---|---|
+| LED frame | `leds.py` (Pi5Neo, `/dev/spidev0.0`) | 29 LEDs (`LED_COUNT`); SPI enabled; frame current capped at 1 A (`MAX_CURRENT_A`) because strip power crosses the breadboard. Raise the cap only after strip power moves onto Wagos, and update this page. |
+| Speaker | `sound.py` (`pw-play`, fallback `aplay` on the default device) | a true USB audio device (`aplay -l` lists it); the backend runs as the kiosk user so it shares that session's PipeWire. Never an ALSA `hw:` device. |
+| Radar | `presence.py` (gpiozero + lgpio) | OUT on GPIO17, internal pull-down, 50 ms debounce; range and no-one duration are set in the radar with the HLK app. |
+| Backlight | `real.py` `Backlight` | `/sys/class/backlight/<panel>/brightness` writable by group video (udev rule, Pi setup note 2). |
+
+Each of the four starts independently (`real.py`): if one fails it is logged
+and its calls do nothing, and the others keep working, so a dead strip never
+silences a low alarm.
+
+Hand checks, run on the Pi over SSH from the repo root:
+
+| Step | Command | Pass |
+|---|---|---|
+| 2 | `.venv/bin/python hardware/scripts/first_light.py` | LED 0 red, 1 green, 2 blue at 10 % |
+| 2 | `.venv/bin/python hardware/scripts/full_frame_test.py` | all 29 in the chase; colour cycle at 30 %; no flicker while wiggling both corners |
+| 3 | `bash hardware/scripts/speaker_test.sh` | raw tone, driver's ramped looping urgent tone, chirp; then the tone from the running service |
+| 4 | `.venv/bin/python hardware/scripts/radar_watch.py` (or `watch -n 0.5 pinctrl get 17`) | PRESENT holds with a still person; empty a few seconds after they leave |
+
 Open:
 
 - **Unused shifter inputs not yet confirmed grounded** (pins 4, 5, 9, 10,
@@ -74,4 +96,8 @@ Open:
   the top pins, bridge a free bottom ground hole to a free top column (15 or
   17), then jumper that column to A7, A8, A10, A11. Power off first; leave
   outputs 6, 8, 11 open. Record the final route here.
-- Radar wire colours: add the `radar_wiring_*.jpg` photos to docs/figures/.
+- Radar wire colours: add the `radar_wiring_*.jpg` photos to docs/figures/
+  (which adapter wire colour went to VCC, GND, OUT; colours are not
+  standardized, so the board's printed labels are the reference).
+- Radar mounting and gate profiles (HOME / DEMO) not yet recorded: note the
+  mount used (SmartiPi cradle or printed housing) and the gate numbers here.
