@@ -100,8 +100,9 @@ Open:
   (which adapter wire colour went to VCC, GND, OUT; colours are not
   standardized, so the board's printed labels are the reference).
 - Radar settings (HLKRadarTool, stored in the radar): HOME = max gate 2
-  (2.25 m), no-one duration 5 s, set 2026-09-26. DEMO = gate 1 (1.5 m), set
-  at table setup. Mount (SmartiPi cradle or printed housing) not yet
+  (2.25 m), no-one duration 5 s, set 2026-09-26. DEMO = gate 1 (1.5 m).
+  CURRENTLY SET: 1.5 m (gate 1), changed 2026-09-26 evening for the idle
+  screen test; switch back to 2.25 m for the bedroom. Mount (SmartiPi cradle or printed housing) not yet
   recorded.
 - Radar check PASSED 2026-09-26 at HOME (gate 2, 5 s): radar_watch.py held
   PRESENT through 26 s of sitting still and dropped to empty 14 s after the

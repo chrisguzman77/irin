@@ -17,6 +17,11 @@
     <div id="flag-basal" class="flag flag-basal hidden">basal not logged yet</div>
   </header>
 
+  <!-- Idle screen: falling leaves while presence is Away (nobody in the radar's
+       range). Never during any alarm or a low reading; the alarm takeover and
+       the flags (DEMO) sit above it. Purely visual: it sends nothing. -->
+  <div id="idle" aria-hidden="true"><img src="idle-leaves.svg" alt=""></div>
+
   <!-- Alarm takeover (step 3): amber = predicted low (WARNING), red = actual low (FULL).
        The tier comes from alarm.trigger_type; it covers every screen mode. -->
   <section id="alarm" class="hidden" role="alert">

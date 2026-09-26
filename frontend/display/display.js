@@ -41,6 +41,7 @@ const state = {
   piDate: null,        // "YYYY-MM-DD" of the Pi's clock, to match a report's night_date
   report: null,        // MorningReport (GET /api/reports/latest), fetched in morning mode
   alarm: { state: "idle", trigger_type: null },  // AlarmState
+  presence: null,      // PresenceState (snapshot presence + presence_change): drives the idle screen
   basalNudge: "none",  // the scheduler's basal nudge level: none | visual | email
   familyStories: [],   // FamilyStory list of the latest night (snapshot family_story_status + updates)
   doctorMessages: [],  // pending DoctorMessage list (snapshot pending_doctor_messages + updates)
@@ -120,6 +121,7 @@ function onMessage(msg) {
       state.forecast = p.forecast || null;
       state.forecastNote = "";
       state.alarm = p.alarm || { state: "idle", trigger_type: null };
+      state.presence = p.presence || null;
       state.familyStories = Array.isArray(p.family_story_status) ? p.family_story_status : [];
       state.doctorMessages = Array.isArray(p.pending_doctor_messages) ? p.pending_doctor_messages : [];
       setPairing(p.pairing_state);
@@ -169,6 +171,9 @@ function onMessage(msg) {
       break;
     case "plan_state":
       state.planState = p || {};
+      break;
+    case "presence_change":
+      state.presence = p;
       break;
     default:
       return; // other types belong to later steps; the hub's echo replies have no type
@@ -295,6 +300,58 @@ function render() {
   renderPair();
   renderDoctor();
   if (mode === "detail") drawGraph();
+  updateIdle();
+}
+
+// --- idle screen ---
+// Shown only while the Pi's presence is Away (nobody in the radar's range for
+// AWAY_AFTER_MIN; never at night, backend rule) AND nothing needs a person:
+// any alarm state other than idle (warning, low, acknowledged, re-armed,
+// stale, high) or a reading below the low threshold keeps the normal screen.
+// Waking because someone is back plays the 2 s leaves-up sequence; waking
+// because of an alarm or a low is instant (the alarm takeover is above it
+// anyway). It only reads state and sends nothing.
+const WAKE_MS = 2000;
+let idleShown = false;
+let wakeTimer = null;
+
+function needsPerson() {
+  const a = state.alarm || {};
+  if (a.state && a.state !== "idle") return true;
+  const r = state.latest;
+  const low = (state.settings && Number(state.settings.low_threshold)) || 70;
+  return !!(r && typeof r.glucose_mgdl === "number" && r.glucose_mgdl < low); // stale or not
+}
+
+function isIdle() {
+  const pr = state.presence;
+  return !!pr && pr.mode === "away" && !needsPerson();
+}
+
+function updateIdle() {
+  const el = $("idle");
+  if (isIdle()) {
+    if (wakeTimer) { clearTimeout(wakeTimer); wakeTimer = null; } // left again mid-wake
+    el.classList.remove("waking", "instant");
+    el.classList.add("on");
+    idleShown = true;
+    return;
+  }
+  if (needsPerson() && (idleShown || wakeTimer)) { // alarm or low: gone now, no animation
+    if (wakeTimer) { clearTimeout(wakeTimer); wakeTimer = null; }
+    el.classList.add("instant");
+    el.classList.remove("on", "waking");
+    idleShown = false;
+    return;
+  }
+  if (!idleShown) return;
+  idleShown = false; // someone is back: leaves sweep up, then the main screen
+  el.classList.remove("instant");
+  el.classList.add("waking");
+  wakeTimer = setTimeout(() => {
+    wakeTimer = null;
+    el.classList.remove("on", "waking");
+  }, WAKE_MS);
 }
 
 // --- doctor-message takeover (R4, invariant 8) ---
