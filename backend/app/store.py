@@ -12,7 +12,7 @@ from pathlib import Path
 
 from .config import config
 from .contracts import (AlarmEvent, FamilyStory, LowEvent, LowEventRecall, MorningReport, NightRecord, Pairing,
-                        PresenceState, Reading, SignalCard, Treatment)
+                        PresenceState, Reading, SignalCard, SymptomCheck, TitrationPlan, Treatment)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS readings (
@@ -471,3 +471,52 @@ def select_doctor_messages(limit: int = 200, conn: sqlite3.Connection | None = N
     docs = [json.loads(r["json"]) for r in rows]
     docs.sort(key=lambda d: d["received_at"], reverse=True)
     return docs[:limit]
+
+
+# --- Step Watch (R10): plans and the daily stomach check-in ---
+
+
+def upsert_plan(plan: TitrationPlan, conn: sqlite3.Connection | None = None) -> None:
+    own = conn is None
+    conn = conn or connect()
+    with conn:
+        conn.execute("INSERT OR REPLACE INTO plans VALUES (?, ?)", (plan.plan_id, plan.model_dump_json()))
+    if own:
+        conn.close()
+
+
+def select_plans(conn: sqlite3.Connection | None = None) -> list[TitrationPlan]:
+    own = conn is None
+    conn = conn or connect()
+    rows = conn.execute("SELECT json FROM plans").fetchall()
+    if own:
+        conn.close()
+    return [TitrationPlan.model_validate_json(r["json"]) for r in rows]
+
+
+def upsert_symptom_check(check: SymptomCheck, conn: sqlite3.Connection | None = None) -> None:
+    own = conn is None
+    conn = conn or connect()
+    with conn:
+        conn.execute("INSERT OR REPLACE INTO symptom_checks VALUES (?, ?)", (check.date.isoformat(), check.model_dump_json()))
+    if own:
+        conn.close()
+
+
+def select_symptom_check(day: date, conn: sqlite3.Connection | None = None) -> SymptomCheck | None:
+    own = conn is None
+    conn = conn or connect()
+    r = conn.execute("SELECT json FROM symptom_checks WHERE date = ?", (day.isoformat(),)).fetchone()
+    if own:
+        conn.close()
+    return SymptomCheck.model_validate_json(r["json"]) if r else None
+
+
+def select_symptom_checks(since: date, until: date, conn: sqlite3.Connection | None = None) -> list[SymptomCheck]:
+    own = conn is None
+    conn = conn or connect()
+    rows = conn.execute("SELECT json FROM symptom_checks WHERE date >= ? AND date <= ? ORDER BY date",
+                        (since.isoformat(), until.isoformat())).fetchall()
+    if own:
+        conn.close()
+    return [SymptomCheck.model_validate_json(r["json"]) for r in rows]

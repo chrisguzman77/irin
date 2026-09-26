@@ -50,6 +50,7 @@ from .rounds.evaluate import StandingEngine
 from .rounds.messages import DoctorMessages, MessageError
 from .rounds.pairing import PairingError, PairingService, RelayPairing
 from .rounds.relay_client import RelayClient
+from .rounds.step_watch import StepWatch
 from .rounds.nights_adapter import NightsAdapter
 from .scheduler import Scheduler, basal_logged_on, timedatectl_synced
 from . import voice_out
@@ -93,6 +94,7 @@ class Runtime:
     cards: "CardSender | None" = None
     standing: "StandingEngine | None" = None
     messages: "DoctorMessages | None" = None
+    step_watch: "StepWatch | None" = None
 
 
 runtime = Runtime(mode="nightscout" if config.DATASOURCE == "nightscout" else "replay",
@@ -265,10 +267,19 @@ runtime.scheduler.register("ledger", lambda: runtime.settings.night_window_end, 
 
 def _evaluate_after_ledger(record: NightRecord) -> None:
     """The morning evaluation runs right after the ledger row is written (the
-    plan's 07:05), never before it: the ledger job is its trigger."""
+    plan's 07:05), never before it: the ledger job is its trigger. Standing
+    Cards first, then the watch's due cards (the budget keeps them apart)."""
     if runtime.standing is None:
         return
-    _schedule(runtime.standing.run(today=record.night_date))
+
+    async def both() -> None:
+        await runtime.standing.run(today=record.night_date)
+        if runtime.step_watch is not None:
+            await runtime.step_watch.run(today=record.night_date)
+            if runtime.step_watch.checkin_due(record.night_date + timedelta(days=1)):
+                await hub.broadcast(WSMessage(type="symptom_check_due", payload=runtime.step_watch.checkin_status()))
+
+    _schedule(both())
 
 
 def _red_rules_on_alarm_event(event: AlarmEvent) -> None:
@@ -424,6 +435,12 @@ async def lifespan(app: FastAPI):
         is_demo=lambda: runtime.mode == "replay")
     runtime.relay_client.on_messages = runtime.messages.receive
     runtime.relay_client.on_tick = _relay_tick
+    runtime.step_watch = StepWatch(
+        adapter=runtime.ledger.adapter, sender=runtime.cards, device_id=config.DEVICE_ID or "irin-dev",
+        is_demo=lambda: runtime.mode == "replay", brain_only=lambda: config.IRIN_BRAIN_ONLY,
+        on_plan_state=lambda st: _schedule(hub.broadcast(WSMessage(type="plan_state", payload=st))))
+    runtime.messages.on_plan_message = runtime.step_watch.on_plan_message
+    runtime.standing.active_watch = lambda: runtime.step_watch.active_plan() is not None
     await runtime.datasource.start()
     hub.start()
     tick_task = asyncio.create_task(_alarm_tick_loop())
@@ -730,6 +747,44 @@ async def rounds_message_decline(message_id: str) -> dict:
         return await runtime.messages.decline(message_id)
     except MessageError as e:
         raise _message_error(e)
+
+
+# --- Step Watch endpoints (R10) ---
+
+
+class CheckinRequest(BaseModel):
+    gi: Literal["fine", "rough", "cant_eat"]
+
+
+@app.get("/api/rounds/plan")
+async def rounds_plan() -> dict:
+    """The active watch (this mode's), or {active: false}."""
+    plan = runtime.step_watch.active_plan()
+    return {**runtime.step_watch.plan_state(), "plan": plan.model_dump(mode="json") if plan else None}
+
+
+@app.get("/api/rounds/checkin")
+async def rounds_checkin_status() -> dict:
+    return runtime.step_watch.checkin_status()
+
+
+@app.post("/api/rounds/checkin", dependencies=[Depends(require_pin)])
+async def rounds_checkin(req: CheckinRequest) -> dict:
+    """The one-tap stomach check-in during a watch: fine | rough | cant_eat. Missing is never fine."""
+    if runtime.step_watch.active_plan() is None:
+        raise HTTPException(status_code=409, detail="no active watch")
+    check = runtime.step_watch.checkin(req.gi)
+    return {**check.model_dump(mode="json"), **runtime.step_watch.checkin_status()}
+
+
+class WatchEvaluateRequest(BaseModel):
+    today: date | None = None
+
+
+@app.post("/api/rounds/step_watch/evaluate", dependencies=[Depends(require_pin)])
+async def rounds_step_watch_evaluate(req: WatchEvaluateRequest) -> list[dict]:
+    """Run the watch's due cards for a date now (the seek's catch-up, the demo panel)."""
+    return await runtime.step_watch.run(today=req.today)
 
 
 class EvaluateRequest(BaseModel):
