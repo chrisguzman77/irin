@@ -101,7 +101,7 @@ export default function RoundsTab() {
 
   return (
     <section className="flex flex-col gap-4">
-      {base && <RecallCards lows={socket.recallDue} baseUrl={base} demo={snap?.mode === "replay"} />}
+      {base && <RecallCards items={socket.recallDue} baseUrl={base} demo={snap?.mode === "replay"} />}
       {base && <DoctorSharing />}
       <h2 className="text-xl font-semibold">What my doctor sees</h2>
       {error && <p className="text-sm text-red-400">Could not load the cards from your Irin.</p>}
