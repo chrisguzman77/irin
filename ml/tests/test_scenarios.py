@@ -173,3 +173,69 @@ def test_basal_check_fires_in_the_week_before_the_change_and_follow_up_has_data(
     for days in (range(0, 7), range(0, 14)):
         v, _ = N.standing_window(records(readings, alarms, [change + timedelta(days=k) for k in days]), [], [])
         assert v["clean_nights"] >= 3                                   # Follow-up has enough data on each side
+
+
+# ---------------------------------------------------------------- the six core scenarios (real, date-shifted)
+
+CORE = ["the_save", "normal_night", "failure", "meal_context", "rearm_low", "high_spike"]
+
+
+def series(name):
+    import numpy as np
+    _, readings, _ = load_csv_only(name)
+    ts = np.array([r["timestamp"] for r in readings], dtype="datetime64[s]")
+    x = np.array([r["glucose_mgdl"] for r in readings])
+    return readings, ts, x
+
+
+def load_csv_only(name):
+    with (SCEN / f"{name}.csv").open() as f:
+        rows = list(csv.DictReader(f))
+    return rows, [{"timestamp": datetime.fromisoformat(r["timestamp"]), "glucose_mgdl": float(r["glucose_mgdl"])} for r in rows], None
+
+
+@pytest.mark.parametrize("name", CORE)
+def test_core_scenario_is_shifted_and_loads_like_replay(name):
+    rows, readings, _ = load_csv_only(name)
+    assert list(rows[0].keys()) == ["timestamp", "glucose_mgdl", "trend"]
+    assert readings[0]["timestamp"].year == 2021 and readings[0]["timestamp"].month == 3   # shifted; real dates stay off-repo
+    ts = [r["timestamp"] for r in readings]
+    assert all(a < b for a, b in zip(ts, ts[1:]))
+
+
+def test_the_save_forecast_crosses_before_the_actual_value():
+    """The same forecaster and warning rule the Pi runs: the warning comes 10-60
+    min before the first reading under 70 (the night is held-out, so this is
+    out-of-sample for forecast_v1)."""
+    pytest.importorskip("xgboost")
+    from ml.events import forecasts, replay_events
+    from ml.models.predict import PREDICTED_LOW_THRESHOLD, _model
+    from ml.train import forecaster
+    _, ts, x = series("the_save")
+    rep = replay_events(ts, x, forecasts(ts, x, forecaster(_model)), threshold=PREDICTED_LOW_THRESHOLD)
+    assert rep["lows"] and rep["lows"][0]["outcome"] == "detected" and rep["lows"][0]["lead_min"] >= 10
+    assert (x < 70).sum() >= 2
+
+
+def test_rearm_low_stays_under_70_long_enough_to_rearm_and_recovers():
+    _, ts, x = series("rearm_low")
+    run = best = 0
+    for v in x:
+        run = run + 1 if v < 70 else 0
+        best = max(best, run)
+    assert best * 5 >= 30                                               # still low 15 min after an ack, twice over
+    assert x[-6:].min() >= 70                                           # the recovery is in the file
+
+
+def test_normal_failure_meal_and_high():
+    _, _, x = series("normal_night")
+    assert x.min() >= 90 and x.max() <= 180
+    _, ts, x = series("failure")
+    gaps = (ts[1:] - ts[:-1]).astype(int) / 60
+    assert gaps.max() >= 40 and x.min() >= 80                         # stale after 15 min, never near a low
+    readings, _, x = series("meal_context")
+    d = readings[0]["timestamp"].replace(hour=22, minute=0, second=0)
+    codes, src = N.classify_night(readings, None, None, None, (d, d + timedelta(hours=9)))
+    assert "late_meal" in codes and src == "inferred" and x.max() < 250 and x.min() >= 70
+    _, _, x = series("high_spike")
+    assert (x >= 250).sum() >= 6 and x[-12:].max() < 200

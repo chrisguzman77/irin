@@ -331,19 +331,198 @@ def basal_change(n: int, data: Path) -> tuple[list[dict], dict, dict]:
     return rows, companion, summary
 
 
-def write(out: Path, name: str, rows: list[dict], companion: dict) -> None:
+# ---------------------------------------------------------------- 7a: the six core scenarios (real, date-shifted)
+
+CORE_TARGET = date(2021, 3, 1)      # core scenario k's night starts on CORE_TARGET + k days (shifted calendar)
+CORE_ORDER = ["the_save", "normal_night", "failure", "meal_context", "rearm_low", "high_spike"]
+HIGH = 250.0
+
+
+def _core_candidates(data: Path):
+    """Pick one real night per core scenario by stated criteria. Returns
+    {name: (start, end, why)} in REAL time (never written to the repo) and the
+    shipped model's replay for The Save's check."""
+    import pandas as pd
+    import xgboost as xgb
+
+    from ml.events import forecasts, replay_events
+    from ml.models.features import drop_collisions
+    from ml.models.predict import PREDICTED_LOW_THRESHOLD
+    from ml.train import MODELS, forecaster, holdout_start
+
+    clean = pd.read_csv(data / "clean.csv", parse_dates=["timestamp"]).sort_values("timestamp", ignore_index=True)
+    ts_all = clean.timestamp.to_numpy("datetime64[s]")
+    keep = drop_collisions(ts_all.astype(np.int64))
+    ts, x = ts_all[keep], clean.mgdl.to_numpy(float)[keep]
+    split = holdout_start(clean.timestamp).to_pydatetime()
+    booster = xgb.Booster()
+    booster.load_model(str(MODELS / "forecast_v1.json"))
+    rep_ = replay_events(ts, x, forecasts(ts, x, forecaster(booster)), threshold=PREDICTED_LOW_THRESHOLD)
+    nights = pd.read_csv(data / "nights_labeled.csv", parse_dates=["night_date"])
+    tsec = ts.astype(np.int64)
+
+    def seg(a: datetime, b: datetime):
+        i, j = np.searchsorted(ts, np.datetime64(a, "s")), np.searchsorted(ts, np.datetime64(b, "s"))
+        return ts[i:j], x[i:j]
+
+    def night_span(d) -> tuple[datetime, datetime]:
+        d = pd.Timestamp(d).to_pydatetime()
+        return d.replace(hour=20), d.replace(hour=8) + timedelta(days=1)
+
+    picks = {}
+    # the_save: held-out overnight crossing, warned 10-60 min ahead, >= 2 readings under 70; longest lead
+    best = None
+    for low in rep_["lows"]:
+        t = pd.Timestamp(low["time"]).to_pydatetime()
+        if t < split or not low["night"] or low["outcome"] != "detected":
+            continue
+        i = low["i"]
+        run = 0
+        while i + run < len(x) and x[i + run] < 70:
+            run += 1
+        if run >= 2 and (best is None or low["lead_min"] > best[1]):
+            best = (t, low["lead_min"], run)
+    t, lead, run = best
+    # Window: at least 1 h of forecaster warm-up plus 15 min before the warning, and no reading at or
+    # above the 250 high threshold (a high alert would muddy the two low tiers): start after the last
+    # high before the low, end before the first high after it (this real low was over-treated and
+    # rebounds past 250), and never later than 2 h after the crossing.
+    warn = t - timedelta(minutes=lead)
+    a0, b0 = t - timedelta(hours=3), t + timedelta(hours=2)
+    tt, xx = seg(a0, b0)
+    tpy = [pd.Timestamp(v).to_pydatetime() for v in tt]
+    before = [k for k, v in enumerate(tpy) if v < t and xx[k] >= HIGH]
+    after = [k for k, v in enumerate(tpy) if v > t and xx[k] >= HIGH]
+    start = tpy[before[-1] + 1] if before else a0
+    end = tpy[after[0]] if after else b0
+    assert warn - start >= timedelta(minutes=75), "not enough warm-up before the warning after trimming the high"
+    picks["the_save"] = (start, end,
+                         f"held-out overnight low, warned {lead:.0f} min ahead by forecast_v1 (out-of-sample), {run} readings under 70;"
+                         f" trimmed to stay under {HIGH:.0f} (real over-treated rebound after it)")
+
+    ok = nights[~nights.stale]
+    # normal_night: held-out if possible, clean, no warnings, everything 90-180 from 20:00 to 08:00; lowest spread
+    best = None
+    for r in ok.itertuples():
+        if r.reason_codes != "clean" or r.warnings_inferred:
+            continue
+        a, b = night_span(r.night_date)
+        tt, xx = seg(a, b)
+        if len(xx) < 0.9 * 144 or xx.min() < 90 or xx.max() > 180 or np.diff(tt.astype(np.int64)).max() > 600:
+            continue
+        key = (a >= split, -xx.std())
+        if best is None or key > best[0]:
+            best = (key, a, b)
+    picks["normal_night"] = (best[1], best[2], f"clean night, 90-180 mg/dL all night, no warnings ({'held-out' if best[0][0] else 'in-sample'})")
+
+    # failure: a 40-90 min sensor gap in the middle of the night, glucose never under 80 around it
+    best = None
+    for r in ok.itertuples():
+        a, b = night_span(r.night_date)
+        tt, xx = seg(a, b)
+        if len(tt) < 2:
+            continue
+        gaps = np.diff(tt.astype(np.int64)) / 60
+        k = int(np.argmax(gaps))
+        mid = pd.Timestamp(tt[k]).to_pydatetime()
+        if 40 <= gaps[k] <= 90 and 0 <= (mid.hour + 24 - 22) % 24 <= 6 and xx.min() >= 80:
+            key = -abs(gaps[k] - 60)
+            if best is None or key > best[0]:
+                best = (key, a, b, gaps[k])
+    picks["failure"] = (best[1], best[2], f"a {best[3]:.0f}-min sensor gap mid-night (the display must go STALE)")
+
+    # meal_context: inferred late meal with a TYPICAL rise (closest to +100 in the first 2 h), under 250, no lows
+    best = None
+    for r in ok.itertuples():
+        if "late_meal" not in r.reason_codes or r.low_events or r.minutes_below_70:
+            continue
+        a, b = night_span(r.night_date)
+        tt, xx = seg(a + timedelta(hours=2), a + timedelta(hours=4))
+        if len(xx) < 12:
+            continue
+        rise = xx.max() - xx[0]
+        _, whole = seg(a, b)
+        if whole.max() >= HIGH:
+            continue
+        key = -abs(rise - 100)
+        if best is None or key > best[0]:
+            best = (key, a, b, rise)
+    picks["meal_context"] = (best[1], best[2], f"inferred late meal: +{best[3]:.0f} mg/dL in the first 2 h of the night, peak under {HIGH:.0f}")
+
+    # rearm_low: the longest overnight run under 70 (>= 30 min), no gap inside
+    best = None
+    below = x < 70
+    k = 0
+    while k < len(x):
+        if below[k]:
+            j = k
+            while j + 1 < len(x) and below[j + 1] and tsec[j + 1] - tsec[j] <= 600:
+                j += 1
+            t = pd.Timestamp(ts[k]).to_pydatetime()
+            mins = (j - k + 1) * 5
+            if (t.hour >= 22 or t.hour < 7) and mins >= 30 and (best is None or mins > best[0]):
+                best = (mins, t, pd.Timestamp(ts[j]).to_pydatetime())
+            k = j + 1
+        else:
+            k += 1
+    mins, t, t_end = best
+    picks["rearm_low"] = (t - timedelta(hours=3), t_end + timedelta(hours=1),
+                          f"overnight low under 70 for {mins} min ({'held-out' if t >= split else 'in-sample: its warnings come from a model that trained on it; it demonstrates the re-arm, not forecast accuracy'})")
+
+    # high_spike: a night above 250 for >= 30 min, then back under 200, no gap
+    best = None
+    for r in ok.itertuples():
+        a, b = night_span(r.night_date)
+        tt, xx = seg(a, b)
+        if len(xx) < 0.9 * 144 or np.diff(tt.astype(np.int64)).max() > 600:
+            continue
+        over = (xx >= HIGH).sum() * 5
+        if over >= 30 and xx[-12:].max() < 200 and xx.max() <= 350:
+            key = -abs(over - 60)
+            if best is None or key > best[0]:
+                best = (key, a, b, over, xx.max())
+    picks["high_spike"] = (best[1], best[2], f"above {HIGH:.0f} for {best[3]} min, peak {best[4]:.0f}, back under 200 by morning")
+    return picks, ts, x
+
+
+def core(data: Path) -> dict[str, tuple[list[dict], str, str]]:
+    """{name: (rows, why, real window as text for the local printout only)}"""
+    import pandas as pd
+
+    picks, ts, x = _core_candidates(data)
+    out = {}
+    for k, name in enumerate(CORE_ORDER):
+        a, b, why = picks[name]
+        target = CORE_TARGET + timedelta(days=k)
+        shift = datetime(target.year, target.month, target.day) - datetime(a.year, a.month, a.day)   # whole days
+        i, j = np.searchsorted(ts, np.datetime64(a, "s")), np.searchsorted(ts, np.datetime64(b, "s"))
+        rows, prev = [], None
+        for t, v in zip(ts[i:j], x[i:j]):
+            t = pd.Timestamp(t).to_pydatetime() + shift
+            v = int(round(v))
+            rows.append({"timestamp": t.isoformat(), "glucose_mgdl": v, "trend": _trend(prev, (t, v))})
+            prev = (t, v)
+        out[name] = (rows, why, f"{a:%Y-%m-%d %H:%M} .. {b:%Y-%m-%d %H:%M}")
+    return out
+
+
+def write_csv(out: Path, name: str, rows: list[dict]) -> None:
     out.mkdir(parents=True, exist_ok=True)
     with (out / f"{name}.csv").open("w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=["timestamp", "glucose_mgdl", "trend"], lineterminator="\n")
         w.writeheader()
         w.writerows(rows)
+
+
+def write(out: Path, name: str, rows: list[dict], companion: dict) -> None:
+    write_csv(out, name, rows)
     (out / f"{name}.json").write_text(json.dumps(companion, indent=2) + "\n", newline="\n")
 
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--out", default="demo/scenarios")
-    p.add_argument("--only", choices=["all", "titration", "basal"], default="all")
+    p.add_argument("--only", choices=["all", "titration", "basal", "core"], default="all")
     p.add_argument("--data", default="ml/data", help="raw-data folder (gitignored); only the real scenarios need it")
     args = p.parse_args()
     out = Path(args.out)
@@ -353,6 +532,17 @@ def main() -> None:
         print(f"titration_synthetic (SYNTHETIC): {len(rows)} readings, {len(comp['reason_codes'])} nights,"
               f" {len(comp['alarm_events'])} alarm events, {len(comp['symptom_checks'])} symptom checks,"
               f" {len(comp['injections'])} injections -> {out}")
+    if args.only in ("all", "core"):
+        data = Path(args.data)
+        if not (data / "nights_labeled.csv").exists():
+            print("core scenarios: skipped (the raw data is not here)")
+        else:
+            print("CORE SCENARIOS (real glucose, date-shifted; the REAL windows below are printed for checkpoint 7"
+                  " only and never written to the repo)")
+            for name, (rows, why, real) in core(data).items():
+                write_csv(out, name, rows)
+                print(f"  {name:13} {len(rows):4d} readings  {rows[0]['timestamp'][:16]}..{rows[-1]['timestamp'][11:16]}"
+                      f"  real {real}  | {why}")
     if args.only in ("all", "basal"):
         data = Path(args.data)
         if not (data / "therapy_changes.txt").exists():
