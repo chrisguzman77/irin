@@ -40,9 +40,6 @@ export default function DemoPanel({ snap, baseUrl, onClose }: { snap: StateSnaps
   const [msg, setMsg] = useState<{ text: string; error: boolean } | null>(null);
   const [info, setInfo] = useState<ScenarioList | null>(null);
   const [picked, setPicked] = useState("");
-  // The Pi does not report the pause state, so it is tracked here from our own
-  // taps and reset whenever a scenario (re)starts or the mode changes.
-  const [paused, setPausedState] = useState(false);
   const [injectValue, setInjectValue] = useState("55");
   const mode = snap?.mode;
   const demo = mode === "replay";
@@ -58,7 +55,6 @@ export default function DemoPanel({ snap, baseUrl, onClose }: { snap: StateSnaps
   }, [baseUrl]);
 
   useEffect(() => {
-    setPausedState(false);
     refresh();
   }, [mode, refresh]);
 
@@ -108,6 +104,7 @@ export default function DemoPanel({ snap, baseUrl, onClose }: { snap: StateSnaps
   const inject = Number(injectValue);
   const injectOk = injectValue !== "" && Number.isFinite(inject) && inject >= INJECT_MIN && inject <= INJECT_MAX;
   const speed = info?.speed;
+  const paused = info?.paused ?? false; // the Pi's own answer (GET /api/demo/scenarios)
 
   return (
     <section className="flex flex-col gap-4">
@@ -160,7 +157,6 @@ export default function DemoPanel({ snap, baseUrl, onClose }: { snap: StateSnaps
               disabled={!picked}
               className={`${btn} bg-white text-black`}
               onClick={() => run(() => playScenario(baseUrl, picked), `Playing ${picked.replace(/_/g, " ")} from the start.`, () => {
-                setPausedState(false);
                 refresh();
               })}
             >
@@ -191,7 +187,7 @@ export default function DemoPanel({ snap, baseUrl, onClose }: { snap: StateSnaps
             aria-pressed={paused}
             className={`${btn} ${paused ? "bg-amber-400 text-black" : "bg-neutral-900 text-neutral-300"}`}
             onClick={() =>
-              run(() => setPaused(baseUrl, !paused), paused ? "Feed resumed." : "Feed paused.", () => setPausedState(!paused))
+              run(() => setPaused(baseUrl, !paused), paused ? "Feed resumed." : "Feed paused.", refresh)
             }
           >
             {paused ? "Resume feed" : "Pause feed"}
