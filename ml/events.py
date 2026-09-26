@@ -145,10 +145,13 @@ def replay_events(ts: np.ndarray, mgdl: np.ndarray, preds: np.ndarray,
     return {"ts": t, "night": night, "lows": lows, "warnings": warnings, "threshold": threshold}
 
 
-def summarize(rep: dict, start=None, end=None) -> dict:
+def summarize(rep: dict, start=None, end=None, exclude=frozenset()) -> dict:
     """Metrics over lows/warnings whose time falls in [start, end). Denominators
     are sensor coverage in that range: readings / 288 = days, night-window
-    readings / 108 = nights."""
+    readings / 108 = nights. `exclude`: crossing times (datetime64[s]) of lows
+    flagged as sensor artifacts in the step 3.6 review; they leave the low
+    counts, and the warning that escalated into one is neither a hit nor a
+    false alarm."""
     t = rep["ts"]
     lo = t[0] if start is None else np.datetime64(start, "s")
     hi = t[-1] + np.timedelta64(1, "s") if end is None else np.datetime64(end, "s")
@@ -160,7 +163,9 @@ def summarize(rep: dict, start=None, end=None) -> dict:
         return [e for e in items if lo <= e["time"] < hi]
 
     lows, warns = pick(rep["lows"]), pick(rep["warnings"])
-    out = {"days": float(days), "nights": float(nights)}
+    excluded = [e for e in lows if e["time"] in exclude]
+    lows = [e for e in lows if e["time"] not in exclude]
+    out = {"days": float(days), "nights": float(nights), "excluded_lows": len(excluded)}
     for scope, keep in (("all", lambda e: True), ("night", lambda e: e["night"])):
         L = [e for e in lows if keep(e)]
         F = [e for e in L if e["forecastable"]]

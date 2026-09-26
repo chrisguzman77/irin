@@ -30,6 +30,7 @@ import pandas as pd
 from ml.events import (FCST_FROM_MIN, FCST_TO_MIN, MAX_LEAD_MIN, MIN_LEAD_MIN, NEAR_MISS_MGDL, forecasts,
                        replay_events, summarize)
 from ml.models.features import FEATURE_NAMES, drop_collisions
+from ml.review_lows import load_flags
 from ml.train import HOLDOUT_DAYS, QUANTILE, fit, forecaster, holdout_start, rows_before
 
 THRESHOLDS = (70.0, 75.0, 80.0, 85.0, 90.0)
@@ -120,12 +121,12 @@ def sweep_plot(panels: list[tuple[str, dict]], out: Path) -> None:
     plt.close(fig)
 
 
-def score(ts, x, preds_by_name: dict, start=None) -> dict:
+def score(ts, x, preds_by_name: dict, start=None, exclude=frozenset()) -> dict:
     out = {}
     for name, preds in preds_by_name.items():
         for thr in THRESHOLDS:
             rep = replay_events(ts, x, preds, threshold=thr, n_consecutive=N_CONSEC)
-            out[(name, thr)] = summarize(rep, start=start)
+            out[(name, thr)] = summarize(rep, start=start, exclude=exclude)
     return out
 
 
@@ -154,6 +155,9 @@ def main() -> None:
           f" {FCST_FROM_MIN}..{FCST_TO_MIN} min before the crossing;"
           f"\n  false = warning cleared with no crossing; near = lowest actual during it < {NEAR_MISS_MGDL:.0f}, far = >= {NEAR_MISS_MGDL:.0f}")
 
+    artifacts = load_flags(data / "review_flags.csv")       # step 3.6: Chris's flags, held-out lows only
+    print(f"\nSTEP 3.6 REVIEW: {len(artifacts)} held-out low(s) flagged as sensor artifacts"
+          f" (excluded from the HELD-OUT denominator only; training data untouched)")
     base_preds = {name: forecasts(ts, x, f) for name, f in BASELINES.items()}
     full = score(ts, x, base_preds)
 
@@ -183,11 +187,14 @@ def main() -> None:
 
     two = {n: base_preds[n] for n in ("B linear 15m", "C weighted ROC")}
     folds = score(ts, x, {**two, MODEL: pooled}, start=starts[0].to_datetime64())
-    held = score(ts, x, {**base_preds, MODEL: pooled}, start=split.to_datetime64())
+    held = score(ts, x, {**base_preds, MODEL: pooled}, start=split.to_datetime64(), exclude=artifacts)
+    held_all = score(ts, x, {"B linear 15m": base_preds["B linear 15m"], MODEL: pooled}, start=split.to_datetime64())
 
     s = held[("B linear 15m", 70.0)]
     print(f"\nHELD-OUT coverage: {s['days']:.1f} sensor-days, {s['nights']:.1f} sensor-nights")
-    print_event_table(f"EVENT METRICS, HELD-OUT {HOLDOUT_DAYS} DAYS", held)
+    print_event_table(f"EVENT METRICS, HELD-OUT {HOLDOUT_DAYS} DAYS ({len(artifacts)} flagged artifact(s) excluded)", held)
+    if artifacts:
+        print_event_table("  same, BEFORE exclusion (for metrics.md)", held_all)
     s = folds[("B linear 15m", 70.0)]
     print(f"\nROLLING-FOLD coverage: {s['days']:.1f} sensor-days, {s['nights']:.1f} sensor-nights")
     print_event_table(f"EVENT METRICS, ROLLING FOLDS POOLED ({FOLDS} x {HOLDOUT_DAYS} days, all out-of-sample)", folds)
