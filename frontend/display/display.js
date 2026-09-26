@@ -41,6 +41,7 @@ const state = {
   piDate: null,        // "YYYY-MM-DD" of the Pi's clock, to match a report's night_date
   report: null,        // MorningReport (GET /api/reports/latest), fetched in morning mode
   alarm: { state: "idle", trigger_type: null },  // AlarmState
+  presence: null,      // PresenceState (snapshot presence + presence_change): drives the idle screen
   basalNudge: "none",  // the scheduler's basal nudge level: none | visual | email
   familyStories: [],   // FamilyStory list of the latest night (snapshot family_story_status + updates)
   doctorMessages: [],  // pending DoctorMessage list (snapshot pending_doctor_messages + updates)
@@ -118,6 +119,7 @@ function onMessage(msg) {
       state.forecast = p.forecast || null;
       state.forecastNote = "";
       state.alarm = p.alarm || { state: "idle", trigger_type: null };
+      state.presence = p.presence || null;
       state.familyStories = Array.isArray(p.family_story_status) ? p.family_story_status : [];
       state.doctorMessages = Array.isArray(p.pending_doctor_messages) ? p.pending_doctor_messages : [];
       setPairing(p.pairing_state);
@@ -162,6 +164,9 @@ function onMessage(msg) {
       break;
     case "pairing_state":
       setPairing(p);
+      break;
+    case "presence_change":
+      state.presence = p;
       break;
     default:
       return; // other types belong to later steps; the hub's echo replies have no type
@@ -287,6 +292,24 @@ function render() {
   renderPair();
   renderDoctor();
   if (mode === "detail") drawGraph();
+  $("idle").classList.toggle("on", isIdle());
+}
+
+// --- idle screen ---
+// Shown only while the Pi's presence is Away (nobody in the radar's range for
+// AWAY_AFTER_MIN; never at night, backend rule) AND nothing needs a person:
+// any alarm state other than idle (warning, low, acknowledged, re-armed,
+// stale, high) or a reading below the low threshold keeps the normal screen.
+// Home again (someone detected) drops it at once. It only reads state.
+function isIdle() {
+  const pr = state.presence;
+  if (!pr || pr.mode !== "away") return false;
+  const a = state.alarm || {};
+  if (a.state && a.state !== "idle") return false;
+  const r = state.latest;
+  const low = (state.settings && Number(state.settings.low_threshold)) || 70;
+  if (r && typeof r.glucose_mgdl === "number" && r.glucose_mgdl < low) return false; // stale or not
+  return true;
 }
 
 // --- doctor-message takeover (R4, invariant 8) ---
