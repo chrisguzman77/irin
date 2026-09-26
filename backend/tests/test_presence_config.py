@@ -87,14 +87,21 @@ def test_away_after_min_parsing(raw, expected):
     assert config_mod._positive(raw, 15.0, floor=0.5) == expected
 
 
-def test_load_config_reads_both(monkeypatch):
+@pytest.fixture
+def no_dotenv(monkeypatch):
+    """load_config() also reads the repo-root .env; on the Pi that file holds the
+    idle-screen test values, so these tests must see the environment only."""
+    monkeypatch.setattr(config_mod, "_load_dotenv", lambda *a, **k: None)
+
+
+def test_load_config_reads_both(monkeypatch, no_dotenv):
     monkeypatch.setenv("AWAY_AFTER_MIN", "1")
     monkeypatch.setenv("PRESENCE_SAMPLE_SECONDS", "2")
     c = config_mod.load_config()
     assert c.AWAY_AFTER_MIN == 1.0 and c.PRESENCE_SAMPLE_SECONDS == 2.0
 
 
-def test_load_config_defaults(monkeypatch):
+def test_load_config_defaults(monkeypatch, no_dotenv):
     monkeypatch.delenv("AWAY_AFTER_MIN", raising=False)
     monkeypatch.delenv("PRESENCE_SAMPLE_SECONDS", raising=False)
     c = config_mod.load_config()
