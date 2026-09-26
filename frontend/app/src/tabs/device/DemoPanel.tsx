@@ -5,6 +5,7 @@ import type { StateSnapshot } from "../../lib/contracts";
 import {
   basalNudge, injectLow, listScenarios, playScenario, setPaused, setSpeed, type ScenarioList,
 } from "../../lib/demo";
+import { sendSampleCard, type SampleFixture } from "../../lib/cards";
 
 // Step 8: the demo panel, stagecraft reached from a small button, never a
 // main tab. The LIVE/DEMO switch drives POST /api/mode (PIN-gated); the
@@ -18,8 +19,14 @@ const INJECT_MIN = 39;
 const INJECT_MAX = 401;
 
 // Sponsor controls that join the panel with their tiers (jump to step N day
-// D, send card, brain_only, Spark offer, start watch, buddy rung).
-const LATER_CONTROLS = ["Rounds and Night Buddy controls"];
+// D, Bedside | Brain-only, Spark offer, start watch, buddy rung).
+const LATER_CONTROLS = ["More Rounds and Night Buddy controls"];
+
+const SEND_OUTCOME: Record<string, string> = {
+  sent: "Card sent to your paired doctor's inbox.",
+  unsent: "Card saved; the relay did not take it yet, your Irin will retry.",
+  no_recipient: "Card saved but not sent: no doctor is paired in demo mode. Pair one first.",
+};
 
 const btn = "rounded-lg px-3 py-2 font-semibold disabled:opacity-40";
 
@@ -67,7 +74,7 @@ export default function DemoPanel({ snap, baseUrl, onClose }: { snap: StateSnaps
       const err = await call();
       if (err) setMsg({ text: err, error: true });
       else {
-        setMsg({ text: done, error: false });
+        if (done) setMsg({ text: done, error: false }); // "" = the call set its own message
         after?.();
       }
     } catch (e) {
@@ -227,6 +234,31 @@ export default function DemoPanel({ snap, baseUrl, onClose }: { snap: StateSnaps
           >
             Show the basal nudge
           </button>
+        </Control>
+
+        <Control title="Send a card to the doctor" hint="a sample card, badged DEMO, sealed to the paired demo doctor">
+          <div className="flex gap-2">
+            {([
+              ["signal_card_standing", "Basal Check"],
+              ["signal_card_step", "Step check"],
+            ] as [SampleFixture, string][]).map(([f, label]) => (
+              <button
+                key={f}
+                type="button"
+                className={`${btn} flex-1 bg-neutral-900 text-neutral-200`}
+                onClick={() =>
+                  run(async () => {
+                    const r = await sendSampleCard(baseUrl, f);
+                    if (!r.ok) return r.reason;
+                    setMsg({ text: SEND_OUTCOME[r.status] ?? `Card ${r.status}.`, error: r.status === "no_recipient" });
+                    return "";
+                  }, "")
+                }
+              >
+                {label}
+              </button>
+            ))}
+          </div>
         </Control>
 
         {LATER_CONTROLS.map((c) => (
