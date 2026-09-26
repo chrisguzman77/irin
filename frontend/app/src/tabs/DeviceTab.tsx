@@ -3,12 +3,13 @@ import { useDevice } from "../lib/device";
 import AckBar from "./device/AckBar";
 import DemoPanel from "./device/DemoPanel";
 import LiveView from "./device/LiveView";
+import LogView from "./device/LogView";
 import SettingsForm from "./device/SettingsForm";
 
 // The Device tab. A2 (pairing) is not built yet: without the development
 // override it shows the pairing entry point. The acknowledge bar sits above
 // every Device screen: an alarm outranks whatever the user was doing.
-const VIEWS = ["Live", "Settings"] as const;
+const VIEWS = ["Live", "Log", "Settings"] as const;
 type View = (typeof VIEWS)[number] | "Demo";
 
 // The demo panel is an in-app route (/demo) reached only by its button;
@@ -83,6 +84,7 @@ export default function DeviceTab() {
         </button>
       </div>
       {view === "Live" && <LiveView snap={snap} stale={socket.disconnectedLong} />}
+      {view === "Log" && <LogView baseUrl={target.url} settings={snap?.settings} />}
       {view === "Settings" && <SettingsForm current={snap?.settings} baseUrl={target.url} />}
       {view === "Demo" && <DemoPanel snap={snap} baseUrl={target.url} onClose={closeDemo} />}
     </>
