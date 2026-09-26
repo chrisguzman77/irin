@@ -7,6 +7,7 @@ Vite's dev server. Nothing here imports rounds/ or buddy/."""
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import logging
 import math
 from contextlib import asynccontextmanager
@@ -98,11 +99,14 @@ runtime.scheduler.on_synced = lambda: clock.resync() if runtime.mode != "replay"
 # --- the morning report (step 11): built from stored readings (live) or the scenario rows (replay) ---
 
 
-def _readings_between(start: datetime, end: datetime) -> list[Reading]:
-    ds = runtime.datasource
+def _readings_from(ds: DataSource, start: datetime, end: datetime) -> list[Reading]:
     if isinstance(ds, ReplayDataSource):
         return [ds._to_reading(r) for r in ds.rows if start <= r[0] <= end]
     return [r for r in store.select_readings(start) if r.timestamp <= end]
+
+
+def _readings_between(start: datetime, end: datetime) -> list[Reading]:
+    return _readings_from(runtime.datasource, start, end)
 
 
 def _treatments_between(start: datetime, end: datetime) -> list[Treatment]:
@@ -113,10 +117,19 @@ runtime.reports = ReportBuilder(readings_for=_readings_between, treatments_for=_
                                 mailer=SmtpMailer() if config.SMTP_HOST else None, settings=runtime.settings)
 
 
-def _build_report(night_date: date) -> MorningReport | None:
-    """Demo (replay) reports are badged and never emailed (invariant 1)."""
+def _build_report(night_date: date, scheduled: bool = False) -> MorningReport | None:
+    """The datasource is read ONCE: is_demo and the readings come from the same
+    source, so a mode switch mid-build can never email scenario rows as a real
+    night (invariant 1). The scheduled job never rebuilds a night that already
+    has a report (a restart inside the catch-up window would re-email it);
+    POST /api/reports/build always rebuilds."""
+    ds = runtime.datasource
+    if scheduled and store.select_report(night_date) is not None:
+        logging.getLogger("irin.main").info("morning report for %s already exists; not rebuilt", night_date)
+        return None
+    builder = dataclasses.replace(runtime.reports, readings_for=lambda a, b: _readings_from(ds, a, b))
     try:
-        return runtime.reports.build(night_date, is_demo=runtime.mode == "replay")
+        return builder.build(night_date, is_demo=isinstance(ds, ReplayDataSource))
     except Exception:
         logging.getLogger("irin.main").exception("morning report build failed")
         return None
@@ -124,7 +137,7 @@ def _build_report(night_date: date) -> MorningReport | None:
 
 def _morning_report_job(night_date: date) -> None:
     """The scheduler job at night-window end: the build runs in a worker thread."""
-    task = asyncio.get_running_loop().create_task(asyncio.to_thread(_build_report, night_date))
+    task = asyncio.get_running_loop().create_task(asyncio.to_thread(_build_report, night_date, True))
     _broadcast_tasks.add(task)
     task.add_done_callback(_broadcast_tasks.discard)
 

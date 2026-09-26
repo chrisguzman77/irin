@@ -17,12 +17,14 @@ from app.reports import (
     ReportBuilder,
     compute_stats,
     extract_numbers,
+    night_bounds,
     render_graph,
     template_narrative,
     validate_narrative,
 )
 
 T0 = datetime(2020, 1, 1, 22, 0)
+WINDOW = night_bounds(date(2020, 1, 2), "22:00", "07:00")  # the night The Save plays
 
 
 @pytest.fixture
@@ -40,7 +42,7 @@ def the_save_readings() -> list[Reading]:
 
 
 def test_stats_from_the_save():
-    s = compute_stats(the_save_readings(), [], night_start="22:00", night_end="07:00")
+    s = compute_stats(the_save_readings(), [], *WINDOW)
     assert s["low_mgdl"] == 55 and s["low_at"] == "04:00"
     assert s["high_mgdl"] == 131 and s["readings"] == 97
     assert 0 < s["tbr_pct"] < 20 and s["tir_pct"] > 70 and s["tar_pct"] == 0
@@ -49,8 +51,17 @@ def test_stats_from_the_save():
 
 
 def test_no_data_night_is_honest():
-    s = compute_stats([], [], night_start="22:00", night_end="07:00")
+    s = compute_stats([], [], *WINDOW)
     assert s["readings"] == 0 and s["low_mgdl"] is None and s["coverage_pct"] == 0.0
+
+
+def test_coverage_is_over_the_night_window_not_the_readings_present():
+    """A sensor that dies after the first hour is a ~11% night, never a 100% one."""
+    first_hour = [r for r in the_save_readings() if r.timestamp < datetime(2020, 1, 1, 23, 0)]
+    s = compute_stats(first_hour, [], *WINDOW)
+    assert s["readings"] == 12 and 10 < s["coverage_pct"] < 12
+    assert "coverage" in template_narrative(s).lower()
+    assert compute_stats(the_save_readings(), [], *WINDOW)["coverage_pct"] == pytest.approx(89.0, abs=0.1)  # 97 of 109 expected
 
 
 def test_graph_png_is_written(tmp_path):
@@ -59,16 +70,19 @@ def test_graph_png_is_written(tmp_path):
 
 
 def test_validator_accepts_numbers_in_stats_and_rejects_invented_ones():
-    s = compute_stats(the_save_readings(), [], night_start="22:00", night_end="07:00")
+    s = compute_stats(the_save_readings(), [], *WINDOW)
     assert validate_narrative(template_narrative(s), s)
     assert not validate_narrative("You dipped to 48 at 3:10 and recovered.", s)  # 48 and 3:10 are invented
+    assert not validate_narrative("You had 4 lows overnight.", s)  # the hour of 04:00 is not a count
+    assert not validate_narrative("You had 22 alarms.", s)
+    assert validate_narrative("The low came at 4:00 AM.", s)
     assert validate_narrative("Your lowest point was 55 mg/dL at 04:00; time in range was "
                               f"{s['tir_pct']:.0f}%.", s)
     assert extract_numbers("2 alarms, 55 mg/dL at 4:00 AM, 88.5% in range") == {"2", "55", "4:00", "88.5"}
 
 
 def test_template_never_says_fine_for_a_no_data_night():
-    s = compute_stats([], [], night_start="22:00", night_end="07:00")
+    s = compute_stats([], [], *WINDOW)
     text = template_narrative(s)
     assert "didn't have data" in text.lower()
     assert "fine" not in text.lower()

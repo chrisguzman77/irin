@@ -106,3 +106,9 @@ def test_morning_report_endpoints_in_replay_are_badged_demo(monkeypatch, tmp_pat
         assert png.status_code == 200 and png.content[:8] == b"\x89PNG\r\n\x1a\n"
         assert c.get("/api/reports/2019-01-01").status_code == 404
         assert c.get("/api/reports/2019-01-01/graph.png").status_code == 404
+        # the scheduled job never rebuilds (and would never re-email) a night that has a report
+        from datetime import date
+
+        assert main._build_report(date(2020, 1, 2), scheduled=True) is None
+        assert c.get("/api/reports/latest").json()["report_id"] == r.json()["report_id"]
+        assert main._build_report(date(2020, 1, 2)).report_id != r.json()["report_id"]  # the button rebuilds
