@@ -46,6 +46,10 @@ class Hub:
             pairing_state=self.runtime.pairing.state() if getattr(self.runtime, "pairing", None) else {},
             pending_doctor_messages=(self.runtime.messages.pending_messages()
                                      if getattr(self.runtime, "messages", None) else []),
+            active_plan=self.runtime.step_watch.active_plan() if getattr(self.runtime, "step_watch", None) else None,
+            plan_state=self.runtime.step_watch.plan_state() if getattr(self.runtime, "step_watch", None) else {},
+            todays_checkin_status=(self.runtime.step_watch.checkin_status()
+                                   if getattr(self.runtime, "step_watch", None) else {}),
         )
 
     def _family_status(self) -> list[dict]:
