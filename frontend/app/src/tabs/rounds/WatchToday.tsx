@@ -8,8 +8,8 @@ import { GI_ANSWERS, dayLabel, getCheckin, logShot, postCheckin, readCheckin, us
 // one was given today (a second tap replaces it); and, for a weekly GLP-1 /
 // GIP-GLP-1 shot, "I took my shot", echoed with the dose label and confirmed
 // before it is logged, like every insulin entry. The kiosk shows none of this.
-export default function WatchToday({ snap, baseUrl }: { snap: StateSnapshot; baseUrl: string }) {
-  const ps = usePlanState(baseUrl, snap);
+export default function WatchToday({ snap, baseUrl, planState }: { snap: StateSnapshot; baseUrl: string; planState: Record<string, unknown> | null }) {
+  const ps = usePlanState(baseUrl, snap, planState);
   const fromPi = readCheckin(snap.todays_checkin_status);
   const [answer, setAnswer] = useState<Gi | null>(null); // the Pi's answer to our tap
   const [busy, setBusy] = useState(false);

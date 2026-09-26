@@ -111,12 +111,12 @@ export function dayLabel(iso: string | null | undefined): string {
   return m ? `${M[m - 1]} ${d}` : "";
 }
 
-/** The watch summary for a screen. The snapshot's plan_state is authoritative
- * (and live plan_state messages replace it); while the snapshot does not carry
- * it (contracts.StateSnapshot has active_plan but no plan_state field yet: FOR
- * CHRIS) and a plan is active, the same fields come from GET /api/rounds/plan. */
-export function usePlanState(base: string | null, snap: { plan_state?: unknown; active_plan?: TitrationPlan | null } | null): PlanState {
-  const fromSnap = snap?.plan_state && typeof (snap.plan_state as { active?: unknown }).active === "boolean" ? readPlanState(snap.plan_state) : null;
+/** The watch summary for a screen: the latest plan_state message when one has
+ * arrived; otherwise (contracts.StateSnapshot has active_plan but no plan_state
+ * field yet: FOR CHRIS), while a plan is active, the same fields from GET
+ * /api/rounds/plan. */
+export function usePlanState(base: string | null, snap: { active_plan?: TitrationPlan | null } | null, live: Record<string, unknown> | null): PlanState {
+  const fromSnap = live && typeof live.active === "boolean" ? readPlanState(live) : null;
   const planKey = snap?.active_plan ? JSON.stringify(snap.active_plan) : "";
   const [fetched, setFetched] = useState<PlanState | null>(null);
   useEffect(() => {

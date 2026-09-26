@@ -98,7 +98,7 @@ export default function DeviceTab() {
       {view === "Live" && <LiveView snap={snap} stale={socket.disconnectedLong} basalNudge={nudge !== "none"} onLog={() => setView("Log")} baseUrl={target.url} />}
       {view === "Live" && snap && (
         <div className="mt-4">
-          <WatchToday snap={snap} baseUrl={target.url} />
+          <WatchToday snap={snap} baseUrl={target.url} planState={socket.planState} />
         </div>
       )}
       {view === "Log" && <LogView baseUrl={target.url} settings={snap?.settings} />}

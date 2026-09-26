@@ -22,6 +22,9 @@ export interface DeviceSocket {
   recallDue: LowEvent[];
   /** bumps on every card_sent and mode change: lists of sent cards refetch */
   cardsVersion: number;
+  /** the latest plan_state message (StateSnapshot has no plan_state field yet,
+   * so the snapshot cannot carry it); null until one arrives */
+  planState: Record<string, unknown> | null;
 }
 
 /** The morning chip's list is one night's stories: a newer night replaces it,
@@ -60,8 +63,6 @@ export function applyMessage(snap: StateSnapshot | null, msg: WSMessage): StateS
       return { ...snap, family_story_status: mergeStory(snap.family_story_status, p) };
     case "pairing_state":
       return { ...snap, pairing_state: p };
-    case "plan_state":
-      return { ...snap, plan_state: p };
     case "symptom_check_due":
       // the same keys as GET /api/rounds/checkin; todays_checkin_status also carries the recalls
       return { ...snap, todays_checkin_status: { ...(snap.todays_checkin_status ?? {}), ...p } };
@@ -76,6 +77,7 @@ export function useDeviceSocket(baseUrl: string | null): DeviceSocket {
   const [snapshot, setSnapshot] = useState<StateSnapshot | null>(null);
   const [recallDue, setRecallDue] = useState<LowEvent[]>([]);
   const [cardsVersion, setCardsVersion] = useState(0);
+  const [planState, setPlanState] = useState<Record<string, unknown> | null>(null);
   const [connected, setConnected] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const downSince = useRef<number>(Date.now());
@@ -108,6 +110,8 @@ export function useDeviceSocket(baseUrl: string | null): DeviceSocket {
       if (!msg || typeof msg.type !== "string") return; // the hub's echo replies carry no type
       setSnapshot((s) => applyMessage(s, msg));
       if (msg.type === "card_sent" || msg.type === "mode_change") setCardsVersion((v) => v + 1);
+      if (msg.type === "plan_state") setPlanState(msg.payload as Record<string, unknown>);
+      else if (msg.type === "state_snapshot" || msg.type === "mode_change") setPlanState(null); // re-read for this world
       if (msg.type === "recall_due") setRecallDue(lowsFromRecallDue(msg.payload) ?? []);
       else if (msg.type === "mode_change") setRecallDue([]); // live and demo lows never mix
       else if (msg.type === "state_snapshot") {
@@ -167,6 +171,7 @@ export function useDeviceSocket(baseUrl: string | null): DeviceSocket {
     connected,
     recallDue,
     cardsVersion,
+    planState,
     disconnectedLong: !!baseUrl && !connected && now - downSince.current > DISCONNECTED_BANNER_MS,
   };
 }

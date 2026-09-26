@@ -6,8 +6,8 @@ import { GRADUATION_GREEN_WEEKS, dayLabel, getPlan, usePlanState, type Titration
 // planned steps with their start dates (a doctor's hold has already moved the
 // later dates on the Pi), where you are, and what comes next. The plan's
 // steps come from GET /api/rounds/plan (PIN), refetched on every plan_state.
-export default function StepTimeline({ snap, baseUrl }: { snap: StateSnapshot; baseUrl: string }) {
-  const ps = usePlanState(baseUrl, snap);
+export default function StepTimeline({ snap, baseUrl, planState }: { snap: StateSnapshot; baseUrl: string; planState: Record<string, unknown> | null }) {
+  const ps = usePlanState(baseUrl, snap, planState);
   const [plan, setPlan] = useState<TitrationPlan | null>(null);
   const key = JSON.stringify(ps);
 
