@@ -125,3 +125,51 @@ def test_regeneration_is_deterministic(tmp_path):
         fresh = (tmp_path / f"titration_synthetic.{ext}").read_bytes().replace(b"\r\n", b"\n")
         committed = (SCEN / f"titration_synthetic.{ext}").read_bytes().replace(b"\r\n", b"\n")
         assert fresh == committed
+
+
+# ---------------------------------------------------------------- basal_change_1 (real glucose, date-shifted)
+
+@pytest.fixture(scope="module")
+def basal():
+    return load("basal_change_1")
+
+
+def records(readings, alarms, days):
+    out = []
+    for d in days:
+        w = (datetime(d.year, d.month, d.day, 22), datetime(d.year, d.month, d.day, 7) + timedelta(days=1))
+        m = N.night_metrics(readings, alarms, w)
+        codes, src = N.classify_night(readings, None, None, None, w)
+        out.append({**m, "night_date": d, "reason_codes": codes, "code_source": src})
+    return out
+
+
+def test_basal_change_is_real_date_shifted_with_a_labeled_overlay(basal):
+    rows, readings, comp = basal
+    assert comp["kind"] == "basal_change" and comp["synthetic"] is False and comp["overlay_synthetic"] is True
+    assert readings[0]["timestamp"].year == 2021                       # shifted; the real dates never enter the repo
+    assert comp["dose_change"]["date"] == "2021-02-01" and comp["dose_change"]["new_units"] == 18
+    assert all(c["code_source"] == "inferred" for c in comp["reason_codes"].values())
+    assert None in comp["recall_answers"].values()                    # at least one "no answer"
+    assert all(a["is_demo"] for a in comp["alarm_events"])
+    sys.path.insert(0, str(ROOT / "backend"))
+    contracts = pytest.importorskip("app.contracts")
+    for a in comp["alarm_events"]:
+        contracts.AlarmEvent.model_validate(a)
+
+
+def test_basal_check_fires_in_the_week_before_the_change_and_follow_up_has_data(basal):
+    from ml.evaluate_rounds import basal_check
+    _, readings, comp = basal
+    alarms = alarms_of(comp)
+    change = datetime(2021, 2, 1).date()
+    fired = []
+    for k in range(7, -1, -1):
+        m = change - timedelta(days=k)
+        bc = basal_check(records(readings, alarms, [m - timedelta(days=j) for j in range(14, 0, -1)]))
+        assert not bc["falling"] and not bc["near_miss_high"]           # never a contradictory card
+        fired.append(bc["rising"])
+    assert fired[:5] == [True] * 5                                      # the Detect mornings, 2021-01-25..29
+    for days in (range(0, 7), range(0, 14)):
+        v, _ = N.standing_window(records(readings, alarms, [change + timedelta(days=k) for k in days]), [], [])
+        assert v["clean_nights"] >= 3                                   # Follow-up has enough data on each side

@@ -219,6 +219,118 @@ def _titration_companion(rows: list[dict]) -> dict:
     }
 
 
+# ---------------------------------------------------------------- 7b: basal-change windows (real, date-shifted)
+
+TARGET_CHANGE = date(2021, 2, 1)   # where a change lands after the shift; the real date and the offset never enter the repo
+SIDE_NIGHTS = 14
+EXTRA_BEFORE = 7                   # a week more before, so every morning of the last week has a full 14-night Basal Check window
+RETRAIN_PAD = (timedelta(minutes=35), timedelta(minutes=65))   # no training row whose label or window touches the scenario
+
+
+def _confirmed_change(n: int, data: Path) -> tuple[date, float | None]:
+    """The n-th CONFIRMED change in ml/data/therapy_changes.txt (gitignored)."""
+    import re
+
+    rows = []
+    for line in (data / "therapy_changes.txt").read_text().splitlines():
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        parts = line.split()
+        if parts[2].upper().startswith("INFERRED"):
+            continue
+        m = re.search(r"units=(\d+(?:\.\d+)?)", line)
+        rows.append((date.fromisoformat(parts[0]), float(m.group(1)) if m else None))
+    return sorted(rows)[n - 1]
+
+
+def basal_change(n: int, data: Path) -> tuple[list[dict], dict, dict]:
+    """14 nights before and 14 after confirmed change n, date-shifted so the
+    change lands on TARGET_CHANGE. Alarm events come from a forecaster
+    RETRAINED WITHOUT this window (george.md step 6.4), replayed through the
+    warning rule at 85; their response side (acks, escalation, presence) and
+    the recall answers are a labeled SYNTHETIC overlay."""
+    import pandas as pd
+    import xgboost  # noqa: F401  (fail early if missing)
+
+    from ml.events import forecasts, replay_events
+    from ml.label_history import alarm_events_from_replay
+    from ml.models import nights as N
+    from ml.models.features import drop_collisions
+    from ml.models.predict import PREDICTED_LOW_THRESHOLD
+    from ml.train import fit, forecaster
+
+    change, units = _confirmed_change(n, data)
+    c0 = datetime(change.year, change.month, change.day)
+    lo = c0 - timedelta(days=SIDE_NIGHTS + EXTRA_BEFORE) + timedelta(hours=12)   # noon before the first night
+    hi = c0 + timedelta(days=SIDE_NIGHTS, hours=10)                    # 10:00 after the last night
+    shift = datetime(TARGET_CHANGE.year, TARGET_CHANGE.month, TARGET_CHANGE.day) - c0
+
+    clean = pd.read_csv(data / "clean.csv", parse_dates=["timestamp"]).sort_values("timestamp", ignore_index=True)
+    ts_all = clean.timestamp.to_numpy("datetime64[s]")
+    keep = drop_collisions(ts_all.astype(np.int64))
+    ts, x = ts_all[keep], clean.mgdl.to_numpy(float)[keep]
+
+    rows_ds = pd.read_csv(data / "dataset.csv", parse_dates=["timestamp"])
+    excl = (rows_ds.timestamp >= lo - RETRAIN_PAD[0]) & (rows_ds.timestamp <= hi + RETRAIN_PAD[1])
+    booster, info = fit(rows_ds[~excl])
+    preds = forecasts(ts, x, forecaster(booster))
+
+    a, b = np.searchsorted(ts, np.datetime64(lo, "s")), np.searchsorted(ts, np.datetime64(hi, "s"))
+    t_win, x_win, p_win = ts[a:b], x[a:b], preds[a:b]
+    rep_ = replay_events(t_win, x_win, p_win, threshold=PREDICTED_LOW_THRESHOLD)
+
+    shifted = [pd.Timestamp(t).to_pydatetime() + shift for t in t_win]
+    rows, prev = [], None
+    for t, v in zip(shifted, x_win):
+        v = int(round(v))
+        rows.append({"timestamp": t.isoformat(), "glucose_mgdl": v, "trend": _trend(prev, (t, v))})
+        prev = (t, v)
+    readings = [{"timestamp": t, "glucose_mgdl": float(v)} for t, v in zip(shifted, x_win)]
+
+    rng = np.random.default_rng(n)
+    alarms = []
+    for e in alarm_events_from_replay(rep_):
+        st = e["started_at"] + shift
+        delay = float(rng.choice([1.5, 2, 3, 4, 7]))           # overlay: minutes to acknowledge
+        alarms.append({"event_id": f"demo-bc{n}-{e['tier'][:4]}-{st:%Y%m%dT%H%M%S}", "tier": e["tier"],
+                       "started_at": st.isoformat(),
+                       "acknowledged_at": (st + timedelta(minutes=delay)).isoformat(),
+                       "ack_source": "device" if rng.random() < 0.8 else "app",
+                       "escalated": delay > 5, "rearm_count": 0, "crossed_actual": e["crossed_actual"],
+                       "presence_during": "home", "is_demo": True})
+
+    first_night = TARGET_CHANGE - timedelta(days=SIDE_NIGHTS + EXTRA_BEFORE)
+    codes, lows = {}, []
+    for k in range(2 * SIDE_NIGHTS + EXTRA_BEFORE):
+        d = first_night + timedelta(days=k)
+        win = (datetime(d.year, d.month, d.day, 22), datetime(d.year, d.month, d.day, 7) + timedelta(days=1))
+        cc, src = N.classify_night(readings, None, None, None, win)
+        codes[d.isoformat()] = {"codes": cc, "code_source": src}
+        lows += N.low_events(readings, None, [], win)
+    answers = ["felt_and_treated", "woke_no_symptoms", "dont_remember"]
+    recall = {e["low_event_id"]: (None if k == len(lows) - 1 else answers[k % len(answers)])
+              for k, e in enumerate(lows)}                    # the last low is left unanswered: "no answer"
+
+    companion = {
+        "scenario": f"basal_change_{n}",
+        "kind": "basal_change",
+        "synthetic": False,
+        "overlay_synthetic": True,
+        "night_window": {"start": "22:00", "end": "07:00"},
+        "reason_codes": codes,
+        "plan": None,
+        "dose_change": {"date": TARGET_CHANGE.isoformat(), "insulin": "basal", "new_units": units},
+        "symptom_checks": [],
+        "injections": [],
+        "recall_answers": recall,
+        "alarm_events": sorted(alarms, key=lambda e: e["started_at"]),
+    }
+    summary = {"train_rows": info["rows"], "rounds": info["rounds"], "lows": len(lows),
+               "warnings": sum(e["tier"] == "predicted_low" for e in alarms),
+               "near_miss_candidates": sum(e["tier"] == "predicted_low" and not e["crossed_actual"] for e in alarms)}
+    return rows, companion, summary
+
+
 def write(out: Path, name: str, rows: list[dict], companion: dict) -> None:
     out.mkdir(parents=True, exist_ok=True)
     with (out / f"{name}.csv").open("w", newline="") as f:
@@ -231,14 +343,27 @@ def write(out: Path, name: str, rows: list[dict], companion: dict) -> None:
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--out", default="demo/scenarios")
-    p.add_argument("--only", choices=["titration"], default="titration")
+    p.add_argument("--only", choices=["all", "titration", "basal"], default="all")
+    p.add_argument("--data", default="ml/data", help="raw-data folder (gitignored); only the real scenarios need it")
     args = p.parse_args()
     out = Path(args.out)
-    rows, comp = titration()
-    write(out, "titration_synthetic", rows, comp)
-    print(f"titration_synthetic (SYNTHETIC): {len(rows)} readings, {len(comp['reason_codes'])} nights,"
-          f" {len(comp['alarm_events'])} alarm events, {len(comp['symptom_checks'])} symptom checks,"
-          f" {len(comp['injections'])} injections -> {out}")
+    if args.only in ("all", "titration"):
+        rows, comp = titration()
+        write(out, "titration_synthetic", rows, comp)
+        print(f"titration_synthetic (SYNTHETIC): {len(rows)} readings, {len(comp['reason_codes'])} nights,"
+              f" {len(comp['alarm_events'])} alarm events, {len(comp['symptom_checks'])} symptom checks,"
+              f" {len(comp['injections'])} injections -> {out}")
+    if args.only in ("all", "basal"):
+        data = Path(args.data)
+        if not (data / "therapy_changes.txt").exists():
+            print(f"basal_change_1: skipped ({data / 'therapy_changes.txt'} not here: real scenarios build only where the raw data lives)")
+            return
+        rows, comp, s = basal_change(1, data)
+        write(out, "basal_change_1", rows, comp)
+        print(f"basal_change_1 (real glucose, date-shifted; overlay SYNTHETIC): {len(rows)} readings,"
+              f" {len(comp['reason_codes'])} nights, {s['lows']} nocturnal lows, {s['warnings']} warnings"
+              f" ({s['near_miss_candidates']} did not cross); forecaster retrained without the window"
+              f" ({s['train_rows']} rows, {s['rounds']} rounds) -> {out}")
 
 
 if __name__ == "__main__":

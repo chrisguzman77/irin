@@ -10,6 +10,17 @@
   3 of 5); step 1 stays green. Regenerate with `python -m demo.make_scenarios`;
   ml/tests/test_scenarios.py locks every number. (The plan said "about 3 weeks"; with
   4-week steps the baseline, step 1, and step 2 days 3-7 take 49 days.)
+- `basal_change_1.csv` + `.json` (George, step 7.2): REAL glucose around Chris's first
+  confirmed basal increase, date-shifted so the change lands on 2021-02-01 (the real
+  date and the offset stay off-repo): 21 nights before, 14 after. Reason codes are
+  inferred; alarm events come from forecast_v1 RETRAINED WITHOUT this window (leakage
+  guard, george.md step 6.4), replayed at 85; acks, escalation, presence, and recall
+  answers are a SYNTHETIC overlay (`overlay_synthetic: true`), and the one nocturnal low
+  is left unanswered. Basal Check fires every morning 2021-01-25..29 (8-9 clean nights,
+  median rise +84 to +93, 75-78% rising); the Follow-up has 6 clean nights in days 1-7
+  (still rising, +78.5) and 11 in days 1-14 (flat, +2). `dose_change.new_units` = 18 was
+  given by George; whether it is Chris's real dose is unconfirmed, so say "units
+  illustrative" until he confirms.
 - `the_save.csv` is a
 placeholder the skeleton generated (timestamps start 2020-01-01, obviously
 fake): 8 hours of 5-minute readings, in range overnight, sliding to about

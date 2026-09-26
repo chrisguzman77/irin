@@ -12,11 +12,19 @@ TBD
 ### 2. Detect
 Say it this way, never unqualified: glucose real; reason codes inferred and labeled; acknowledge, presence, and recall data are a labeled overlay.
 
+Scenario `basal_change_1`, seek to the morning of 2021-01-25 (numbers computed by
+ml/models/nights.py from the scenario, not chosen): Basal Check fires on 8 clean nights
+of 14, median overnight rise +89 mg/dL, 75% of clean nights rising; 6 excluded nights
+listed with their inferred reasons. It fires every morning through 2021-01-29.
+
 ### 3. Decide
 TBD
 
 ### 4. Verify
-TBD
+Same scenario, after the confirmed change on 2021-02-01 (18 units; say "units
+illustrative" unless Chris confirms they are his): the Follow-up at days 1-7 still shows
+rising nights (+78.5 on 6 clean nights); at days 1-14 the overnight rise is flat (+2 on 11
+clean nights). Say it as "since the change", never "the change caused".
 
 ### 5. The therapy start
 TBD
