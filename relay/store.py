@@ -53,7 +53,7 @@ def ensure_indexes() -> None:
     db()["cards"].create_index([("recipient_id", ASCENDING), ("created_at", ASCENDING)], name="inbox")
     db()["cards"].create_index([("card_id", ASCENDING)], name="card_id")
     db()["messages"].create_index([("device_id", ASCENDING), ("status", ASCENDING)], name="device_poll")
-    db()["audit"].create_index([("at", ASCENDING)], name="at")
+    db()["audit"].create_index([("at", ASCENDING)], expireAfterSeconds=30 * 24 * 3600, name="ttl_audit")
 
 
 def status() -> str:

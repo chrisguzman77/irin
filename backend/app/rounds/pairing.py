@@ -55,9 +55,9 @@ class RelayPairing:
         except httpx.HTTPError as e:
             raise PairingError(502, f"relay unreachable ({type(e).__name__})")
 
-    def register(self, token: str, device_pk: str, is_demo: bool, peer_kind: str) -> None:
+    def register(self, token: str, device_pk: str, is_demo: bool, peer_kind: str, device_id: str = "") -> None:
         r = self._call("POST", "/v0/pair", json={"token": token, "device_pk": device_pk, "is_demo": is_demo,
-                                                  "peer_kind": peer_kind})
+                                                  "peer_kind": peer_kind, "device_id": device_id})
         if r.status_code != 200:
             raise PairingError(502, f"relay refused the pairing token ({r.status_code})")
 
@@ -156,7 +156,7 @@ class PairingService:
             token = secrets.token_hex(16)  # 128 bits, single use
             now = clock.now()
             demo = self.is_demo()
-            self.relay.register(token, self.device_pk, demo, peer_kind)
+            self.relay.register(token, self.device_pk, demo, peer_kind, self.device_id)
             ttl = TOKEN_TTL * clock.speed  # 10 wall minutes whatever the replay speed
             self.pending = PendingPairing(token=token, peer_kind=peer_kind, is_demo=demo, started_at=now,
                                           expires_at=now + ttl)

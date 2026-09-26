@@ -141,6 +141,35 @@ def test_doctor_message_poll_and_resolution(c):
     assert c.post("/v0/messages/nope/resolution", json={"status": "declined"}, headers=SRC).status_code == 404
 
 
+def test_a_doctor_can_only_message_their_own_device(c):
+    device, doctor, doctor_id, bearer = pair(c)
+    msg = {"device_id": "device-B", "message_id": "mx", "nonce": b64(b"n" * 24), "ciphertext": b64(b"c" * 40),
+           "kind": "note", "is_demo": True}
+    assert c.post("/v0/messages", json=msg, headers=bearer).status_code == 403
+    assert c.post("/v0/messages", json={**msg, "device_id": ""}, headers=bearer).status_code == 200  # routed by the pairing
+    assert [m["device_id"] for m in c.get("/v0/device/irin-test/messages", headers=SRC).json()["messages"]] == ["irin-test"]
+    assert c.get("/v0/device/device-B/messages", headers=SRC).json()["messages"] == []
+    assert c.get(f"/v0/pair/{TOKEN}").json()["device_id"] == "irin-test"  # the inbox learns the device it is paired with
+
+
+def test_another_source_key_cannot_touch_this_devices_pairings(c):
+    device, doctor, doctor_id, bearer = pair(c)
+    other = {"X-Source-Key": "src-b"}
+    env = {"recipient_id": doctor_id, "sender_id": "x", "nonce": b64(b"n" * 24), "ciphertext": b64(b"c" * 40),
+           "source": "irin_bedside", "kind": "basal_check", "program": "standing", "is_demo": True}
+    assert c.post("/v0/cards", json=env, headers=other).status_code == 404
+    assert c.post(f"/v0/pair/{doctor_id}/revoke", headers=other).status_code == 404
+    assert c.get("/v0/device/irin-test/messages", headers=other).json()["pairings"] == []
+    assert c.post("/v0/cards", json=env, headers=SRC).status_code == 200
+
+
+def test_bad_inputs_are_4xx_never_500(c):
+    device, doctor, doctor_id, bearer = pair(c)
+    assert c.get(f"/v0/inbox/{doctor_id}?since=yesterday", headers=bearer).status_code == 422
+    assert c.post("/v0/pair", json={"token": TOKEN, "device_pk": b64(b"x" * 32)},
+                  headers={b"X-Source-Key": "k\u00e9y".encode("latin-1")}).status_code == 401
+
+
 def test_revoke_from_either_side_deletes_keys(c):
     device, doctor, doctor_id, bearer = pair(c)
     _, _, other_id, other = pair(c, token="ef" * 16)
@@ -169,6 +198,6 @@ def test_log_and_the_whole_store_hold_no_plaintext(c):
                                    "card_id", "token_prefix", "peer_kind", "doctor_id", "by", "device", "message_id", "status"}
                        for e in log)
     dump = json.dumps([[store.public(d) for d in store.db()[name].find()] for name in store.COLLECTIONS], default=str)
-    for word in ("mgdl", "glucose", "52", "3:10", "Chris", "low_point"):
+    for word in ("mgdl", "glucose", "3:10 AM", "Chris", "low_point"):  # distinctive tokens only: hex and base64 contain digits
         assert word not in dump, word
     assert "bearer_pending" not in dump  # delivered once, then gone

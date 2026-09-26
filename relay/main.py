@@ -46,16 +46,11 @@ app = FastAPI(title="Irin relay API", version="0.1.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[f"https://{DOMAIN}", f"https://doctor.{DOMAIN}", f"https://watch.{DOMAIN}",
-                   f"https://family.{DOMAIN}", "http://localhost:5173", "http://localhost:8080"],
+                   f"https://family.{DOMAIN}", "http://localhost:5173", "http://localhost:8080", "http://localhost"]
+                  + [o for o in os.environ.get("RELAY_EXTRA_ORIGINS", "").split(",") if o],  # the laptop fallback
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-def require_source_key(x_source_key: str | None = Header(default=None, alias="X-Source-Key")) -> str:
-    if not x_source_key or x_source_key not in RELAY_SOURCE_KEYS:
-        raise HTTPException(status_code=401, detail="bad source key")
-    return x_source_key
 
 
 def _stub(step: str):

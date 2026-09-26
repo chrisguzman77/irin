@@ -33,6 +33,7 @@ class FakeRelay:
             path = request.url.path
             if path == "/v0/pair" and request.method == "POST":
                 body = json.loads(request.content)
+                assert body["device_id"]  # the relay routes messages and revokes by it
                 self.tokens[body["token"]] = {"status": "pending", **body}
                 return httpx.Response(200, json={"ok": True})
             if path.startswith("/v0/pair/") and path.endswith("/confirm"):
