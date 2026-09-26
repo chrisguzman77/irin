@@ -1,0 +1,134 @@
+{
+  "card_id": "standing:basal_check:2020-01-01:2020-01-14",
+  "schema_version": "0",
+  "program": "standing",
+  "kind": "basal_check",
+  "status": "amber",
+  "flags": [
+    "rise_high"
+  ],
+  "confidence": {
+    "clean_nights": "inferred",
+    "rise_median_clean": "inferred",
+    "same_direction_share": "inferred",
+    "near_misses": "measured",
+    "escalated_warnings": "measured",
+    "rearms": "measured",
+    "median_ack_min": "measured",
+    "nocturnal_lows": "measured",
+    "answered": "reported",
+    "unfelt_lows": "reported",
+    "no_answer": "reported",
+    "unfelt_low_rate": "reported",
+    "inferred_unfelt_unanswered": "inferred"
+  },
+  "source": "irin_bedside",
+  "patient_pseudonym": "Patient 7",
+  "plan_id": null,
+  "step_index": null,
+  "period_start": "2020-01-01",
+  "period_end": "2020-01-14",
+  "headline": "8 clean nights of 14; median overnight rise +42 mg/dL, 6 of 8 in the same direction.",
+  "metrics": {
+    "nights": 14,
+    "clean_nights": 8,
+    "rise_median_clean": 42.0,
+    "same_direction_share": 0.75,
+    "near_misses": 1,
+    "escalated_warnings": 0,
+    "rearms": 0,
+    "median_ack_min": 1.5,
+    "nocturnal_lows": 1,
+    "answered": 1,
+    "unfelt_lows": 0,
+    "no_answer": 0,
+    "unfelt_low_rate": 0.0,
+    "inferred_unfelt_unanswered": 0,
+    "excluded_nights": [
+      {
+        "night_date": "2020-01-03",
+        "reasons": [
+          "late_meal"
+        ]
+      },
+      {
+        "night_date": "2020-01-05",
+        "reasons": [
+          "stale"
+        ]
+      },
+      {
+        "night_date": "2020-01-06",
+        "reasons": [
+          "late_meal"
+        ]
+      },
+      {
+        "night_date": "2020-01-08",
+        "reasons": [
+          "treated_low"
+        ]
+      },
+      {
+        "night_date": "2020-01-10",
+        "reasons": [
+          "stale"
+        ]
+      },
+      {
+        "night_date": "2020-01-12",
+        "reasons": [
+          "late_meal"
+        ]
+      }
+    ]
+  },
+  "nights": [
+    {
+      "night_date": "2020-01-01",
+      "reason_codes": [
+        "clean"
+      ],
+      "code_source": "inferred",
+      "rise_mgdl": 40.0,
+      "low_point_mgdl": 98.0,
+      "coverage_pct": 94.4
+    },
+    {
+      "night_date": "2020-01-02",
+      "reason_codes": [
+        "clean"
+      ],
+      "code_source": "inferred",
+      "rise_mgdl": 45.0,
+      "low_point_mgdl": 104.0,
+      "coverage_pct": 100.0
+    },
+    {
+      "night_date": "2020-01-03",
+      "reason_codes": [
+        "late_meal"
+      ],
+      "code_source": "inferred",
+      "rise_mgdl": 61.0,
+      "low_point_mgdl": 130.0,
+      "coverage_pct": 98.6
+    }
+  ],
+  "excluded_counts": {
+    "late_meal": 3,
+    "stale": 2,
+    "treated_low": 1
+  },
+  "tolerance_days": [],
+  "narrative": "Eight clean nights of fourteen. On the clean nights the median overnight rise was 42 mg/dL, and 6 of 8 rose in the same direction. Six nights were left out (3 late meals, 2 sensor gaps, 1 treated low); their reasons are inferred from the trace, not logged.",
+  "allowed_actions": [
+    "adjust_basal",
+    "schedule_visit",
+    "ask_patient",
+    "dismiss"
+  ],
+  "resource_categories": [],
+  "is_demo": true,
+  "generated_at": "2020-01-15T07:05:00"
+}

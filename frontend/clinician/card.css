@@ -1,5 +1,3 @@
-@import "tailwindcss";
-
 /* Clinical Signal Card v0 — ONE design for the app's Rounds tab (R3, "What my
    doctor sees") and the clinician inbox (R5). This block is kept IDENTICAL in
    frontend/app/src/index.css and frontend/clinician/card.css so both render

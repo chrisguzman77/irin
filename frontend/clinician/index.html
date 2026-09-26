@@ -3,13 +3,25 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Irin Rounds — clinician inbox (mock Ascend)</title>
+  <title>Irin Rounds Inbox</title>
   <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="card.css">
 </head>
 <body>
-  <h1>Irin Rounds — clinician inbox (mock Ascend)</h1>
-  <p class="badge">placeholder — Justin owns the looks</p>
-  <pre id="out">loading config…</pre>
+  <header class="top">
+    <h1>Irin Rounds <span class="muted">· inbox</span></h1>
+    <span class="mock">mock Ascend</span>
+  </header>
+  <main>
+    <p class="note">Pairing and the live inbox arrive with the relay. Until then this page previews the two sample cards.</p>
+    <div class="tabs" role="tablist">
+      <button type="button" data-fixture="standing" aria-pressed="true">Basal Check (Standing)</button>
+      <button type="button" data-fixture="step" aria-pressed="false">Step check (Step Watch)</button>
+    </div>
+    <div id="card"></div>
+    <pre id="out" hidden></pre>
+  </main>
+  <footer class="foot">Irin Rounds: a mock clinician inbox for the hackathon demo, not a medical device.</footer>
   <script type="module" src="inbox.js"></script>
 </body>
 </html>
