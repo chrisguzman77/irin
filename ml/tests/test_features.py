@@ -125,3 +125,34 @@ def test_latest_window_matches_training_windows_on_every_prefix():
             np.testing.assert_array_equal(got, w[i])
         else:
             assert got is None
+
+
+def test_latest_window_with_exactly_history_min_matches_training():
+    # the documented contract, not a generous prefix: readings dropped 55-90 min
+    # back (the reviewer's case) must not change what the Pi builds
+    from ml.models.features import HISTORY_MIN
+
+    rng = np.random.default_rng(7)
+    steps = rng.choice([5, 5, 5, 5, 5, 10, 15, 20, 30, 45], size=600)
+    mins = np.cumsum(steps) + rng.uniform(-0.3, 0.3, 600)
+    ts = (mins * 60).astype(np.int64)
+    x = rng.uniform(50, 300, 600)
+    keep, gslot, stretch = grid_slots(ts)
+    assert keep.all()
+    w, ok = slot_windows(gslot, stretch, x)
+    assert ok.sum() > 100 and (np.isnan(w[ok]).any(axis=1)).sum() > 20
+    for i in range(len(ts)):
+        lo = np.searchsorted(ts, ts[i] - HISTORY_MIN * 60)
+        got = latest_window(ts[lo:i + 1], x[lo:i + 1])
+        if ok[i]:
+            np.testing.assert_array_equal(got, w[i])
+        else:
+            assert got is None
+
+
+def test_repeated_newest_reading_still_forecasts():
+    mins = [5 * i for i in range(20)]
+    ts = np.asarray(mins + [mins[-1]], dtype=np.int64) * 60          # the last poll returned the same reading twice
+    x = np.full(len(ts), 120.0)
+    got = latest_window(ts, x)
+    assert got is not None and not np.isnan(got).any()

@@ -15,7 +15,7 @@
     90.0
   ],
   "hour": 3.5,
-  "expected": 75.87274932861328,
+  "expected": 75.95317077636719,
   "xgboost": "3.4.1",
   "quantile": 0.2,
   "note": "SYNTHETIC window; predict(window with None -> NaN, hour) must return expected within 1e-3"

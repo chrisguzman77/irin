@@ -194,3 +194,18 @@ def test_forecastable_window_is_40_to_10_min_inclusive():
     assert not forecastable([11, 18])        # -45 is outside
     assert not forecastable([12, 19])        # -5 is outside
     assert not forecastable([18])            # one forecast is not enough
+
+
+def test_warning_stays_on_through_missing_forecasts_and_recovery_count_resets():
+    # the rule Chris confirmed: no forecast leaves a warning on; it clears only on
+    # 2 CONSECUTIVE forecasts back above, and a gap in between restarts that count
+    x = np.array([100.0] * 30)
+    p = np.full(30, np.nan)
+    p[5], p[6] = 60.0, 60.0                  # warning starts at reading 6
+    p[10] = 100.0                            # one above ...
+    p[14] = 100.0                            # ... a gap ... one above: not 2 in a row
+    p[20], p[21] = 100.0, 100.0              # 2 consecutive above: clears at 21
+    rep = replay_events(times(grid(30)), x, p)
+    assert len(rep["warnings"]) == 1
+    w = rep["warnings"][0]
+    assert w["i"] == 6 and w["end"] == "cleared" and w["end_i"] == 21

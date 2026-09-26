@@ -157,7 +157,7 @@ def main() -> None:
 
     artifacts = load_flags(data / "review_flags.csv")       # step 3.6: Chris's flags, held-out lows only
     print(f"\nSTEP 3.6 REVIEW: {len(artifacts)} held-out low(s) flagged as sensor artifacts"
-          f" (excluded from the HELD-OUT denominator only; training data untouched)")
+          f" (excluded from the held-out and rolling-fold denominators; training data untouched)")
     base_preds = {name: forecasts(ts, x, f) for name, f in BASELINES.items()}
     full = score(ts, x, base_preds)
 
@@ -186,7 +186,7 @@ def main() -> None:
         print(f"  {name:<16} {m['mae']:5.2f}   {_num(m['mae_lt100'], '5.2f')}          {m['no_forecast']}")
 
     two = {n: base_preds[n] for n in ("B linear 15m", "C weighted ROC")}
-    folds = score(ts, x, {**two, MODEL: pooled}, start=starts[0].to_datetime64())
+    folds = score(ts, x, {**two, MODEL: pooled}, start=starts[0].to_datetime64(), exclude=artifacts)
     held = score(ts, x, {**base_preds, MODEL: pooled}, start=split.to_datetime64(), exclude=artifacts)
     held_all = score(ts, x, {"B linear 15m": base_preds["B linear 15m"], MODEL: pooled}, start=split.to_datetime64())
 

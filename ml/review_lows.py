@@ -8,9 +8,9 @@ treatment). Flagged lows leave the evaluation denominator (evaluate.py reads
 the file); training data stays untouched. An existing flags file is never
 overwritten, so Chris's answers survive a rerun.
 
-Prints summaries only: low number, hour, outcome, and shape measures that
-help spot artifacts. Real dates appear only in the gitignored plots and the
-flags file on this laptop."""
+Prints summaries only: low number, night or day, outcome, lead, and a yes/no
+"fast recovery" hint. Times, values, and dates appear only in the gitignored
+plots and the flags file on this laptop."""
 
 from __future__ import annotations
 
@@ -20,13 +20,14 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from ml.events import LOW, forecasts, local_hours, replay_events
+from ml.events import LOW, forecasts, replay_events
 from ml.models.features import drop_collisions
 from ml.train import MODELS, forecaster, holdout_start
 
 THRESHOLD = 85.0          # the shipped operating point (metrics.md, checkpoint 4)
 BEFORE_MIN, AFTER_MIN = 180, 120
 FLAG_COLS = ["low_id", "crossing", "outcome", "flag_artifact", "note"]
+FAST_RECOVERY = 4.0      # mg/dL/min: about the fastest real glucose moves (george.md step 1)
 
 
 def shape(ts: np.ndarray, x: np.ndarray, i: int) -> dict:
@@ -117,17 +118,15 @@ def main() -> None:
     out_dir = data / "processed" / "review_lows"
     records = []
     print(f"HELD-OUT LOWS: {len(lows)} (model = forecast_v1.json, warning threshold {THRESHOLD:.0f})")
-    print("  id  night  hour  outcome   lead   nadir  min<70  fall 15m before  rise 15m after nadir  fcst")
+    print("  id  night  outcome   lead  fast recovery (> 4 mg/dL/min after the lowest reading)")
     for k, low in enumerate(lows, 1):
         sh = shape(ts, x, low["i"])
-        hour = local_hours(np.array([low["time"]]))[0]
         name = f"low_{k:02d}.png"
         plot_low(out_dir / name, ts, x, preds, low,
                  f"held-out low {k}  ({'night' if low['night'] else 'day'}, {low['outcome']})")
-        fmt = lambda v, f: "   -  " if v is None else format(v, f)  # noqa: E731
-        print(f"  {k:2d}  {'yes' if low['night'] else 'no ':3}  {hour:5.1f}  {low['outcome']:<8} {fmt(low['lead_min'], '5.1f')}"
-              f"  {sh['nadir']:5.0f}  {sh['min_below_70']:6.0f}  {fmt(sh['fall_15_before'], '+6.2f')} /min"
-              f"        {fmt(sh['rise_15_after_nadir'], '+6.2f')} /min       {'yes' if low['forecastable'] else 'no'}")
+        lead = "   -" if low["lead_min"] is None else f"{low['lead_min']:4.0f}"
+        fast = sh["rise_15_after_nadir"] is not None and sh["rise_15_after_nadir"] > FAST_RECOVERY
+        print(f"  {k:2d}  {'yes' if low['night'] else 'no ':5}  {low['outcome']:<8} {lead}  {'yes' if fast else 'no'}")
         records.append({"low_id": k, "crossing": str(pd.Timestamp(low["time"])), "outcome": low["outcome"],
                         "flag_artifact": "", "note": ""})
 

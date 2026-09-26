@@ -10,8 +10,8 @@ save ONLY ml/models/forecast_v1.json (never a pickle) with the pinned xgboost
 version, plus forecast_v1_check.json: one fixed SYNTHETIC window and the value
 predict() must return for it, so the Pi can prove it loads the same model.
 
-Training never sees the evaluation period: train rows end 30 min before the
-split (a row's label sits 30 min after it), and early stopping uses the last
+Training never sees the evaluation period: train rows end 35 min before the
+split (a row's label sits up to 32.3 min after it), and early stopping uses the last
 4 weeks of the TRAIN period, never the held-out weeks. Prints summaries only."""
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ import pandas as pd
 from ml.models.features import FEATURE_NAMES, WINDOW_LEN, features
 
 HOLDOUT_DAYS = 56
-PURGE = pd.Timedelta(minutes=30)
+PURGE = pd.Timedelta(minutes=35)   # labels land 27.5-32.3 min after t (slot rounding); 35 covers the longest
 VAL_DAYS = 28
 PARAMS = {
     "objective": "reg:quantileerror",
@@ -56,7 +56,7 @@ def holdout_start(ts: pd.Series) -> pd.Timestamp:
 
 def rows_before(rows: pd.DataFrame, start: pd.Timestamp) -> pd.DataFrame:
     """Training rows for a model evaluated from `start` on: each row's label
-    (t + 30 min) must land before `start`."""
+    (27.5-32.3 min after t) must land before `start`, hence a 35-min purge."""
     return rows[rows.timestamp < start - PURGE]
 
 
@@ -117,9 +117,11 @@ def main() -> None:
     expected = float(CHECK_WINDOW[-1] + booster.predict(xgb.DMatrix(x))[0])
 
     # Round trip through predict.py exactly as the Pi will call it.
+    import importlib
+
     from ml.models import predict as predict_mod
 
-    predict_mod._model = None
+    predict_mod = importlib.reload(predict_mod)              # predict.py loads the model at import
     got = predict_mod.predict(CHECK_WINDOW, CHECK_HOUR)
     check = {"window": [None if np.isnan(v) else v for v in np.asarray(CHECK_WINDOW, dtype=float)],
              "hour": CHECK_HOUR, "expected": expected, "xgboost": xgb.__version__, "quantile": info["quantile"],

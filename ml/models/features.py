@@ -39,6 +39,11 @@ HORIZON_SLOTS = 6     # the label sits 30 min (6 slots) after t
 GAP_MIN = 30          # an interval longer than this is a gap (step 1) and splits stretches
 MAX_EMPTY_SLOTS = 5   # 5 empty slots in a row = readings 30 min apart, still not a gap
 STRETCH_JUMP = 2 * WINDOW_LEN   # slot offset between stretches: no window or label spans two
+# How much history latest_window needs to rebuild the training window exactly:
+# the reading that fills the oldest slot can sit up to 60 + 2.5 (slot rounding)
+# min back, and the reading before it up to 30 min further (a longer interval
+# is a gap). 60 + 2.5 + 30 = 92.5; 100 leaves margin for a collision pair.
+HISTORY_MIN = 100
 
 
 def _hours(hhmm: str) -> float:
@@ -54,9 +59,16 @@ def slots_between(dt_seconds: np.ndarray) -> np.ndarray:
 
 def drop_collisions(ts_sec: np.ndarray) -> np.ndarray:
     """Keep-mask removing BOTH readings of any pair less than half a slot apart
-    (they cannot share one grid slot, and neither is the right one to keep)."""
+    (they cannot share one grid slot, and neither is the right one to keep).
+    An EXACT duplicate timestamp (a repeated poll or row) is the same reading,
+    not a collision: the first copy is kept, the rest dropped.
+    Known, rare skew: a reading is dropped when the NEXT reading arrives within
+    2.5 min, so training and the replay drop it after the fact while the Pi,
+    at that moment, has already forecast from it."""
     ts_sec = np.asarray(ts_sec, dtype=np.int64)
     keep = np.ones(len(ts_sec), dtype=bool)
+    if len(ts_sec) > 1:
+        keep[1:] = np.diff(ts_sec) != 0
     while True:
         idx = np.flatnonzero(keep)
         close = slots_between(np.diff(ts_sec[idx])) == 0
@@ -128,14 +140,20 @@ def slot_windows(gslot: np.ndarray, stretch: np.ndarray, values: np.ndarray) -> 
 
 def latest_window(ts_sec: np.ndarray, values: np.ndarray) -> np.ndarray | None:
     """The Pi's entry point: recent readings (sorted, POSIX seconds; pass at
-    least the last 75 min) -> the (13,) slot window ending on the newest
+    least the last HISTORY_MIN = 100 min) -> the (13,) slot window ending on the newest
     reading, or None when there is no forecast (window not usable). The same
     grid_slots + slot_windows lines training runs. Staleness of the newest
     reading is the backend's rule, not this function's."""
+    ts_sec = np.asarray(ts_sec, dtype=np.int64)
+    values = np.asarray(values, dtype=float)
+    n = len(ts_sec)
+    while n > 1 and ts_sec[n - 1] == ts_sec[n - 2]:          # a repeated newest reading is the same reading
+        n -= 1
+    ts_sec, values = ts_sec[:n], values[:n]
     keep, gslot, stretch = grid_slots(ts_sec)
     if not keep[-1:].all() or len(gslot) == 0:
         return None
-    windows, ok = slot_windows(gslot, stretch, np.asarray(values, dtype=float)[keep])
+    windows, ok = slot_windows(gslot, stretch, values[keep])
     return windows[-1] if ok[-1] else None
 
 
