@@ -39,7 +39,8 @@ BASAL_NIGHTS = 14
 BASAL_MIN_CLEAN = 5
 BASAL_RISE = 30.0               # fires beyond +/-30 (+30 does not fire, +31 does)
 BASAL_SHARE = 0.70
-BASAL_NEAR_MISSES = 3           # "possibly too high" direction
+BASAL_NEAR_MISSES = 5           # "possibly too high" direction; 3 -> 5 at checkpoint 6 (George + Chris):
+                                # the 85 warning makes ~0.2 false warnings/night, ~2.8 per 14 nights by design
 STEP_DAYS = 5
 BASELINE_NIGHTS = 14
 BASELINE_MIN = 5
