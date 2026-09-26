@@ -11,8 +11,8 @@ from datetime import date, datetime
 from pathlib import Path
 
 from .config import config
-from .contracts import (AlarmEvent, FamilyStory, LowEvent, MorningReport, NightRecord, Pairing, PresenceState, Reading,
-                        SignalCard, Treatment)
+from .contracts import (AlarmEvent, FamilyStory, LowEvent, LowEventRecall, MorningReport, NightRecord, Pairing,
+                        PresenceState, Reading, SignalCard, Treatment)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS readings (
@@ -416,3 +416,25 @@ def select_cards(limit: int = 100, conn: sqlite3.Connection | None = None) -> li
     docs = [json.loads(r["json"]) for r in rows]
     docs.sort(key=lambda d: d["stored_at"], reverse=True)
     return docs[:limit]
+
+
+# --- morning recall answers (R11 writes them; R8 reads them: empty until then) ---
+
+
+def upsert_recall(recall: LowEventRecall, conn: sqlite3.Connection | None = None) -> None:
+    own = conn is None
+    conn = conn or connect()
+    with conn:
+        conn.execute("INSERT OR REPLACE INTO low_event_recalls VALUES (?, ?)", (recall.low_event_id, recall.model_dump_json()))
+    if own:
+        conn.close()
+
+
+def select_recalls(since: date, conn: sqlite3.Connection | None = None) -> list[LowEventRecall]:
+    own = conn is None
+    conn = conn or connect()
+    rows = conn.execute("SELECT json FROM low_event_recalls").fetchall()
+    if own:
+        conn.close()
+    recalls = [LowEventRecall.model_validate_json(r["json"]) for r in rows]
+    return [r for r in recalls if r.asked_at.date() >= since]

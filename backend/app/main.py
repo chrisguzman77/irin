@@ -46,6 +46,7 @@ from .rounds.alarm_events import AlarmEventRecorder
 from .rounds.ledger import Ledger
 from .rounds.low_events import LowEventDetector
 from .rounds.cards import CardSender
+from .rounds.evaluate import StandingEngine
 from .rounds.pairing import PairingError, PairingService, RelayPairing
 from .rounds.relay_client import RelayClient
 from .rounds.nights_adapter import NightsAdapter
@@ -89,6 +90,7 @@ class Runtime:
     pairing: "PairingService | None" = None
     relay_client: "RelayClient | None" = None
     cards: "CardSender | None" = None
+    standing: "StandingEngine | None" = None
 
 
 runtime = Runtime(mode="nightscout" if config.DATASOURCE == "nightscout" else "replay",
@@ -256,6 +258,32 @@ def _build_night_record(night_date: date) -> NightRecord | None:
 runtime.scheduler.register("ledger", lambda: runtime.settings.night_window_end, _ledger_job)
 
 
+# --- the Standing Cards engine (R8): 07:05 on clock.py, and the red rule on every closed alarm episode ---
+
+
+def _evaluate_at() -> str:
+    """Five minutes after the night window ends (the ledger has just been written)."""
+    t = parse_hhmm(runtime.settings.night_window_end)
+    m = (t.hour * 60 + t.minute + 5) % (24 * 60)
+    return f"{m // 60:02d}:{m % 60:02d}"
+
+
+def _evaluate_job(morning: date) -> None:
+    if runtime.standing is None:
+        return
+    _schedule(runtime.standing.run(today=runtime.ledger.night_ended_on(morning)))
+
+
+def _red_rules_on_alarm_event(event: AlarmEvent) -> None:
+    """A closed episode may make Hypo Response red: re-run just that rule, keyed to the episode."""
+    if runtime.standing is None or event.tier not in ("predicted_low", "actual_low"):
+        return
+    _schedule(runtime.standing.run(only="hypo_response", event_key=event.event_id))
+
+
+runtime.scheduler.register("evaluate", _evaluate_at, _evaluate_job)
+
+
 # --- doctor / buddy pairing (R5): the QR handshake through the relay, confirmed with a FRESH PIN ---
 
 
@@ -373,6 +401,10 @@ async def lifespan(app: FastAPI):
     runtime.relay_client = _make_relay_client()
     runtime.cards = CardSender(recipients=runtime.pairing.recipients, post=runtime.relay_client.post_card,
                                device_id=config.DEVICE_ID or "irin-dev", on_sent=_broadcast_card_sent)
+    runtime.standing = StandingEngine(settings=runtime.settings, sender=runtime.cards,
+                                      device_id=config.DEVICE_ID or "irin-dev", is_demo=lambda: runtime.mode == "replay",
+                                      brain_only=lambda: config.IRIN_BRAIN_ONLY)
+    runtime.alarm_events.on_event = _red_rules_on_alarm_event
     await runtime.datasource.start()
     hub.start()
     tick_task = asyncio.create_task(_alarm_tick_loop())
@@ -649,6 +681,24 @@ async def pair_revoke(doctor_id: str) -> Pairing:
 @app.get("/api/pairings", response_model=list[Pairing])
 async def pairings() -> list[Pairing]:
     return [p.model_copy(update={"doctor_pk": ""}) for p in runtime.pairing.pairings.values()]
+
+
+class EvaluateRequest(BaseModel):
+    today: date | None = None  # the night (evening date) the 14-night window ends on; default: the latest
+    only: Literal["basal_check", "hypo_response"] | None = None
+
+
+@app.post("/api/rounds/evaluate", dependencies=[Depends(require_pin)])
+async def rounds_evaluate(req: EvaluateRequest) -> list[dict]:
+    """Run the Standing Card rules now (the demo panel's send-card control, R12's catch-up):
+    the noise budget still applies."""
+    return await runtime.standing.run(today=req.today, only=req.only)
+
+
+@app.get("/api/rounds/evaluations")
+async def rounds_evaluations() -> dict:
+    """The latest evaluation per Standing Card kind and the budget's verdict."""
+    return runtime.standing.last if runtime.standing else {}
 
 
 @app.get("/api/rounds/cards")
