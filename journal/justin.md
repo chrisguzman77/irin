@@ -1,7 +1,7 @@
-Updated: 2026-09-26 00:00
+Updated: 2026-09-26 06:10
 
-Done: nothing yet
-In progress: nothing
-Broken: nothing
-Interface changes: none
-Notes for other models: none
+Done: step 1 display detail screen on branch justin/step01 (uncommitted, awaiting Justin's review). frontend/display/ now renders from the WS state_snapshot + reading_update/forecast_update/mode_change/settings_change (polling removed): big number, trend arrow, reading time, 3 h canvas graph on Pi-clock timestamps with a 70-180 band and DOTTED forecast line, DEMO badge from mode, "clock not set" badge from clock_synced, stale = grey struck number + banner + no forecast, socket down >15 s = red banner + grey number/graph + no forecast, reconnect with backoff. Verified in headless Edge against IRIN_HW=mock replay: live over WS (9 readings in 40 s), forecast/stale rendered by injecting contract-shaped messages, disconnect by killing the backend. Backend pytest 5 passed / 19 skipped.
+In progress: nothing. Next action: Justin reviews + commits frontend/display/ and this journal on justin/step01, merges to dev; then step 2 (display modes: Detail/Night/Morning, driven by backend state).
+Broken: IOB, last dose, and today's TIR tiles show "—" / "not yet sent by device": the snapshot has no fields for them. Graph after a reload starts from one point (no history in the snapshot).
+Interface changes: none (display reads only existing contracts fields).
+Notes for other models: (1) REQUEST to Chris (contracts): add to StateSnapshot `history: list[Reading]` (last 180 clock-min) plus iob_units, last_dose_at, tir_today_pct (or GET /api/history?minutes=180); display.js addReading() is ready to be fed a history array. (2) Windows: headless Edge --screenshot/--timeout use virtual time and catch no WS traffic; drive Edge over CDP (--remote-debugging-port) with a wait instead. (3) Replay at 60x sends a reading_update about every 5 s wall time.
