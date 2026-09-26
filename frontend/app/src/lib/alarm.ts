@@ -1,3 +1,5 @@
+import type { components } from "../types/pi";
+import { deviceFetch, PinRejected } from "./api";
 import type { AlarmState } from "./contracts";
 
 // Tier and intensity from the Pi's AlarmState (chris.md alarm state machine):
@@ -24,10 +26,18 @@ export const TREND_ARROWS: Record<string, string> = Object.fromEntries(
   }).map(([k, v]) => [k, v + "\uFE0E"]),
 );
 
-/** The one place the phone's acknowledge is sent (ack_source = app). The
- * backend has no acknowledge endpoint or WS command shape yet (chris.md
- * step 8); wire it here through deviceFetch when it lands. Silence comes
- * from the alarm_state_change that follows, never from local state. */
-export async function sendAcknowledge(_baseUrl: string): Promise<{ ok: boolean; reason?: string }> {
-  return { ok: false, reason: "Not connected yet: your Irin has no acknowledge endpoint." };
+type AckRequest = components["schemas"]["AckRequest"];
+
+/** The one place the phone's acknowledge is sent: POST /api/acknowledge with
+ * source app and the session PIN (a 401 sends the user back to the gate).
+ * Silence comes from the alarm_state_change that follows, never from local state. */
+export async function sendAcknowledge(baseUrl: string): Promise<{ ok: boolean; reason?: string }> {
+  const body: AckRequest = { source: "app" };
+  try {
+    const res = await deviceFetch(baseUrl, "/api/acknowledge", { method: "POST", body: JSON.stringify(body) });
+    return res.ok ? { ok: true } : { ok: false, reason: `Your Irin refused (${res.status}).` };
+  } catch (e) {
+    if (e instanceof PinRejected) return { ok: false, reason: "Code not accepted." };
+    return { ok: false, reason: "Could not reach your Irin." };
+  }
 }
