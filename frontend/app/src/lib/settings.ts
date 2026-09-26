@@ -36,7 +36,8 @@ function stable(v: unknown): string {
       .join(",")}}`;
   return JSON.stringify(v ?? null);
 }
-const same = (a: unknown, b: unknown) => stable(a) === stable(b);
+export const sameValue = (a: unknown, b: unknown) => stable(a) === stable(b);
+const same = sameValue;
 
 /** The fields of `draft` that differ from the Pi's `current` settings. */
 export function changedFields(current: Settings, draft: Settings): Partial<Settings> {

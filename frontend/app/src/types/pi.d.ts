@@ -435,6 +435,169 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/family/recipients": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Recipients */
+        get: operations["list_recipients_api_family_recipients_get"];
+        put?: never;
+        /**
+         * Add Recipient
+         * @description A new recipient's first story always waits for the patient's approval.
+         */
+        post: operations["add_recipient_api_family_recipients_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/family/recipients/{recipient_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Edit Recipient */
+        post: operations["edit_recipient_api_family_recipients__recipient_id__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/family/recipients/{recipient_id}/pause": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Pause Recipient */
+        post: operations["pause_recipient_api_family_recipients__recipient_id__pause_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/family/recipients/{recipient_id}/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Resume Recipient */
+        post: operations["resume_recipient_api_family_recipients__recipient_id__resume_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/family/recipients/{recipient_id}/revoke": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Revoke Recipient
+         * @description Instant and final: a revoked recipient receives nothing (invariant 19).
+         */
+        post: operations["revoke_recipient_api_family_recipients__recipient_id__revoke_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/family/stories": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Stories
+         * @description The morning chip ("Sent to Mom"): the stories of one morning, or the latest.
+         */
+        get: operations["list_stories_api_family_stories_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/family/stories/{story_id}/audio.mp3": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Story Audio */
+        get: operations["story_audio_api_family_stories__story_id__audio_mp3_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/family/stories/{story_id}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Approve Story */
+        post: operations["approve_story_api_family_stories__story_id__approve_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/family/stories/{story_id}/skip": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Skip Story */
+        post: operations["skip_story_api_family_stories__story_id__skip_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/demo/scenarios": {
         parameters: {
             query?: never;
@@ -627,6 +790,44 @@ export interface components {
              */
             first_story_approved: boolean;
         };
+        /**
+         * FamilyStory
+         * @description Level story_only never contains a glucose value; a demo story is
+         *     never emailed (invariant 19).
+         */
+        FamilyStory: {
+            /** Story Id */
+            story_id: string;
+            /**
+             * Night Date
+             * Format: date
+             */
+            night_date: string;
+            /** Recipient Id */
+            recipient_id: string;
+            /**
+             * Level
+             * @enum {string}
+             */
+            level: "story_only" | "story_and_view";
+            /** Text */
+            text: string;
+            /**
+             * Status
+             * @default pending_approval
+             * @enum {string}
+             */
+            status: "pending_approval" | "sent" | "skipped" | "failed" | "demo";
+            /** Sent At */
+            sent_at?: string | null;
+            /**
+             * Is Demo
+             * @default false
+             */
+            is_demo: boolean;
+            /** Audio Url */
+            audio_url?: string | null;
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
@@ -757,6 +958,36 @@ export interface components {
              * @default false
              */
             is_stale: boolean;
+        };
+        /** RecipientPatch */
+        RecipientPatch: {
+            /** Name */
+            name?: string | null;
+            /** Email */
+            email?: string | null;
+            /** Level */
+            level?: ("story_only" | "story_and_view") | null;
+            /** Send Mode */
+            send_mode?: ("automatic" | "approve_each") | null;
+        };
+        /** RecipientRequest */
+        RecipientRequest: {
+            /** Name */
+            name: string;
+            /** Email */
+            email: string;
+            /**
+             * Level
+             * @default story_only
+             * @enum {string}
+             */
+            level: "story_only" | "story_and_view";
+            /**
+             * Send Mode
+             * @default approve_each
+             * @enum {string}
+             */
+            send_mode: "automatic" | "approve_each";
         };
         /** ScenarioRequest */
         ScenarioRequest: {
@@ -1588,6 +1819,326 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MorningReport"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_recipients_api_family_recipients_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FamilyRecipient"][];
+                };
+            };
+        };
+    };
+    add_recipient_api_family_recipients_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-PIN"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecipientRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FamilyRecipient"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    edit_recipient_api_family_recipients__recipient_id__post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-PIN"?: string | null;
+            };
+            path: {
+                recipient_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RecipientPatch"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FamilyRecipient"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    pause_recipient_api_family_recipients__recipient_id__pause_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-PIN"?: string | null;
+            };
+            path: {
+                recipient_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FamilyRecipient"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    resume_recipient_api_family_recipients__recipient_id__resume_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-PIN"?: string | null;
+            };
+            path: {
+                recipient_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FamilyRecipient"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    revoke_recipient_api_family_recipients__recipient_id__revoke_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-PIN"?: string | null;
+            };
+            path: {
+                recipient_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FamilyRecipient"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_stories_api_family_stories_get: {
+        parameters: {
+            query?: {
+                night_date?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FamilyStory"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    story_audio_api_family_stories__story_id__audio_mp3_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                story_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    approve_story_api_family_stories__story_id__approve_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-PIN"?: string | null;
+            };
+            path: {
+                story_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FamilyStory"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    skip_story_api_family_stories__story_id__skip_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-PIN"?: string | null;
+            };
+            path: {
+                story_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FamilyStory"];
                 };
             };
             /** @description Validation Error */
