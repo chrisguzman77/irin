@@ -1,5 +1,7 @@
 import { useState } from "react";
 import SignalCard from "../components/SignalCard";
+import { useDevice } from "../lib/device";
+import RecallCards from "./device/RecallCards";
 import type { SignalCard as Card } from "../lib/contracts";
 import standing from "../fixtures/signal_card_standing.json";
 import step from "../fixtures/signal_card_step.json";
@@ -17,8 +19,17 @@ const SAMPLES = [
 export default function RoundsTab() {
   const [which, setWhich] = useState<(typeof SAMPLES)[number]["key"]>("standing");
   const sample = SAMPLES.find((s) => s.key === which) ?? SAMPLES[0];
+  const { target, socket } = useDevice();
+  const snap = socket.snapshot;
   return (
     <section className="flex flex-col gap-4">
+      {target.status === "ready" && (
+        <RecallCards
+          lows={socket.recallDue}
+          baseUrl={target.url}
+          demo={snap?.mode === "replay"}
+        />
+      )}
       <div>
         <h2 className="text-xl font-semibold">What my doctor sees</h2>
         <p className="text-sm text-neutral-400">

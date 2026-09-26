@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { addMessage, removeMessage } from "./doctorMessages";
+import { lowsFromRecallDue, type LowEvent } from "./recall";
 import type { AlarmState, Forecast, Reading, Settings, StateSnapshot, WSMessage } from "./contracts";
 
 // The ONE socket to the Pi (justin.md hard client rule 1). Screens render
@@ -16,6 +17,9 @@ export interface DeviceSocket {
   connected: boolean;
   /** true once the socket has been down longer than 15 s: show the banner */
   disconnectedLong: boolean;
+  /** the lows the Pi is asking about this morning (recall_due, or the
+   * snapshot's todays_checkin_status when it carries them); [] = none */
+  recallDue: LowEvent[];
 }
 
 /** The morning chip's list is one night's stories: a newer night replaces it,
@@ -61,6 +65,7 @@ export function applyMessage(snap: StateSnapshot | null, msg: WSMessage): StateS
 
 export function useDeviceSocket(baseUrl: string | null): DeviceSocket {
   const [snapshot, setSnapshot] = useState<StateSnapshot | null>(null);
+  const [recallDue, setRecallDue] = useState<LowEvent[]>([]);
   const [connected, setConnected] = useState(false);
   const [now, setNow] = useState(() => Date.now());
   const downSince = useRef<number>(Date.now());
@@ -92,6 +97,13 @@ export function useDeviceSocket(baseUrl: string | null): DeviceSocket {
       }
       if (!msg || typeof msg.type !== "string") return; // the hub's echo replies carry no type
       setSnapshot((s) => applyMessage(s, msg));
+      if (msg.type === "recall_due") setRecallDue(lowsFromRecallDue(msg.payload) ?? []);
+      else if (msg.type === "mode_change") setRecallDue([]); // live and demo lows never mix
+      else if (msg.type === "state_snapshot") {
+        const c = (msg.payload as { todays_checkin_status?: Record<string, unknown> }).todays_checkin_status ?? {};
+        const fromSnap = lowsFromRecallDue(c.recall_due ?? c.recalls ?? c.low_events ?? null);
+        if (fromSnap) setRecallDue(fromSnap);
+      }
     };
     ws.onclose = () => {
       if (wsRef.current !== ws) return; // replaced on purpose
@@ -142,6 +154,7 @@ export function useDeviceSocket(baseUrl: string | null): DeviceSocket {
   return {
     snapshot,
     connected,
+    recallDue,
     disconnectedLong: !!baseUrl && !connected && now - downSince.current > DISCONNECTED_BANNER_MS,
   };
 }
