@@ -18,7 +18,7 @@ from ..clock import clock
 from ..contracts import Settings
 from . import noise
 from .cards import CardSender, assemble
-from .standing import Evaluation, Thresholds, evaluate_basal_check, evaluate_hypo_response
+from .standing import Evaluation, Thresholds, evaluate_basal_check, evaluate_follow_up, evaluate_hypo_response
 
 log = logging.getLogger("irin.rounds.evaluate")
 
@@ -47,12 +47,25 @@ class StandingEngine:
         inp = self._inputs(today)
         alarm_source = "inferred" if self.brain_only() else "measured"
         alarms = [] if self.brain_only() else inp["alarm_events"]
-        return [
+        out = [
             evaluate_basal_check(inp["night_records"], inp["low_events"], inp["recalls"], self.thresholds,
                                  alarm_events=alarms, alarm_source=alarm_source),
             evaluate_hypo_response(inp["night_records"], inp["low_events"], inp["recalls"], alarms, self.settings,
                                    self.thresholds, alarm_source=alarm_source),
         ]
+        change = self.therapy_change_date()
+        if change is not None and today >= change + timedelta(days=7):  # Follow-up (verify): from day 7 after a confirmed change
+            w = self.thresholds.window_nights
+            before = store.select_night_records(change - timedelta(days=w), change - timedelta(days=1))
+            after_7 = store.select_night_records(change, change + timedelta(days=6))
+            after_14 = store.select_night_records(change, min(today, change + timedelta(days=w - 1)))
+            out.append(evaluate_follow_up(before, after_7, after_14, self.thresholds, alarm_source=alarm_source))
+        return out
+
+    @staticmethod
+    def therapy_change_date() -> date | None:
+        raw = store.get_kv("therapy_change_date")
+        return date.fromisoformat(raw) if raw else None
 
     async def run(self, today: date | None = None, only: str | None = None, event_key: str | None = None) -> list[dict]:
         """Evaluate, budget, assemble, send. Returns one entry per evaluation with

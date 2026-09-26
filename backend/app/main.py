@@ -47,6 +47,7 @@ from .rounds.ledger import Ledger
 from .rounds.low_events import LowEventDetector
 from .rounds.cards import CardSender
 from .rounds.evaluate import StandingEngine
+from .rounds.messages import DoctorMessages, MessageError
 from .rounds.pairing import PairingError, PairingService, RelayPairing
 from .rounds.relay_client import RelayClient
 from .rounds.nights_adapter import NightsAdapter
@@ -91,6 +92,7 @@ class Runtime:
     relay_client: "RelayClient | None" = None
     cards: "CardSender | None" = None
     standing: "StandingEngine | None" = None
+    messages: "DoctorMessages | None" = None
 
 
 runtime = Runtime(mode="nightscout" if config.DATASOURCE == "nightscout" else "replay",
@@ -302,11 +304,16 @@ def _broadcast_card_sent(payload: dict) -> None:
     _schedule(hub.broadcast(WSMessage(type="card_sent", payload=payload)))
 
 
+async def _relay_tick() -> None:
+    """Every relay poll: retry undelivered cards, expire unanswered doctor messages."""
+    await runtime.cards.flush()
+    await runtime.messages.expire()
+
+
 def _make_relay_client() -> RelayClient:
     return RelayClient(relay_url=config.RELAY_URL, source_key=config.RELAY_SOURCE_KEY,
                        device_id=config.DEVICE_ID or "irin-dev", is_demo=lambda: runtime.mode == "replay",
-                       on_pairings=lambda states: runtime.pairing.apply_remote_states(states),
-                       on_tick=lambda: runtime.cards.flush())
+                       on_pairings=lambda states: runtime.pairing.apply_remote_states(states))
 
 
 def _make_pairing() -> PairingService:
@@ -405,6 +412,14 @@ async def lifespan(app: FastAPI):
                                       device_id=config.DEVICE_ID or "irin-dev", is_demo=lambda: runtime.mode == "replay",
                                       brain_only=lambda: config.IRIN_BRAIN_ONLY)
     runtime.alarm_events.on_event = _red_rules_on_alarm_event
+    runtime.messages = DoctorMessages(
+        settings=runtime.settings, pairings=lambda: runtime.pairing.pairings,
+        post_resolution=runtime.relay_client.post_resolution,
+        on_received=lambda d: _schedule(hub.broadcast(WSMessage(type="doctor_message_received", payload=d))),
+        on_resolved=lambda d: _schedule(hub.broadcast(WSMessage(type="doctor_message_resolved", payload=d))),
+        is_demo=lambda: runtime.mode == "replay")
+    runtime.relay_client.on_messages = runtime.messages.receive
+    runtime.relay_client.on_tick = _relay_tick
     await runtime.datasource.start()
     hub.start()
     tick_task = asyncio.create_task(_alarm_tick_loop())
@@ -681,6 +696,36 @@ async def pair_revoke(doctor_id: str) -> Pairing:
 @app.get("/api/pairings", response_model=list[Pairing])
 async def pairings() -> list[Pairing]:
     return [p.model_copy(update={"doctor_pk": ""}) for p in runtime.pairing.pairings.values()]
+
+
+def _message_error(e: MessageError) -> HTTPException:
+    return HTTPException(status_code=e.status, detail=e.detail)
+
+
+@app.get("/api/rounds/messages")
+async def rounds_messages(pending_only: bool = True) -> list[dict]:
+    """Doctor messages for the confirm takeover: pending by default, all with pending_only=false."""
+    docs = runtime.messages.pending() if pending_only else store.select_doctor_messages()
+    return docs
+
+
+@app.post("/api/rounds/messages/{message_id}/confirm", dependencies=[Depends(require_fresh_pin)])
+async def rounds_message_confirm(message_id: str) -> dict:
+    """The patient's echo-and-confirm on the device (FRESH PIN): the only path that applies a doctor message."""
+    try:
+        doc = await runtime.messages.confirm(message_id)
+    except MessageError as e:
+        raise _message_error(e)
+    await _settings_changed()  # basal_units may have changed
+    return doc
+
+
+@app.post("/api/rounds/messages/{message_id}/decline", dependencies=[Depends(require_fresh_pin)])
+async def rounds_message_decline(message_id: str) -> dict:
+    try:
+        return await runtime.messages.decline(message_id)
+    except MessageError as e:
+        raise _message_error(e)
 
 
 class EvaluateRequest(BaseModel):

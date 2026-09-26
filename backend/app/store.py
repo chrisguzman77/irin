@@ -438,3 +438,36 @@ def select_recalls(since: date, conn: sqlite3.Connection | None = None) -> list[
         conn.close()
     recalls = [LowEventRecall.model_validate_json(r["json"]) for r in rows]
     return [r for r in recalls if r.asked_at.date() >= since]
+
+
+# --- doctor messages (R9): {message: DoctorMessage json, sender_id, is_demo, received_at, expires_at, resolved_at?} ---
+
+
+def upsert_doctor_message(doc: dict, conn: sqlite3.Connection | None = None) -> None:
+    own = conn is None
+    conn = conn or connect()
+    with conn:
+        conn.execute("INSERT OR REPLACE INTO doctor_messages VALUES (?, ?)", (doc["message"]["message_id"], json.dumps(doc)))
+    if own:
+        conn.close()
+
+
+def select_doctor_message(message_id: str, conn: sqlite3.Connection | None = None) -> dict | None:
+    own = conn is None
+    conn = conn or connect()
+    r = conn.execute("SELECT json FROM doctor_messages WHERE message_id = ?", (message_id,)).fetchone()
+    if own:
+        conn.close()
+    return json.loads(r["json"]) if r else None
+
+
+def select_doctor_messages(limit: int = 200, conn: sqlite3.Connection | None = None) -> list[dict]:
+    """Newest first."""
+    own = conn is None
+    conn = conn or connect()
+    rows = conn.execute("SELECT json FROM doctor_messages").fetchall()
+    if own:
+        conn.close()
+    docs = [json.loads(r["json"]) for r in rows]
+    docs.sort(key=lambda d: d["received_at"], reverse=True)
+    return docs[:limit]
