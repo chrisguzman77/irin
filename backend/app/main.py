@@ -28,6 +28,8 @@ from .datasource.base import DataSource
 from .datasource.nightscout import NightscoutDataSource
 from .datasource.replay import ReplayDataSource
 from .forecast import Forecaster
+from .outputs import GatedOutputs
+from .presence import PresenceMachine, PresenceState
 from .voice import MAX_CARBS_G, MAX_UNITS, VoiceLogger
 from .ws import Hub
 
@@ -53,13 +55,24 @@ class Runtime:
     alarm: "AlarmEngine | None" = None
     forecaster: "Forecaster | None" = None
     voice: "VoiceLogger | None" = None
+    presence: "PresenceMachine | None" = None
+    outputs: "GatedOutputs | None" = None
 
 
 runtime = Runtime(mode="nightscout" if config.DATASOURCE == "nightscout" else "replay",
                   datasource=make_datasource("nightscout" if config.DATASOURCE == "nightscout" else "replay"))
 hub = Hub(runtime)
 runtime.hub = hub
-runtime.alarm = AlarmEngine(runtime.settings)
+
+
+def _hal():
+    from hardware.hal import get_hal  # Slavik's boundary; the mock under IRIN_HW=mock
+
+    return get_hal()
+
+runtime.presence = PresenceMachine(runtime.settings)
+runtime.outputs = GatedOutputs(_hal(), runtime.presence)  # Away gates room outputs only, here
+runtime.alarm = AlarmEngine(runtime.settings, hal=runtime.outputs)
 runtime.forecaster = Forecaster()
 runtime.voice = VoiceLogger()
 
@@ -82,9 +95,30 @@ def _broadcast_transition(t: Transition) -> None:
 runtime.alarm.on_transition(_broadcast_transition)
 
 
+def _broadcast_presence(state: PresenceState) -> None:
+    try:
+        task = asyncio.get_running_loop().create_task(
+            hub.broadcast(WSMessage(type="presence_change", payload=state.model_dump(mode="json"))))
+    except RuntimeError:
+        return
+    _broadcast_tasks.add(task)
+    task.add_done_callback(_broadcast_tasks.discard)
+
+
+runtime.presence.on_change(_broadcast_presence)
+
+
 async def _alarm_tick_loop() -> None:
+    """Every 30 s of clock time: the alarm deadlines and one raw radar sample
+    for the presence machine (the same cadence R2 samples presence_during)."""
     while True:
-        runtime.alarm.tick()
+        try:
+            runtime.alarm.tick()
+            runtime.presence.sample(runtime.outputs.get_presence())
+        except Exception:
+            import logging
+
+            logging.getLogger("irin.main").exception("tick failed; continuing")
         await clock.sleep(ALARM_TICK_CLOCK_SECONDS)
 
 
@@ -266,6 +300,24 @@ async def log_treatment(t: Treatment) -> dict:
 async def treatments(hours: int = 24) -> list[Treatment]:
     hours = max(1, min(hours, 24 * 14))
     return store.select_treatments(clock.now() - timedelta(hours=hours))
+
+
+class PresenceOverride(BaseModel):
+    override: Literal["auto", "home", "away"]
+
+
+@app.post("/api/presence", dependencies=[Depends(require_pin)], response_model=PresenceState)
+async def set_presence(req: PresenceOverride) -> PresenceState:
+    """The manual Home/Away toggle (Settings.presence_override). It always beats
+    the radar; it gates room outputs only and never touches alarm logic."""
+    state = runtime.presence.set_override(req.override)
+    await hub.broadcast(WSMessage(type="settings_change", payload=runtime.settings.model_dump(mode="json")))
+    return state
+
+
+@app.get("/api/presence", response_model=PresenceState)
+async def presence_state() -> PresenceState:
+    return runtime.presence.state
 
 
 @app.get("/api/alarm", response_model=AlarmState)

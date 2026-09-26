@@ -38,6 +38,7 @@ class Hub:
             latest_reading=latest,
             forecast=fc.last.forecast if fc and latest is not None and not latest.is_stale else None,
             alarm=self.runtime.alarm.state if self.runtime.alarm else AlarmState(),
+            presence=self.runtime.presence.state if self.runtime.presence else None,
             settings=self.runtime.settings,
             mode=self.runtime.mode,
             clock_synced=True,  # the NTP guard (chris.md step 10) is bypassed under mock/replay
