@@ -17,6 +17,17 @@ export interface DeviceSocket {
   disconnectedLong: boolean;
 }
 
+/** The morning chip's list is one night's stories: a newer night replaces it,
+ * the same night updates the story in place. */
+function mergeStory(list: StateSnapshot["family_story_status"], story: Record<string, unknown>) {
+  const cur = (list ?? []) as Record<string, unknown>[];
+  if (typeof story.story_id !== "string") return list;
+  const night = cur[0]?.night_date;
+  if (night !== undefined && typeof story.night_date === "string" && story.night_date > String(night)) return [story];
+  const rest = cur.filter((s) => s.story_id !== story.story_id);
+  return [...rest, story];
+}
+
 export function applyMessage(snap: StateSnapshot | null, msg: WSMessage): StateSnapshot | null {
   const p = msg.payload as Record<string, unknown>;
   if (msg.type === "state_snapshot") return p as unknown as StateSnapshot;
@@ -33,6 +44,9 @@ export function applyMessage(snap: StateSnapshot | null, msg: WSMessage): StateS
       return { ...snap, settings: ((p.settings ?? p) as unknown) as Settings };
     case "mode_change":
       return { ...snap, mode: p.mode as StateSnapshot["mode"] };
+    case "family_story_pending":
+    case "family_story_sent":
+      return { ...snap, family_story_status: mergeStory(snap.family_story_status, p) };
     case "presence_change":
       return { ...snap, presence: ((p.presence ?? p) as unknown) as StateSnapshot["presence"] };
     default:

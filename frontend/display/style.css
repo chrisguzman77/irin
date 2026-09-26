@@ -84,6 +84,15 @@ body.mode-night.is-stale #night-glucose { text-decoration: line-through; }
 #morning-stats dt { font-size: 2.4vh; color: var(--dim); text-transform: uppercase; letter-spacing: 0.06em; }
 #morning-stats dd { margin: 0.5vh 0 0; font-size: 5.5vh; font-weight: 700; font-variant-numeric: tabular-nums; }
 #morning-stats dd small { font-size: 2.4vh; color: var(--dim); font-weight: 400; margin-left: 0.5vw; }
+/* Family Story chips (F2): passive, no buttons on the kiosk */
+#morning-family { display: flex; flex-wrap: wrap; justify-content: center; gap: 1vw; min-height: 0; }
+#morning-family:empty { display: none; }
+.fam-chip { font-size: 2.6vh; font-weight: 700; padding: 0.6vh 1.4vw; border-radius: 999px; }
+.fam-sent { background: #1f7a4a; color: #fff; }
+.fam-wait { border: 1px solid var(--amber); color: var(--amber); }
+.fam-demo { border: 1px solid var(--amber); color: var(--fg); }
+.fam-demo b { background: var(--amber); color: #000; padding: 0 0.5vw; border-radius: 0.3rem; margin-right: 0.5vw; }
+.fam-other { border: 1px solid var(--faint); color: var(--dim); }
 #morning-note { font-size: 2vh; color: var(--faint); text-align: center; min-height: 2vh; }
 #morning-now { font-size: 3.2vh; color: var(--dim); text-align: right; }
 #morning-glucose { color: var(--fg); font-weight: 700; font-variant-numeric: tabular-nums; }
