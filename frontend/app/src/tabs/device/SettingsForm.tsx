@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import type { Settings } from "../../lib/contracts";
 import { PinRejected } from "../../lib/api";
 import { ALARM_SOUNDS, applied, changedFields, saveSettings, validate } from "../../lib/settings";
+import FamilySection from "./FamilySection";
 
 // Step 5: every device setting, drafted from the Pi's snapshot. Save sends
 // only the changed fields; nothing is shown as saved until the Pi echoes it
@@ -43,6 +44,10 @@ export default function SettingsForm({ current, baseUrl }: { current: Settings |
   const [msgTone, setMsgTone] = useState<"info" | "ok" | "error">("info");
   const [sending, setSending] = useState(false);
   const [pending, setPending] = useState<Partial<Settings> | null>(null);
+  // The Pi's settings when editing began: Save sends only what was edited
+  // since then, so a change made meanwhile (the Family section, another
+  // phone) is never sent back stale.
+  const [base, setBase] = useState<Settings | null>(null);
 
   const say = (text: string, tone: "info" | "ok" | "error" = "info") => {
     setMsg(text);
@@ -75,6 +80,7 @@ export default function SettingsForm({ current, baseUrl }: { current: Settings |
   if (!draft) return <p className="text-neutral-400">Waiting for your Irin's settings…</p>;
 
   const set = <K extends keyof Settings>(k: K, v: Settings[K]) => {
+    if (!dirty) setBase(draft);
     setDraft({ ...draft, [k]: v });
     setDirty(true);
     setPending(null);
@@ -85,12 +91,12 @@ export default function SettingsForm({ current, baseUrl }: { current: Settings |
   const leds = draft.led_colors ?? {};
 
   return (
+    <>
     <form
-      className="pb-28"
       onSubmit={async (e) => {
         e.preventDefault();
         if (errors.length || !current || sending) return;
-        const patch = changedFields(current, draft);
+        const patch = changedFields(base ?? current, draft);
         if (Object.keys(patch).length === 0) {
           setDirty(false);
           say("Nothing changed.");
@@ -251,5 +257,8 @@ export default function SettingsForm({ current, baseUrl }: { current: Settings |
         </div>
       </div>
     </form>
+    <FamilySection current={current} baseUrl={baseUrl} />
+    <div className="h-28" aria-hidden />
+    </>
   );
 }
