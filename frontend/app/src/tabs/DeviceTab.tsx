@@ -86,7 +86,7 @@ export default function DeviceTab() {
           demo
         </button>
       </div>
-      {view === "Live" && <LiveView snap={snap} stale={socket.disconnectedLong} basalNudge={nudge !== "none"} onLog={() => setView("Log")} />}
+      {view === "Live" && <LiveView snap={snap} stale={socket.disconnectedLong} basalNudge={nudge !== "none"} onLog={() => setView("Log")} baseUrl={target.url} />}
       {view === "Log" && <LogView baseUrl={target.url} settings={snap?.settings} />}
       {view === "Reports" && <ReportsView baseUrl={target.url} mode={snap?.mode} />}
       {view === "Settings" && <SettingsForm current={snap?.settings} baseUrl={target.url} />}

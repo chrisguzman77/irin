@@ -1,5 +1,6 @@
 import type { StateSnapshot } from "../../lib/contracts";
 import { isAckedLow, isHigh, TREND_ARROWS } from "../../lib/alarm";
+import FamilyStories from "./FamilyStories";
 
 const hhmm = (iso: string) =>
   new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
@@ -10,11 +11,13 @@ export default function LiveView({
   stale,
   basalNudge = false,
   onLog,
+  baseUrl,
 }: {
   snap: StateSnapshot | null;
   stale: boolean;
   basalNudge?: boolean;
   onLog?: () => void;
+  baseUrl?: string;
 }) {
   if (!snap) return <p className="text-neutral-400">Waiting for your Irin…</p>;
   const r = snap.latest_reading;
@@ -69,6 +72,7 @@ export default function LiveView({
           )}
         </div>
       )}
+      {baseUrl && <FamilyStories snap={snap} baseUrl={baseUrl} />}
     </>
   );
 }
