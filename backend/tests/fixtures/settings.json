@@ -1,0 +1,50 @@
+{
+  "low_threshold": 70.0,
+  "high_threshold": 250.0,
+  "predictive_enabled": true,
+  "predictive_lead_min": 30,
+  "consecutive_predictions_n": 2,
+  "night_window_start": "22:00",
+  "night_window_end": "07:00",
+  "high_alert_mode": "oneshot",
+  "high_remind_hours": null,
+  "led_colors": {
+    "ambient": "#1a1a40",
+    "warning": "#ffb000",
+    "full": "#ff0000",
+    "stale": "#808080",
+    "high": "#ffb000"
+  },
+  "sound": "alarm_soft",
+  "volume": 0.8,
+  "report_email": "you@example.com",
+  "basal_time": "21:30",
+  "iob_duration_hours": 4.0,
+  "presence_override": "auto",
+  "basal_units": 22.0,
+  "glucagon_on_hand": true,
+  "glucagon_expiry": "2021-06-01",
+  "night_buddy": {
+    "have_buddy": false,
+    "be_watcher": false,
+    "hub_watchable": false,
+    "hub_volunteer": false
+  },
+  "emergency_script": {
+    "steps": [
+      "call",
+      "juice"
+    ]
+  },
+  "family_recipients": [
+    {
+      "recipient_id": "r1",
+      "name": "Mom",
+      "email": "mom@example.com",
+      "level": "story_only",
+      "send_mode": "approve_each",
+      "state": "active",
+      "first_story_approved": false
+    }
+  ]
+}

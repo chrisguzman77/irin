@@ -1,0 +1,9 @@
+{
+  "timestamp": "2020-01-01T22:00:00",
+  "kind": "bolus",
+  "insulin_units": 4.0,
+  "carbs_g": null,
+  "dose_label": null,
+  "text": null,
+  "confirmed": true
+}

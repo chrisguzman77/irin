@@ -1,0 +1,14 @@
+{
+  "low_event_id": "l1",
+  "night_date": "2020-01-01",
+  "started_at": "2020-01-02T02:40:00",
+  "nadir_mgdl": 58.0,
+  "nadir_at": "2020-01-02T02:47:00",
+  "minutes_below_70": 25,
+  "auc_below_70": 210.0,
+  "recovery_slope": 0.8,
+  "carbs_logged_within_30min": false,
+  "inferred_unfelt": true,
+  "alarm_event_id": "e1",
+  "is_demo": true
+}

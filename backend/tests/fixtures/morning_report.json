@@ -1,0 +1,14 @@
+{
+  "report_id": "rp1",
+  "night_date": "2020-01-01",
+  "generated_at": "2020-01-02T07:10:00",
+  "stats": {
+    "low": 58,
+    "high": 142,
+    "tir_pct": 88.0
+  },
+  "narrative": "Template.",
+  "graph_png_path": null,
+  "audio_url": null,
+  "is_demo": true
+}

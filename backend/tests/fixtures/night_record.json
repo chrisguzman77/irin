@@ -1,0 +1,21 @@
+{
+  "night_date": "2020-01-01",
+  "window_start": "2020-01-01T22:00:00",
+  "window_end": "2020-01-02T07:00:00",
+  "coverage_pct": 94.4,
+  "reason_codes": [
+    "clean"
+  ],
+  "code_source": "inferred",
+  "rise_mgdl": 40.0,
+  "dawn_rise_mgdl": 18.0,
+  "low_point_mgdl": 98.0,
+  "tbr_pct": 0.0,
+  "minutes_below_70": 0,
+  "near_miss_count": 0,
+  "level2_count": 0,
+  "alarm_event_ids": [
+    "e1"
+  ],
+  "is_demo": true
+}

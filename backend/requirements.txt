@@ -17,3 +17,4 @@ qrcode[pil]           # Rounds: pairing QR
 backboard-sdk         # narrative chain, first link (harmless without a key)
 openai                # the Meta Model API client (OpenAI-SDK compatible, base_url)
 elevenlabs            # voice_out.py, behind VOICE_BACKEND
+mypy                  # dev tool: step 1 check on contracts.py

@@ -1,0 +1,11 @@
+{
+  "claim_id": "c1",
+  "listing_id": "h1",
+  "volunteer_id": "u3",
+  "claimed_at": "2020-01-01T22:00:00",
+  "expires_at": "2020-01-01T22:03:00",
+  "actions": [
+    "call"
+  ],
+  "outcome": null
+}

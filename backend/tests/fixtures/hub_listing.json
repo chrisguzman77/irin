@@ -1,0 +1,11 @@
+{
+  "listing_id": "h1",
+  "first_name": "Chris",
+  "status": "open",
+  "confidence": "device_confirmed",
+  "elapsed_min": 12,
+  "urgency": 3,
+  "claim_expires_at": null,
+  "treating_expires_at": null,
+  "is_demo": true
+}

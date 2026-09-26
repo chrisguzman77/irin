@@ -1,0 +1,11 @@
+{
+  "story_id": "s1",
+  "night_date": "2020-01-01",
+  "recipient_id": "r1",
+  "level": "story_only",
+  "text": "A quiet night. Chris handled a dip on his own around three and was fine by morning.",
+  "status": "demo",
+  "sent_at": null,
+  "is_demo": true,
+  "audio_url": null
+}
