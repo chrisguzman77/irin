@@ -29,6 +29,21 @@
 
   <!-- Touch keypad: the kiosk's PIN, entered once and cached in localStorage
        (the kiosk-only concession, justin.md rule 2). -->
+  <!-- Doctor-message confirm takeover (R4): below the alarm (a low outranks it),
+       never auto-confirms, closes only when the Pi says the message is resolved. -->
+  <section id="doctor" class="hidden" aria-label="message from your doctor">
+    <div id="doctor-count"></div>
+    <div id="doctor-who"></div>
+    <div id="doctor-line"></div>
+    <div id="doctor-units" class="hidden"></div>
+    <div id="doctor-note" class="hidden"></div>
+    <div id="doctor-buttons">
+      <button type="button" id="doctor-decline">Decline</button>
+      <button type="button" id="doctor-confirm">Confirm</button>
+    </div>
+    <div id="doctor-msg"></div>
+  </section>
+
   <section id="keypad" class="hidden" aria-label="enter PIN">
     <div id="keypad-title">Enter PIN</div>
     <div id="keypad-dots"></div>
@@ -102,6 +117,7 @@
     <div id="morning-now">now <span id="morning-glucose">---</span> <span id="morning-trend"></span></div>
   </main>
 
+  <script src="doctor-echo.js"></script>
   <script src="display.js"></script>
 </body>
 </html>

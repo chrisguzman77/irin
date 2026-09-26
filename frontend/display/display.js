@@ -42,7 +42,11 @@ const state = {
   report: null,        // MorningReport (GET /api/reports/latest), fetched in morning mode
   alarm: { state: "idle", trigger_type: null },  // AlarmState
   basalNudge: "none",
-  familyStories: [],   // FamilyStory list of the latest night (snapshot family_story_status + updates)  // the scheduler's basal nudge level: none | visual | email
+  familyStories: [],
+  doctorMessages: [],  // pending DoctorMessage list (snapshot pending_doctor_messages + updates)
+  doctorName: null,    // the paired doctor's display name (snapshot pairing_state)
+  doctorMsg: "",
+  doctorAsking: null,  // message_id the keypad is open for   // FamilyStory list of the latest night (snapshot family_story_status + updates)  // the scheduler's basal nudge level: none | visual | email
   ackMsg: "",
 };
 
@@ -114,6 +118,8 @@ function onMessage(msg) {
       state.forecastNote = "";
       state.alarm = p.alarm || { state: "idle", trigger_type: null };
       state.familyStories = Array.isArray(p.family_story_status) ? p.family_story_status : [];
+      state.doctorMessages = Array.isArray(p.pending_doctor_messages) ? p.pending_doctor_messages : [];
+      state.doctorName = (p.pairing_state && p.pairing_state.doctor_display_name) || null;
       if (p.latest_reading) addReading(p.latest_reading);
       else state.latest = null;
       backfillHistory();
@@ -133,6 +139,19 @@ function onMessage(msg) {
       state.alarm = p.alarm || p;
       if (!SOUNDING.includes(state.alarm.state)) state.ackMsg = "";
       break;
+    case "doctor_message_received": {
+      const m = p.message || p;
+      if (m && typeof m.message_id === "string" && (m.status || "pending") === "pending")
+        state.doctorMessages = state.doctorMessages.filter((x) => x.message_id !== m.message_id).concat([m]);
+      break;
+    }
+    case "doctor_message_resolved": {
+      const id = p.message_id || (p.message && p.message.message_id);
+      state.doctorMessages = state.doctorMessages.filter((x) => x.message_id !== id);
+      state.doctorMsg = "";
+      if (state.doctorAsking === id) cancelKeypad(); // settled elsewhere: never confirm a message that is gone
+      break;
+    }
     case "family_story_pending":
     case "family_story_sent":
       mergeStory(p);
@@ -261,7 +280,49 @@ function render() {
   // IOB, last dose, and today's TIR are not in the snapshot yet (contracts
   // request to Chris, see journal); the tiles stay "—" until they are.
   renderAlarm(num, arrow);
+  renderDoctor();
   if (mode === "detail") drawGraph();
+}
+
+// --- doctor-message takeover (R4, invariant 8) ---
+
+// The oldest pending message, echoed in plain words (doctor-echo.js). Confirm
+// and Decline are fresh-PIN verbs: the keypad always opens (postFresh). The
+// takeover never confirms or closes on its own: it goes away only when the
+// Pi's doctor_message_resolved arrives (or the next snapshot omits it).
+function renderDoctor() {
+  const box = $("doctor");
+  const m = state.doctorMessages[0];
+  box.classList.toggle("hidden", !m);
+  if (!m) return;
+  const e = window.irinDoctorEcho(m, state.doctorName);
+  const n = state.doctorMessages.length;
+  $("doctor-count").textContent = n > 1 ? `1 of ${n} messages` : "";
+  $("doctor-who").textContent = `${e.who}:`;
+  $("doctor-line").textContent = e.line;
+  $("doctor-units").classList.toggle("hidden", !e.insulin);
+  $("doctor-units").textContent = e.insulin || "";
+  $("doctor-note").classList.toggle("hidden", !e.note);
+  $("doctor-note").textContent = e.note || "";
+  $("doctor-confirm").textContent = e.confirm;
+  $("doctor-confirm").disabled = !e.known; // never confirm what the screen could not show
+  $("doctor-msg").textContent = state.doctorMsg || (e.known ? "" : "This message cannot be confirmed here. Decline it, and ask for it again.");
+}
+
+async function answerDoctor(verb) {
+  const m = state.doctorMessages[0];
+  if (!m) return;
+  const path = `/api/rounds/messages/${encodeURIComponent(m.message_id)}/${verb}`;
+  state.doctorAsking = m.message_id;
+  let res;
+  try {
+    res = await postFresh(path, undefined, verb === "confirm" ? "Enter PIN to confirm" : "Enter PIN to decline");
+  } finally {
+    state.doctorAsking = null;
+  }
+  if (res.cancelled) return;
+  state.doctorMsg = res.ok ? "sent — waiting for your Irin" : res.reason;
+  render();
 }
 
 // --- morning (step 2 numbers, from the step 11 report) ---
@@ -444,12 +505,18 @@ async function postFresh(path, body, title = "Enter PIN to confirm") {
 }
 
 // Touch keypad. Resolves with the digits, or null on cancel.
+let keypadDone = null;
+/** Close an open keypad as if cancelled (its question no longer exists). */
+function cancelKeypad() {
+  if (keypadDone) keypadDone(null);
+}
 function promptPin(title = "Enter PIN") {
   return new Promise((resolve) => {
     let digits = "";
     const pad = $("keypad"), keys = $("keypad-keys"), dots = $("keypad-dots");
     const show = () => { dots.textContent = "•".repeat(digits.length); };
-    const done = (v) => { pad.classList.add("hidden"); keys.replaceChildren(); resolve(v); };
+    const done = (v) => { keypadDone = null; pad.classList.add("hidden"); keys.replaceChildren(); resolve(v); };
+    keypadDone = done;
     $("keypad-title").textContent = title;
     keys.replaceChildren();
     for (const k of ["1", "2", "3", "4", "5", "6", "7", "8", "9", "✕", "0", "OK"]) {
@@ -590,6 +657,8 @@ function drawGraph() {
 setInterval(() => { if (!state.connected) render(); }, 1000);
 window.addEventListener("resize", drawGraph);
 $("alarm-ack").addEventListener("click", onAckTap);
+$("doctor-confirm").addEventListener("click", () => answerDoctor("confirm"));
+$("doctor-decline").addEventListener("click", () => answerDoctor("decline"));
 render();
 connect();
 pollDevice();
