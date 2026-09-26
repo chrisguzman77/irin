@@ -5,7 +5,17 @@ const hhmm = (iso: string) =>
   new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
 
 // Step 4: the live view, rendered only from the snapshot (+ updates).
-export default function LiveView({ snap, stale }: { snap: StateSnapshot | null; stale: boolean }) {
+export default function LiveView({
+  snap,
+  stale,
+  basalNudge = false,
+  onLog,
+}: {
+  snap: StateSnapshot | null;
+  stale: boolean;
+  basalNudge?: boolean;
+  onLog?: () => void;
+}) {
   if (!snap) return <p className="text-neutral-400">Waiting for your Irin…</p>;
   const r = snap.latest_reading;
   const readingStale = !r || r.is_stale || stale;
@@ -47,6 +57,18 @@ export default function LiveView({ snap, stale }: { snap: StateSnapshot | null; 
           )}
         </div>
       </section>
+      {basalNudge && (
+        <div className="flex items-center gap-3 rounded-lg border border-sky-700 bg-sky-950 px-4 py-3 text-sky-100">
+          <span className="flex-1 text-sm">
+            Basal not logged yet{snap.settings?.basal_time ? ` (usual time ${snap.settings.basal_time})` : ""}.
+          </span>
+          {onLog && (
+            <button type="button" onClick={onLog} className="rounded-lg bg-sky-200 text-black px-3 py-1.5 text-sm font-semibold">
+              Log it
+            </button>
+          )}
+        </div>
+      )}
     </>
   );
 }

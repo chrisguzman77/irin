@@ -40,6 +40,7 @@ const state = {
   piDate: null,        // "YYYY-MM-DD" of the Pi's clock, to match a report's night_date
   report: null,        // MorningReport (GET /api/reports/latest), fetched in morning mode
   alarm: { state: "idle", trigger_type: null },  // AlarmState
+  basalNudge: "none",  // the scheduler's basal nudge level: none | visual | email
   ackMsg: "",
 };
 
@@ -177,6 +178,7 @@ async function pollDevice() {
     if (typeof h.clock === "string") state.piDate = h.clock.slice(0, 10);
     state.displayMode = MODES.includes(s.display_mode) ? s.display_mode : "detail";
     if (typeof s.clock_synced === "boolean") state.clockSynced = s.clock_synced;
+    state.basalNudge = (s.basal_nudge && s.basal_nudge.level) || "none";
     if (screenMode() === "morning") await fetchReport();
   } catch { /* the disconnected banner covers a dead backend */ }
   render();
@@ -208,6 +210,14 @@ function render() {
   const staleAlarm = a.trigger_type === "stale" && a.state !== "idle";
   $("banner-stale").classList.toggle("hidden", !((r && r.is_stale) || staleAlarm));
   $("banner-disconnected").classList.toggle("hidden", !disconnected);
+  // basal nudge (backend step 10): visual at 60 min past the usual basal time
+  // with no basal logged; a glance reminder only, logging lives in the app
+  const nudge = state.basalNudge !== "none";
+  $("flag-basal").classList.toggle("hidden", !nudge);
+  if (nudge) {
+    const usual = state.settings && state.settings.basal_time;
+    $("flag-basal").textContent = usual ? `basal not logged yet · usual ${usual}` : "basal not logged yet";
+  }
   document.body.classList.toggle("is-stale", stale);
   document.body.classList.toggle("is-disconnected", disconnected);
 
