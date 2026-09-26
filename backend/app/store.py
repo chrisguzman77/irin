@@ -6,11 +6,11 @@ and plans, R7 cards, R5 pairings, R9 doctor_messages, F3 family_stories)."""
 from __future__ import annotations
 
 import sqlite3
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 from .config import config
-from .contracts import Reading, Treatment
+from .contracts import MorningReport, Reading, Treatment
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS readings (
@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS plans (plan_id TEXT PRIMARY KEY, json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS pairings (id INTEGER PRIMARY KEY AUTOINCREMENT, json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS doctor_messages (message_id TEXT PRIMARY KEY, json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS family_stories (story_id TEXT PRIMARY KEY, json TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS reports (night_date TEXT PRIMARY KEY, json TEXT NOT NULL);
 """
 
 
@@ -117,3 +118,33 @@ def select_treatments(since: datetime, conn: sqlite3.Connection | None = None) -
                   text=r["text"], confirmed=bool(r["confirmed"]))
         for r in rows
     ]
+
+
+def insert_report(report: MorningReport, conn: sqlite3.Connection | None = None) -> None:
+    """One report per night; a rebuild replaces it."""
+    own = conn is None
+    conn = conn or connect()
+    with conn:
+        conn.execute("INSERT OR REPLACE INTO reports VALUES (?, ?)",
+                     (report.night_date.isoformat(), report.model_dump_json()))
+    if own:
+        conn.close()
+
+
+def select_report(night_date: date, conn: sqlite3.Connection | None = None) -> MorningReport | None:
+    own = conn is None
+    conn = conn or connect()
+    r = conn.execute("SELECT json FROM reports WHERE night_date = ?", (night_date.isoformat(),)).fetchone()
+    if own:
+        conn.close()
+    return MorningReport.model_validate_json(r["json"]) if r else None
+
+
+def select_reports(limit: int = 30, conn: sqlite3.Connection | None = None) -> list[MorningReport]:
+    """Newest night first."""
+    own = conn is None
+    conn = conn or connect()
+    rows = conn.execute("SELECT json FROM reports ORDER BY night_date DESC LIMIT ?", (limit,)).fetchall()
+    if own:
+        conn.close()
+    return [MorningReport.model_validate_json(r["json"]) for r in rows]

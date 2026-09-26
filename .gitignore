@@ -4,6 +4,7 @@
 backend/irin.db
 backend/keys/
 backend/sounds/generated/
+backend/reports/
 cloud/audio_cache/
 
 # Personal medical data (raw CGM exports, therapy-change dates, labeled nights);

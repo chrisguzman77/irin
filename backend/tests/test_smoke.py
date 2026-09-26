@@ -86,3 +86,29 @@ def test_scheduler_state_and_clock_synced_flag():
             import json
 
             assert json.loads(ws.receive_text())["payload"]["clock_synced"] is True
+
+
+def test_morning_report_endpoints_in_replay_are_badged_demo(monkeypatch, tmp_path):
+    from app import auth, main, store
+
+    monkeypatch.setattr(store.config, "IRIN_DB", str(tmp_path / "t.db"))
+    monkeypatch.setattr(auth.config, "PIN", "1234")
+    monkeypatch.setattr(main.runtime.reports, "out_dir", tmp_path)
+    with TestClient(app) as c:
+        assert c.get("/api/reports").json() == []
+        assert c.get("/api/reports/latest").status_code == 404
+        assert "morning_report" in [j["name"] for j in c.get("/api/scheduler").json()["jobs"]]
+        r = c.post("/api/reports/build", json={"night_date": "2020-01-02"}, headers={"X-PIN": "1234"})
+        assert r.status_code == 200 and r.json()["is_demo"] is True and r.json()["stats"]["readings"] > 0
+        assert c.get("/api/reports/latest").json()["report_id"] == r.json()["report_id"]
+        assert c.get("/api/reports/2020-01-02").json()["night_date"] == "2020-01-02"
+        png = c.get("/api/reports/2020-01-02/graph.png")
+        assert png.status_code == 200 and png.content[:8] == b"\x89PNG\r\n\x1a\n"
+        assert c.get("/api/reports/2019-01-01").status_code == 404
+        assert c.get("/api/reports/2019-01-01/graph.png").status_code == 404
+        # the scheduled job never rebuilds (and would never re-email) a night that has a report
+        from datetime import date
+
+        assert main._build_report(date(2020, 1, 2), scheduled=True) is None
+        assert c.get("/api/reports/latest").json()["report_id"] == r.json()["report_id"]
+        assert main._build_report(date(2020, 1, 2)).report_id != r.json()["report_id"]  # the button rebuilds
