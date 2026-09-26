@@ -292,7 +292,7 @@ function render() {
   renderPair();
   renderDoctor();
   if (mode === "detail") drawGraph();
-  $("idle").classList.toggle("on", isIdle());
+  updateIdle();
 }
 
 // --- idle screen ---
@@ -300,16 +300,50 @@ function render() {
 // AWAY_AFTER_MIN; never at night, backend rule) AND nothing needs a person:
 // any alarm state other than idle (warning, low, acknowledged, re-armed,
 // stale, high) or a reading below the low threshold keeps the normal screen.
-// Home again (someone detected) drops it at once. It only reads state.
-function isIdle() {
-  const pr = state.presence;
-  if (!pr || pr.mode !== "away") return false;
+// Waking because someone is back plays the 2 s leaves-up sequence; waking
+// because of an alarm or a low is instant (the alarm takeover is above it
+// anyway). It only reads state and sends nothing.
+const WAKE_MS = 2000;
+let idleShown = false;
+let wakeTimer = null;
+
+function needsPerson() {
   const a = state.alarm || {};
-  if (a.state && a.state !== "idle") return false;
+  if (a.state && a.state !== "idle") return true;
   const r = state.latest;
   const low = (state.settings && Number(state.settings.low_threshold)) || 70;
-  if (r && typeof r.glucose_mgdl === "number" && r.glucose_mgdl < low) return false; // stale or not
-  return true;
+  return !!(r && typeof r.glucose_mgdl === "number" && r.glucose_mgdl < low); // stale or not
+}
+
+function isIdle() {
+  const pr = state.presence;
+  return !!pr && pr.mode === "away" && !needsPerson();
+}
+
+function updateIdle() {
+  const el = $("idle");
+  if (isIdle()) {
+    if (wakeTimer) { clearTimeout(wakeTimer); wakeTimer = null; } // left again mid-wake
+    el.classList.remove("waking", "instant");
+    el.classList.add("on");
+    idleShown = true;
+    return;
+  }
+  if (needsPerson() && (idleShown || wakeTimer)) { // alarm or low: gone now, no animation
+    if (wakeTimer) { clearTimeout(wakeTimer); wakeTimer = null; }
+    el.classList.add("instant");
+    el.classList.remove("on", "waking");
+    idleShown = false;
+    return;
+  }
+  if (!idleShown) return;
+  idleShown = false; // someone is back: leaves sweep up, then the main screen
+  el.classList.remove("instant");
+  el.classList.add("waking");
+  wakeTimer = setTimeout(() => {
+    wakeTimer = null;
+    el.classList.remove("on", "waking");
+  }, WAKE_MS);
 }
 
 // --- doctor-message takeover (R4, invariant 8) ---

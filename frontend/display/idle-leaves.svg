@@ -158,7 +158,7 @@
     }
   </style>
 
-  <rect width="800" height="600" fill="url(#sky)"/>
+  <!-- transparent: the page draws the dusk background so the leaves can fly off on their own -->
   <g filter="url(#glow)">
   <g class="fall" style="animation-duration:17.2s;animation-delay:-15.1s"><g class="sway" style="animation-duration:5.3s">
     <g class="melt" style="animation-name:meltC;animation-duration:17.2s;animation-delay:-15.1s"><g class="spin" style="animation-duration:4.1s"><use xlink:href="#leafA" href="#leafA" transform="translate(394 0) scale(0.94)" fill="#7fb069"/></g></g>
