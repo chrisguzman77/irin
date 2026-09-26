@@ -14,6 +14,7 @@ from fastapi import WebSocket, WebSocketDisconnect
 
 from .clock import clock
 from .contracts import AlarmState, Reading, StateSnapshot, WSMessage
+from .forecast import HISTORY_MINUTES
 
 if TYPE_CHECKING:
     from .main import Runtime
@@ -30,8 +31,10 @@ class Hub:
 
     async def snapshot(self) -> StateSnapshot:
         latest = await self.runtime.datasource.get_latest()
+        fc = self.runtime.forecaster
         return StateSnapshot(
             latest_reading=latest,
+            forecast=fc.last.forecast if fc and latest is not None and not latest.is_stale else None,
             alarm=self.runtime.alarm.state if self.runtime.alarm else AlarmState(),
             settings=self.runtime.settings,
             mode=self.runtime.mode,
@@ -85,7 +88,30 @@ class Hub:
                 if self.runtime.alarm is not None:
                     self.runtime.alarm.process_reading(reading)
                 await self.broadcast(WSMessage(type="reading_update", payload=reading.model_dump(mode="json")))
+                await self._forecast()
             await clock.sleep(POLL_CLOCK_SECONDS)
+
+    async def _forecast(self) -> None:
+        """Step 6: forecast on every new reading; suspended on stale or gapped data.
+        Payload: the Forecast fields flat when ok (what display.js draws) plus
+        forecast (Forecast | null), status (ok | suspended | unavailable), reason."""
+        fc = self.runtime.forecaster
+        if fc is None:
+            return
+        try:
+            history = await self.runtime.datasource.history(HISTORY_MINUTES)
+        except NotImplementedError:
+            return
+        result = fc.forecast(history)
+        if self.runtime.alarm is not None:
+            if result.forecast is not None:
+                self.runtime.alarm.process_forecast(result.forecast)
+            else:
+                self.runtime.alarm.process_no_forecast()
+        payload = result.payload()
+        if result.forecast is not None:
+            payload = {**result.forecast.model_dump(mode="json"), **payload}
+        await self.broadcast(WSMessage(type="forecast_update", payload=payload))
 
     def start(self) -> None:
         if self._task is None:

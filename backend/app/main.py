@@ -25,6 +25,7 @@ from .contracts import FRESH_PIN_ENDPOINTS, AlarmState, Reading, Settings, WSMes
 from .datasource.base import DataSource
 from .datasource.nightscout import NightscoutDataSource
 from .datasource.replay import ReplayDataSource
+from .forecast import Forecaster
 from .ws import Hub
 
 Mode = Literal["replay", "nightscout"]
@@ -47,6 +48,7 @@ class Runtime:
     settings: Settings = field(default_factory=Settings)
     hub: "Hub | None" = None
     alarm: "AlarmEngine | None" = None
+    forecaster: "Forecaster | None" = None
 
 
 runtime = Runtime(mode="nightscout" if config.DATASOURCE == "nightscout" else "replay",
@@ -54,6 +56,7 @@ runtime = Runtime(mode="nightscout" if config.DATASOURCE == "nightscout" else "r
 hub = Hub(runtime)
 runtime.hub = hub
 runtime.alarm = AlarmEngine(runtime.settings)
+runtime.forecaster = Forecaster()
 
 ALARM_TICK_CLOCK_SECONDS = 30.0
 _broadcast_tasks: set[asyncio.Task] = set()  # references held so a broadcast is never GC'd mid-flight
@@ -124,6 +127,23 @@ async def latest() -> Reading:
     if reading is None:
         raise HTTPException(status_code=404, detail="no reading yet")
     return reading
+
+
+@app.get("/api/history", response_model=list[Reading])
+async def history(minutes: int = 180) -> list[Reading]:
+    """Readings from the last `minutes` of clock time, oldest first (the
+    display's graph after a reload; Justin's request, no contracts change)."""
+    minutes = max(1, min(minutes, 24 * 60))
+    try:
+        return await runtime.datasource.history(minutes)
+    except NotImplementedError as e:
+        raise HTTPException(status_code=501, detail=str(e))
+
+
+@app.get("/api/forecast")
+async def forecast_status() -> dict:
+    """The last forecast result: forecast, status (ok | suspended | unavailable), reason."""
+    return runtime.forecaster.last.payload() if runtime.forecaster else {"forecast": None, "status": "unavailable", "reason": "no forecaster"}
 
 
 @app.get("/api/contracts/fresh_pin")

@@ -51,3 +51,11 @@ def test_acknowledge_is_pin_gated_and_alarm_state_is_readable():
         assert c.post("/api/acknowledge", json={"source": "app"}).status_code in (401, 503)
         r = c.get("/api/alarm")
         assert r.status_code == 200 and r.json()["state"] == "idle"
+
+
+def test_history_and_forecast_endpoints():
+    with TestClient(app) as c:
+        r = c.get("/api/history?minutes=180")
+        assert r.status_code == 200 and isinstance(r.json(), list)
+        r = c.get("/api/forecast")
+        assert r.status_code == 200 and r.json()["status"] in ("ok", "suspended", "unavailable")
