@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS readings (
 CREATE TABLE IF NOT EXISTS treatments (
     id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp TEXT NOT NULL, kind TEXT NOT NULL,
     insulin_units REAL, carbs_g REAL, dose_label TEXT, text TEXT,
-    confirmed INTEGER NOT NULL DEFAULT 0);
+    confirmed INTEGER NOT NULL DEFAULT 0, is_demo INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS alarm_events (event_id TEXT PRIMARY KEY, json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS night_records (night_date TEXT PRIMARY KEY, json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS low_events (low_event_id TEXT PRIMARY KEY, json TEXT NOT NULL);
@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS pairings (id INTEGER PRIMARY KEY AUTOINCREMENT, json 
 CREATE TABLE IF NOT EXISTS doctor_messages (message_id TEXT PRIMARY KEY, json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS family_stories (story_id TEXT PRIMARY KEY, json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS reports (night_date TEXT PRIMARY KEY, json TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 """
 
 
@@ -43,6 +44,11 @@ def connect(path: str | Path | None = None) -> sqlite3.Connection:
 def init_db(path: str | Path | None = None) -> None:
     with connect(path) as conn:
         conn.executescript(SCHEMA)
+        # columns added after the first Pi database was created (ALTER is idempotent by try)
+        try:
+            conn.execute("ALTER TABLE treatments ADD COLUMN is_demo INTEGER NOT NULL DEFAULT 0")
+        except sqlite3.OperationalError:  # duplicate column: already there
+            pass
 
 
 def insert_reading(reading: Reading, conn: sqlite3.Connection | None = None) -> None:
@@ -85,18 +91,20 @@ def select_latest_reading(conn: sqlite3.Connection | None = None) -> Reading | N
                    trend=r["trend"], source=r["source"], is_stale=bool(r["is_stale"]))
 
 
-def insert_treatment(t: Treatment, conn: sqlite3.Connection | None = None) -> int:
-    """Invariant 2, enforced again at the storage boundary."""
+def insert_treatment(t: Treatment, conn: sqlite3.Connection | None = None, is_demo: bool = False) -> int:
+    """Invariant 2, enforced again at the storage boundary. is_demo marks an
+    entry logged while the replay source was active: stored locally like any
+    other, but the forwarder files it under the demo device, never the real one."""
     if t.insulin_units is not None and not t.confirmed:
         raise ValueError("insulin_units may only be stored with confirmed=True")
     own = conn is None
     conn = conn or connect()
     with conn:
         cur = conn.execute(
-            "INSERT INTO treatments (timestamp, kind, insulin_units, carbs_g, dose_label, text, confirmed)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO treatments (timestamp, kind, insulin_units, carbs_g, dose_label, text, confirmed, is_demo)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (t.timestamp.isoformat(), t.kind, t.insulin_units, t.carbs_g, t.dose_label, t.text,
-             int(t.confirmed)),
+             int(t.confirmed), int(is_demo)),
         )
         rowid = int(cur.lastrowid or 0)
     if own:
@@ -148,3 +156,49 @@ def select_reports(limit: int = 30, conn: sqlite3.Connection | None = None) -> l
     if own:
         conn.close()
     return [MorningReport.model_validate_json(r["json"]) for r in rows]
+
+
+def get_kv(key: str, conn: sqlite3.Connection | None = None) -> str | None:
+    own = conn is None
+    conn = conn or connect()
+    r = conn.execute("SELECT value FROM kv WHERE key = ?", (key,)).fetchone()
+    if own:
+        conn.close()
+    return r["value"] if r else None
+
+
+def set_kv(key: str, value: str, conn: sqlite3.Connection | None = None) -> None:
+    own = conn is None
+    conn = conn or connect()
+    with conn:
+        conn.execute("INSERT OR REPLACE INTO kv VALUES (?, ?)", (key, value))
+    if own:
+        conn.close()
+
+
+# --- the cloud forwarder's readers (C1): insertion order, so a backfilled older
+# reading is still forwarded, and a replaced row (INSERT OR REPLACE gives it a new
+# rowid) is forwarded again and upserted ---
+
+
+def select_reading_rows(after_rowid: int, limit: int, conn: sqlite3.Connection | None = None) -> list[tuple[int, dict]]:
+    own = conn is None
+    conn = conn or connect()
+    rows = conn.execute("SELECT rowid AS rid, * FROM readings WHERE rowid > ? ORDER BY rowid LIMIT ?",
+                        (after_rowid, limit)).fetchall()
+    if own:
+        conn.close()
+    return [(int(r["rid"]), {"timestamp": r["timestamp"], "glucose_mgdl": r["glucose_mgdl"], "trend": r["trend"],
+                                "source": r["source"], "is_stale": bool(r["is_stale"]), "is_demo": False}) for r in rows]
+
+
+def select_treatment_rows(after_rowid: int, limit: int, conn: sqlite3.Connection | None = None) -> list[tuple[int, dict]]:
+    own = conn is None
+    conn = conn or connect()
+    rows = conn.execute("SELECT rowid AS rid, * FROM treatments WHERE rowid > ? ORDER BY rowid LIMIT ?",
+                        (after_rowid, limit)).fetchall()
+    if own:
+        conn.close()
+    return [(int(r["rid"]), {"timestamp": r["timestamp"], "kind": r["kind"], "insulin_units": r["insulin_units"],
+                                "carbs_g": r["carbs_g"], "dose_label": r["dose_label"], "text": r["text"],
+                                "confirmed": bool(r["confirmed"]), "is_demo": bool(r["is_demo"])}) for r in rows]

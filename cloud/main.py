@@ -12,10 +12,16 @@ to over WhatsApp), RELAY_KEY (audio/render from the relay), DOMAIN.
 from __future__ import annotations
 
 import hmac
+import logging
 import os
 
-from fastapi import FastAPI, Header, HTTPException
+import psycopg
+from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+
+from ingest import IngestBatch, ingest as ingest_batch
+
+log = logging.getLogger("irin.cloud")
 
 TIGER_URI = os.environ.get("TIGER_URI", "postgresql://postgres:postgres@localhost:5432/irin")
 DEVICE_ID = os.environ.get("DEVICE_ID", "")
@@ -42,7 +48,8 @@ def require_device_token(x_device_id: str | None = Header(default=None, alias="X
                          x_device_token: str | None = Header(default=None, alias="X-Device-Token")) -> str:
     if not DEVICE_ID or not DEVICE_TOKEN:
         raise HTTPException(status_code=503, detail="DEVICE_ID / DEVICE_TOKEN not configured")
-    if x_device_id != DEVICE_ID or not x_device_token or not hmac.compare_digest(x_device_token, DEVICE_TOKEN):
+    if x_device_id != DEVICE_ID or not x_device_token or not hmac.compare_digest(
+            x_device_token.encode("utf-8", "replace"), DEVICE_TOKEN.encode("utf-8", "replace")):
         raise HTTPException(status_code=401, detail="bad device token")
     return x_device_id
 
@@ -57,7 +64,17 @@ async def health() -> dict:
 
 
 @app.post("/v1/ingest")
-async def ingest(): _stub("C1 ingest (device token; upsert on (device_id, timestamp))")
+async def ingest(batch: IngestBatch, device_id: str = Depends(require_device_token)) -> dict:
+    """C1: the Pi's 5-minute batch. The body's device_id must be the header's;
+    demo rows are routed to <device_id>-demo inside ingest(). 503 when Tiger is
+    unreachable so the Pi keeps its cursor and retries next tick."""
+    if batch.device_id != device_id:
+        raise HTTPException(status_code=400, detail="device_id does not match the token")
+    try:
+        return ingest_batch(batch)
+    except psycopg.Error as e:
+        log.warning("ingest failed: %s", type(e).__name__)
+        raise HTTPException(status_code=503, detail="storage unavailable; retry")
 
 
 @app.get("/v1/dash/{name}")

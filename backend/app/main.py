@@ -33,6 +33,7 @@ from .datasource.nightscout import NightscoutDataSource
 from .datasource.replay import ReplayDataSource
 from .demo import bind as bind_demo, restore_live_settings, router as demo_router
 from .forecast import Forecaster
+from .forward import Forwarder, from_config as forwarder_from_config
 from .outputs import GatedOutputs
 from .presence import PresenceMachine, PresenceState
 from .reports import ReportBuilder, SmtpMailer
@@ -67,6 +68,7 @@ class Runtime:
     outputs: "GatedOutputs | None" = None
     scheduler: "Scheduler | None" = None
     reports: "ReportBuilder | None" = None
+    forwarder: "Forwarder | None" = None
 
 
 runtime = Runtime(mode="nightscout" if config.DATASOURCE == "nightscout" else "replay",
@@ -84,7 +86,7 @@ runtime.presence = PresenceMachine(runtime.settings)
 runtime.outputs = GatedOutputs(_hal(), runtime.presence)  # Away gates room outputs only, here
 runtime.alarm = AlarmEngine(runtime.settings, hal=runtime.outputs)
 runtime.forecaster = Forecaster()
-runtime.voice = VoiceLogger()
+runtime.voice = VoiceLogger(is_demo=lambda: runtime.mode == "replay")
 
 
 def _sync_check() -> bool:
@@ -146,6 +148,23 @@ def _morning_report_job(night_date: date) -> None:
 
 runtime.scheduler.register("morning_report", lambda: runtime.settings.night_window_end, _morning_report_job)
 
+
+# --- the forwarder to Irin Cloud (C1): outbound, batched, its own task, never in the alarm path ---
+
+
+def _replay_rows(cursor: datetime | None) -> tuple[object, list[dict]]:
+    """The replay source's served rows newer than the cursor, keyed by the source
+    object (a mode switch or scenario select makes a new one and the forwarder
+    starts that run from its first row). Live readings come from the store."""
+    ds = runtime.datasource
+    if not isinstance(ds, ReplayDataSource):
+        return None, []
+    rows = [ds._to_reading(r) for r in ds._available(clock.now()) if cursor is None or r[0] > cursor]
+    return ds, [r.model_dump(mode="json") for r in rows]
+
+
+runtime.forwarder = forwarder_from_config(_replay_rows)
+
 ALARM_TICK_CLOCK_SECONDS = 30.0
 _broadcast_tasks: set[asyncio.Task] = set()  # references held so a broadcast is never GC'd mid-flight
 
@@ -197,8 +216,9 @@ async def lifespan(app: FastAPI):
     hub.start()
     tick_task = asyncio.create_task(_alarm_tick_loop())
     sched_task = asyncio.create_task(runtime.scheduler.run())
+    forward_task = asyncio.create_task(runtime.forwarder.run())
     yield
-    for task in (tick_task, sched_task):
+    for task in (tick_task, sched_task, forward_task):
         task.cancel()
         try:
             await task
@@ -362,7 +382,7 @@ async def log_treatment(t: Treatment) -> dict:
     if t.kind == "carbs" and t.carbs_g is None:
         raise HTTPException(status_code=400, detail="a carbs entry needs carbs_g")
     row = t.model_copy(update={"timestamp": ts})
-    store.insert_treatment(row)
+    store.insert_treatment(row, is_demo=runtime.mode == "replay")
     payload = row.model_dump(mode="json")
     await _announce([payload])
     return {"status": "stored", "stored": [payload]}
@@ -390,6 +410,12 @@ async def set_presence(req: PresenceOverride) -> PresenceState:
 @app.get("/api/presence", response_model=PresenceState)
 async def presence_state() -> PresenceState:
     return runtime.presence.state
+
+
+@app.get("/api/forwarder")
+async def forwarder_state() -> dict:
+    """The cloud forwarder: enabled, cursor, batches sent, failures (the under-the-hood panel)."""
+    return runtime.forwarder.status()
 
 
 @app.get("/api/scheduler")
