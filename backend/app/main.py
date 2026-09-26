@@ -50,6 +50,7 @@ from .rounds.evaluate import StandingEngine
 from .rounds.messages import DoctorMessages, MessageError
 from .rounds.pairing import PairingError, PairingService, RelayPairing
 from .rounds.relay_client import RelayClient
+from .rounds.catchup import CatchUp
 from .rounds.recall import ANSWER_UNTIL_HHMM, MorningRecall, RecallError
 from .rounds.step_watch import StepWatch
 from .rounds.nights_adapter import NightsAdapter
@@ -97,6 +98,7 @@ class Runtime:
     messages: "DoctorMessages | None" = None
     step_watch: "StepWatch | None" = None
     recall: "MorningRecall | None" = None
+    catchup: "CatchUp | None" = None
 
 
 runtime = Runtime(mode="nightscout" if config.DATASOURCE == "nightscout" else "replay",
@@ -472,6 +474,9 @@ async def lifespan(app: FastAPI):
         on_plan_state=lambda st: _schedule(hub.broadcast(WSMessage(type="plan_state", payload=st))))
     runtime.messages.on_plan_message = runtime.step_watch.on_plan_message
     runtime.standing.active_watch = lambda: runtime.step_watch.active_plan() is not None
+    # R12: the replay seek's catch-up replays every missing morning through the same ledger, questions and budget
+    runtime.catchup = CatchUp(ledger=runtime.ledger, low_events=runtime.low_events, recall=runtime.recall,
+                              evaluate_night=_evaluate_night, is_demo=lambda: runtime.mode == "replay")
     await runtime.datasource.start()
     hub.start()
     tick_task = asyncio.create_task(_alarm_tick_loop())
