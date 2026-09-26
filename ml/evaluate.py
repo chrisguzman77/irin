@@ -22,11 +22,13 @@ import numpy as np
 import pandas as pd
 
 from ml.build_dataset import drop_collisions
-from ml.events import forecasts, replay_events, summarize
+from ml.events import (FCST_FROM_MIN, FCST_TO_MIN, MAX_LEAD_MIN, MIN_LEAD_MIN, NEAR_MISS_MGDL, forecasts,
+                       replay_events, summarize)
 from ml.models.features import FEATURE_NAMES
 
 HOLDOUT_DAYS = 56
 THRESHOLDS = (70.0, 75.0, 80.0)
+N_CONSEC = 2
 _F = {n: k for k, n in enumerate(FEATURE_NAMES)}
 
 
@@ -70,12 +72,12 @@ def _num(v, fmt="5.1f"):
 def print_event_table(title: str, results: dict) -> None:
     print(f"\n{title}")
     for scope, unit in (("night", "night"), ("all", "day")):
-        print(f"  [{scope.upper()}]  name              thr  lows fcst  det late miss   detect  det|fcst  med lead  p90 lead  false  false/{unit}")
+        print(f"  [{scope.upper()}]  name              thr  lows fcst  det late long miss   detect  det|fcst  med lead  p90 lead  false near  far  false/{unit}  far/{unit}")
         for (name, thr), s in results.items():
             r = s[scope]
-            print(f"          {name:<16} {thr:4.0f}  {r['lows']:4d} {r['forecastable']:4d} {r['detected']:4d} {r['late']:4d} {r['missed']:4d}"
+            print(f"          {name:<16} {thr:4.0f}  {r['lows']:4d} {r['forecastable']:4d} {r['detected']:4d} {r['late']:4d} {r['long']:4d} {r['missed']:4d}"
                   f"   {_pct(r['detection'])}  {_pct(r['detection_forecastable'])}   {_num(r['median_lead_min'])}     {_num(r['p90_lead_min'])}"
-                  f"   {r['false_alarms']:4d}   {_num(r['false_per_unit'], '6.2f')}")
+                  f"   {r['false_alarms']:4d} {r['false_near']:4d} {r['false_far']:4d}   {_num(r['false_per_unit'], '6.2f')}      {_num(r['false_far_per_unit'], '6.2f')}")
 
 
 def sweep_plot(full: dict, held: dict, out: Path) -> None:
@@ -96,7 +98,7 @@ def sweep_plot(full: dict, held: dict, out: Path) -> None:
         ax.set_title(f"Overnight: {title}")
         ax.set_xlabel("false alarms per night")
         ax.grid(alpha=0.3)
-    axes[0].set_ylabel("detection (warning >= 10 min ahead), %")
+    axes[0].set_ylabel("detection (warning 10-60 min ahead), %")
     axes[0].legend(fontsize=8)
     fig.tight_layout()
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -122,6 +124,11 @@ def main() -> None:
     print(f"TIME SPLIT: train {clean.timestamp.min():%Y-%m-%d} .. {split:%Y-%m-%d %H:%M}   "
           f"held out {split:%Y-%m-%d %H:%M} .. {clean.timestamp.max():%Y-%m-%d}  ({HOLDOUT_DAYS} days)")
     print(f"  dataset rows: train {len(rows) - len(held_rows)}   held out {len(held_rows)}")
+    print(f"\nDEFINITIONS: warning = {N_CONSEC} consecutive forecasts below thr; detected = warning on at the crossing"
+          f" with {MIN_LEAD_MIN:.0f} <= lead <= {MAX_LEAD_MIN:.0f} min; late < {MIN_LEAD_MIN:.0f}; long > {MAX_LEAD_MIN:.0f} (not credited);"
+          f"\n  low = any reading < 70, new low after 2 readings >= 70; fcst (forecastable) = >= 2 forecasts"
+          f" {FCST_FROM_MIN}..{FCST_TO_MIN} min before the crossing;"
+          f"\n  false = warning cleared with no crossing; near = lowest actual during it < {NEAR_MISS_MGDL:.0f}, far = >= {NEAR_MISS_MGDL:.0f}")
 
     print("\nPOINT METRICS, held-out rows (absolute mg/dL at t+30)")
     print("  name              MAE    MAE(true<100)")
@@ -133,13 +140,13 @@ def main() -> None:
     for name, f in BASELINES.items():
         preds = forecasts(ts, x, f)
         for thr in THRESHOLDS:
-            rep = replay_events(ts, x, preds, threshold=thr)
+            rep = replay_events(ts, x, preds, threshold=thr, n_consecutive=N_CONSEC)
             full[(name, thr)] = summarize(rep)
             held[(name, thr)] = summarize(rep, start=split.to_datetime64())
 
     s = held[("B linear 15m", 70.0)]
     print(f"\nHELD-OUT coverage: {s['days']:.1f} sensor-days, {s['nights']:.1f} sensor-nights")
-    print_event_table(f"EVENT METRICS, HELD-OUT {HOLDOUT_DAYS} DAYS (warning rule N=2; detect = warning on at crossing, lead >= 10 min)", held)
+    print_event_table(f"EVENT METRICS, HELD-OUT {HOLDOUT_DAYS} DAYS", held)
     s = full[("B linear 15m", 70.0)]
     print(f"\nFULL HISTORY coverage: {s['days']:.1f} sensor-days, {s['nights']:.1f} sensor-nights")
     print_event_table("EVENT METRICS, FULL HISTORY (baselines are untrained, so no leakage)", full)

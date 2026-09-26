@@ -19,12 +19,20 @@ it breaks both consecutive counts and leaves the warning state unchanged.
 
 Low event: the first reading under 70 (a single reading counts, George's
 call); a NEW event needs 2 consecutive readings back at or above 70.
-Scoring per low event: detected = a warning is on at the crossing and started
->= 10 min before it; late = on at the crossing but < 10 min lead; missed = no
-warning on. Every warning episode that clears without a crossing is a false
-alarm. A low is "forecastable" when at least 2 forecasts exist in the 40..10
-min before the crossing; the rest (after gaps, sensor warm-up) are reported
-separately so no forecaster is blamed for missing data."""
+Scoring per low event, by the lead = crossing time minus the start of the
+warning that is on at the crossing:
+  detected  10 <= lead <= 60 min
+  late      lead < 10 min
+  long      lead > 60 min (warned, but a warning that has sat on for over an
+            hour is not credited; kept out of detection and lead statistics)
+  missed    no warning on at the crossing
+Every warning episode that clears without a crossing is a false alarm, split
+by the lowest actual reading between its start and its clear: near (under 80,
+glucose did come close) or far (80 and up).
+A low is "forecastable" when at least 2 forecasts exist between 40 and 10 min
+before the crossing, both ends inclusive: the fewest a forecaster needs to
+fire the N = 2 rule with the minimum lead. The rest (after gaps, sensor
+warm-up) are reported separately so no forecaster is blamed for missing data."""
 
 from __future__ import annotations
 
@@ -38,6 +46,9 @@ from ml.models.features import WINDOW_LEN, _hours, features, window_ok
 
 LOW = 70.0
 MIN_LEAD_MIN = 10.0
+MAX_LEAD_MIN = 60.0
+NEAR_MISS_MGDL = 80.0
+FCST_FROM_MIN, FCST_TO_MIN = 40, 10   # forecastable: >= 2 forecasts in [crossing - 40, crossing - 10]
 NIGHT = ("22:00", "07:00")
 READINGS_PER_DAY = 288
 READINGS_PER_NIGHT = 108           # 9 h x 12
@@ -94,7 +105,8 @@ def replay_events(ts: np.ndarray, mgdl: np.ndarray, preds: np.ndarray,
             if warn is not None:
                 lead = (t[i] - warn["time"]).astype(np.int64) / 60
                 low["lead_min"] = float(lead)
-                low["outcome"] = "detected" if lead >= MIN_LEAD_MIN else "late"
+                low["outcome"] = ("late" if lead < MIN_LEAD_MIN else
+                                  "long" if lead > MAX_LEAD_MIN else "detected")
                 warn.update(end="escalated", end_i=i, lead_min=float(lead))
                 warn = None
             lows.append(low)
@@ -112,12 +124,12 @@ def replay_events(ts: np.ndarray, mgdl: np.ndarray, preds: np.ndarray,
         elif warn is not None:
             recov = recov + 1 if p[i] >= threshold else 0
             if recov >= 2:
-                warn.update(end="cleared", end_i=i)
+                warn.update(end="cleared", end_i=i, nadir=float(x[warn["i"]:i + 1].min()))
                 warn, recov = None, 0
         elif p[i] < threshold:
             below += 1
             if below >= n_consecutive:
-                warn = {"i": i, "time": t[i], "night": bool(night[i]), "end": "open", "end_i": None, "lead_min": None}
+                warn = {"i": i, "time": t[i], "night": bool(night[i]), "end": "open", "end_i": None, "lead_min": None, "nadir": None}
                 warnings.append(warn)
                 below = recov = 0
         else:
@@ -128,8 +140,8 @@ def replay_events(ts: np.ndarray, mgdl: np.ndarray, preds: np.ndarray,
     have_t = t[have]
     for low in lows:
         c = low["time"]
-        lo = np.searchsorted(have_t, c - np.timedelta64(40 * 60, "s"), "left")
-        hi = np.searchsorted(have_t, c - np.timedelta64(10 * 60, "s"), "right")
+        lo = np.searchsorted(have_t, c - np.timedelta64(FCST_FROM_MIN * 60, "s"), "left")
+        hi = np.searchsorted(have_t, c - np.timedelta64(FCST_TO_MIN * 60, "s"), "right")
         low["forecastable"] = bool(hi - lo >= 2)
     return {"ts": t, "night": night, "lows": lows, "warnings": warnings, "threshold": threshold}
 
@@ -163,6 +175,7 @@ def summarize(rep: dict, start=None, end=None) -> dict:
             "forecastable": len(F),
             "detected": len(det),
             "late": sum(e["outcome"] == "late" for e in L),
+            "long": sum(e["outcome"] == "long" for e in L),
             "missed": sum(e["outcome"] == "missed" for e in L),
             "detection": len(det) / len(L) if L else None,
             "detection_forecastable": len(det_f) / len(F) if F else None,
@@ -170,7 +183,10 @@ def summarize(rep: dict, start=None, end=None) -> dict:
             "p90_lead_min": float(np.percentile(leads, 90)) if leads else None,
             "warnings": sum(keep(w) for w in warns),
             "false_alarms": len(fa),
+            "false_near": sum(w["nadir"] < NEAR_MISS_MGDL for w in fa),
+            "false_far": sum(w["nadir"] >= NEAR_MISS_MGDL for w in fa),
             "false_per_unit": len(fa) / denom if denom else None,     # per day (all) / per night (night)
+            "false_far_per_unit": sum(w["nadir"] >= NEAR_MISS_MGDL for w in fa) / denom if denom else None,
         }
     return out
 
