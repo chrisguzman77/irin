@@ -54,3 +54,14 @@ def test_clock_never_runs_backwards_and_speed_is_positive():
         c.advance(-1)
     with pytest.raises(ValueError):
         c.set(speed=0)
+
+
+def test_resync_moves_now_to_wall_time_but_keeps_elapsed_continuous():
+    clock = Clock()
+    clock.advance(600)  # 10 min of staleness already counted
+    before = clock.elapsed()
+    clock._start = clock._start - timedelta(hours=5)  # the pre-NTP wall clock was hours behind
+    assert clock.now() < datetime.now() - timedelta(hours=4)
+    clock.resync()
+    assert abs((clock.now() - datetime.now()).total_seconds()) < 1
+    assert clock.elapsed() >= before and clock.elapsed() - before < 1

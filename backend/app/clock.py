@@ -42,6 +42,13 @@ class Clock:
         self._mono0 = time.monotonic()
         self._offset = 0.0
 
+    def resync(self) -> None:
+        """Live mode, after NTP sets the wall clock: re-anchor `now()` to the
+        corrected wall time while keeping `elapsed()` continuous, so staleness
+        (monotonic) is untouched and no relative timer jumps. Never used in
+        replay, where the clock is the scenario's."""
+        self._start = datetime.now() - timedelta(seconds=self.elapsed())
+
     def advance(self, seconds: float) -> None:
         """Jump clock time forward (tests, the replay seek). Never backwards."""
         if seconds < 0:

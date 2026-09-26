@@ -87,6 +87,7 @@ def _sync_check() -> bool:
 runtime.scheduler = Scheduler(runtime.settings, sync_check=None if config.IRIN_HW == "mock" else _sync_check)
 runtime.scheduler.basal_logged_today = lambda d: basal_logged_on(
     store.select_treatments(datetime.combine(d, time.min)), d)
+runtime.scheduler.on_synced = lambda: clock.resync() if runtime.mode != "replay" else None
 
 ALARM_TICK_CLOCK_SECONDS = 30.0
 _broadcast_tasks: set[asyncio.Task] = set()  # references held so a broadcast is never GC'd mid-flight

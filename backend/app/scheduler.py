@@ -14,10 +14,18 @@ job until it reads yes; until then clock_synced is False and the snapshot
 carries it so the display and app show "clock not set". Alarms, stale
 marking, and re-arm timers never wait (they are relative, on clock.py).
 Under IRIN_HW=mock and in replay the guard is bypassed (clock_synced True).
+On the False -> True transition `on_synced` runs (main.py re-anchors clock.py
+to the corrected wall time in live mode) and the poll stops.
+
+A job fires at the first synced tick within CATCHUP_HOURS after its time
+(a Pi that boots at 22:30 never runs the 07:00 morning report at bedtime);
+same-tick jobs run in "HH:MM" order; a job that raises is done for the day
+and never re-fired (a half-done job is never repeated).
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import subprocess
 from dataclasses import dataclass, field
@@ -34,6 +42,8 @@ GUARD_POLL_CLOCK_SECONDS = 10.0
 MORNING_MODE_HOURS = 2  # the morning screen for 2 h after the night window ends
 BASAL_VISUAL_MIN = 60
 BASAL_EMAIL_MIN = 90
+BASAL_NUDGE_MAX_HOURS = 8  # the ladder resets this long after basal time (or when logged)
+CATCHUP_HOURS = 3  # a job missed by more than this waits for tomorrow
 
 SyncCheck = Callable[[], bool]
 JobFn = Callable[[date], None]
@@ -74,6 +84,7 @@ class Scheduler:
     basal_logged_today: Callable[[date], bool] = lambda d: False  # wired to the store in main.py
     mailer: Callable[[str, str], None] | None = None  # (subject, body); None = no email path yet
     on_nudge: Callable[[BasalNudge], None] | None = None
+    on_synced: Callable[[], None] | None = None  # main.py: clock.resync() in live mode
 
     def __post_init__(self) -> None:
         if self.sync_check is None:
@@ -103,23 +114,28 @@ class Scheduler:
     # --- the tick (every 10 s of clock time; tests call it directly) ---
 
     def refresh_sync(self) -> bool:
-        if self.sync_check is not None:
-            was = self.clock_synced
+        """Poll the guard until it reads yes; on that transition run on_synced."""
+        if self.sync_check is not None and not self.clock_synced:
             self.clock_synced = bool(self.sync_check())
-            if self.clock_synced and not was:
+            if self.clock_synced:
                 log.info("wall clock synced; wall-clock jobs released")
+                if self.on_synced is not None:
+                    self.on_synced()
         return self.clock_synced
 
-    def tick(self) -> list[str]:
-        """Returns the names of the jobs fired on this tick."""
-        if not self.refresh_sync():
+    def tick(self, refresh: bool = True) -> list[str]:
+        """Returns the names of the jobs fired on this tick. run() polls the
+        guard in a thread first and calls tick(refresh=False)."""
+        if refresh:
+            self.refresh_sync()
+        if not self.clock_synced:
             return []
         now = clock.now()
         fired: list[str] = []
-        for job in self.jobs:
+        for job in sorted(self.jobs, key=lambda j: parse_hhmm(j.at)):
             t = parse_hhmm(job.at)
             due = now.replace(hour=t.hour, minute=t.minute, second=0, microsecond=0)
-            if now >= due and job.last_fired != now.date():
+            if due <= now < due + timedelta(hours=CATCHUP_HOURS) and job.last_fired != now.date():
                 job.last_fired = now.date()
                 try:
                     job.fn(now.date())
@@ -135,14 +151,16 @@ class Scheduler:
             return
         t = parse_hhmm(s.basal_time)
         due = now.replace(hour=t.hour, minute=t.minute, second=0, microsecond=0)
-        if now < due or self.basal_logged_today(now.date()):
-            self._set_nudge("none", None)  # before basal time, or logged: daily reset
-            return
+        if now < due:
+            due -= timedelta(days=1)  # a basal time late in the evening runs its ladder past midnight
         late = now - due
+        if late >= timedelta(hours=BASAL_NUDGE_MAX_HOURS) or self.basal_logged_today(due.date()):
+            self._set_nudge("none", None)  # logged, or the ladder expired: daily reset
+            return
         if late >= timedelta(minutes=BASAL_EMAIL_MIN):
             self._set_nudge("email", due)
-            if self.nudge.emailed_on != now.date() and self.mailer is not None:
-                self.nudge.emailed_on = now.date()
+            if self.nudge.emailed_on != due.date() and self.mailer is not None:
+                self.nudge.emailed_on = due.date()
                 try:
                     self.mailer("Irin: basal not logged", f"No basal logged by {s.basal_time} plus {BASAL_EMAIL_MIN} minutes.")
                 except Exception:
@@ -162,11 +180,15 @@ class Scheduler:
     async def run(self) -> None:
         while True:
             try:
-                self.tick()
+                if not self.clock_synced:
+                    await asyncio.to_thread(self.refresh_sync)  # timedatectl never blocks the loop
+                self.tick(refresh=False)
             except Exception:
                 log.exception("scheduler tick failed")
             await clock.sleep(GUARD_POLL_CLOCK_SECONDS)
 
 
 def basal_logged_on(treatments: list[Treatment], day: date) -> bool:
-    return any(t.kind == "basal" and t.timestamp.date() == day for t in treatments)
+    """A basal logged on `day` or later (a 23:00 basal logged at 00:10 still
+    clears the ladder for the night it was due)."""
+    return any(t.kind == "basal" and t.timestamp.date() >= day for t in treatments)
