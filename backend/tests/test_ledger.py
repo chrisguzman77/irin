@@ -181,3 +181,10 @@ def test_app_serves_nights_and_builds_on_demand(monkeypatch, tmp_path):
         assert r.status_code == 200 and r.json()["is_demo"] is True and r.json()["night_date"] == night
         assert r.json()["code_source"] == "logged" and r.json()["coverage_pct"] > 0
         assert [n["night_date"] for n in c.get("/api/nights?days=3000").json()] == [night]
+
+
+def test_an_early_basal_time_is_still_found(db):
+    """nights.py searches for the basal from the usual time minus 3 h; the adapter must fetch that far."""
+    src = Sources(readings=flat_night(), treatments=[basal(datetime(2020, 1, 1, 16, 30))])
+    r = make(src, settings=Settings(basal_time="18:00")).build_night(NIGHT)
+    assert r.reason_codes == ["clean"]

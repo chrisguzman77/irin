@@ -32,8 +32,8 @@ class LowEventDetector:
         """The night's LowEvents, stored (a rebuild replaces each by id)."""
         inp = self.adapter.night_inputs(night_date)
         events = [LowEvent.model_validate({**row, "is_demo": self.is_demo()}) for row in self.adapter.lows(inp)]
+        store.replace_low_events(night_date, events)  # a rebuild after a re-cached reading leaves no stale row
         for event in events:
-            store.upsert_low_event(event)
             if self.on_event is not None:
                 try:
                     self.on_event(event)

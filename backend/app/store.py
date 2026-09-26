@@ -340,6 +340,20 @@ def upsert_low_event(event: LowEvent, conn: sqlite3.Connection | None = None) ->
         conn.close()
 
 
+def replace_low_events(night_date: date, events: list[LowEvent], conn: sqlite3.Connection | None = None) -> None:
+    """One transaction: the night's previous rows go, the new set is written."""
+    own = conn is None
+    conn = conn or connect()
+    with conn:
+        old = [r["low_event_id"] for r in conn.execute("SELECT low_event_id, json FROM low_events").fetchall()
+               if LowEvent.model_validate_json(r["json"]).night_date == night_date]
+        conn.executemany("DELETE FROM low_events WHERE low_event_id = ?", [(i,) for i in old])
+        conn.executemany("INSERT OR REPLACE INTO low_events VALUES (?, ?)",
+                         [(e.low_event_id, e.model_dump_json()) for e in events])
+    if own:
+        conn.close()
+
+
 def select_low_events(since: date, until: date | None = None, conn: sqlite3.Connection | None = None) -> list[LowEvent]:
     """By night_date in [since, until], oldest first."""
     own = conn is None

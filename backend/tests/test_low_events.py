@@ -100,3 +100,27 @@ def test_app_builds_low_events_with_the_night(monkeypatch, tmp_path):
         assert c.post("/api/nights/build", json={"night_date": night}, headers={"X-PIN": "1234"}).status_code == 200
         lows = c.get("/api/low_events?days=3000").json()
         assert lows and all(e["is_demo"] is True and e["night_date"] == night for e in lows)  # The Save has its low
+
+
+def test_carbs_after_the_window_end_still_make_a_late_low_treated(db):
+    """A low in the last half hour of the night, carbs logged at 07:10: never unfelt."""
+    rows = flat_night(n=105)  # 22:00 - 06:40
+    t = START + timedelta(hours=8, minutes=45)  # 06:45
+    for i, v in enumerate([68, 64, 60, 58, 60, 62, 64, 66, 68, 69, 69, 70, 72, 75]):
+        rows.append(Reading(timestamp=t + timedelta(minutes=5 * i), glucose_mgdl=float(v), trend="Flat", source="replay"))
+    late_carbs = carbs(datetime(2020, 1, 2, 7, 10))
+    [e] = make(Sources(readings=rows, treatments=[basal(datetime(2020, 1, 1, 21, 30)), late_carbs])).detect(NIGHT)
+    assert e.carbs_logged_within_30min is True and e.inferred_unfelt is False
+    [e] = make(Sources(readings=rows, treatments=[basal(datetime(2020, 1, 1, 21, 30))])).detect(NIGHT)
+    assert e.inferred_unfelt is True  # and without the carbs it is
+
+
+def test_rebuild_after_a_recached_reading_leaves_no_stale_row(db):
+    rows, _ = low_night(30, slope=0.5)
+    src = Sources(readings=rows, treatments=[basal(datetime(2020, 1, 1, 21, 30))])
+    det = make(src)
+    [a] = det.detect(NIGHT)
+    first_low = next(r for r in rows if r.glucose_mgdl < 70)
+    rows[rows.index(first_low)] = first_low.model_copy(update={"glucose_mgdl": 72.0})  # a backfill correction
+    [b] = det.detect(NIGHT)
+    assert b.low_event_id != a.low_event_id and store.select_low_events(date(2020, 1, 1)) == [b]

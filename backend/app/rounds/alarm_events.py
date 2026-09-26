@@ -95,7 +95,9 @@ class AlarmEventRecorder:
             self._open(t)
         elif (self.open is not None and t.trigger_type in LOW_TIERS and self.open.tier not in LOW_TIERS
               and t.new_state != "idle"):
-            # a low replaces a high or stale indicator: alarm.py starts a fresh episode there, so do we
+            # a low replaces a high or stale indicator: alarm.py starts a fresh episode there, so do we;
+            # the indicator's last 2 minutes of samples are the new episode's pre-start buffer
+            self.recent = [s for s in self.open.samples if s[0] >= t.at - PRE_START_BUFFER]
             self._close(t.at)
             self._open(t)
         ep = self.open

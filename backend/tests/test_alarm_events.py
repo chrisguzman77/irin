@@ -213,3 +213,14 @@ def test_an_observer_error_never_reaches_the_engine(rig):
     eng.process_reading(reading(85))
     eng.process_reading(reading(119))  # closes the episode: the verdict raises, the engine still goes idle quietly
     assert eng.state.state == "idle" and hal.calls[-1][0] in ("set_leds", "stop_sound")
+
+
+def test_a_low_replacing_an_indicator_keeps_the_pre_start_buffer(rig):
+    eng, hal, rec = rig
+    eng.process_reading(reading(260))  # high, sleeper present
+    advance(eng, rec, 30, present=True)
+    eng.process_forecast(forecast(78))
+    eng.process_forecast(forecast(74))  # the warning replaces the high; the radar goes quiet
+    advance(eng, rec, 3, present=None)
+    eng.acknowledge("app")
+    assert rec.events[-1].tier == "predicted_low" and rec.events[-1].presence_during == "home"

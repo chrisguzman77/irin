@@ -18,8 +18,13 @@ from typing import Any, Callable
 from ..contracts import AlarmEvent, PresenceState, Reading, Settings, Treatment
 from ..windows import parse_hhmm
 
-CONTEXT_BEFORE = timedelta(hours=3)  # late meals and corrections before the night
-EXERCISE_FROM = time(17, 0)  # nights.py: exercise logged after 17:00 counts; treatments are read from there
+CONTEXT_BEFORE = timedelta(hours=3)  # late meals and corrections before the night (nights.py's 3 h rules)
+
+try:
+    from ml.models.nights import BASAL_LATE_MIN as _BASAL_LATE_MIN, EXERCISE_AFTER as EXERCISE_FROM
+except Exception:  # ml/ missing: the fetch bounds fall back to the documented values
+    EXERCISE_FROM, _BASAL_LATE_MIN = time(17, 0), 60
+BASAL_SEARCH = timedelta(hours=3)  # nights._basal_codes looks for a basal from usual - 3 h to the window end
 CONTEXT_AFTER = timedelta(hours=2)  # recovery slopes and rebounds after the window end
 
 Rows = Callable[[datetime, datetime], list[Any]]
@@ -65,10 +70,16 @@ class NightsAdapter:
         start, end = night_window(night_date, self.settings.night_window_start, self.settings.night_window_end)
         brain = self.brain_only()
         readings = [r for r in self.readings_for(start - CONTEXT_BEFORE, end + CONTEXT_AFTER) if not r.is_stale]
+        # fetch bounds only (the rules live in nights.py): 3 h before for meals and corrections, 17:00 for
+        # exercise, the usual basal time minus its search window, and 2 h after for carbs that treat a
+        # low still running at the window end
         treatments_from = min(start - CONTEXT_BEFORE, datetime.combine(start.date(), EXERCISE_FROM))
+        if self.settings.basal_time and not brain:
+            treatments_from = min(treatments_from,
+                                  datetime.combine(start.date(), parse_hhmm(self.settings.basal_time)) - BASAL_SEARCH)
         return NightInputs(
             night_date=night_date, window=(start, end), readings=readings,
-            treatments=None if brain else list(self.treatments_for(treatments_from, end)),
+            treatments=None if brain else list(self.treatments_for(treatments_from, end + CONTEXT_AFTER)),
             alarm_events=[] if brain else list(self.alarm_events_for(start - CONTEXT_BEFORE, end)),
             presence=[] if brain else list(self.presence_for(start, end)),
             usual_basal_time=None if brain else self.settings.basal_time, brain_only=brain,
