@@ -18,6 +18,8 @@ def _no_network_no_real_db(monkeypatch, tmp_path):
     monkeypatch.setattr(config, "ANTHROPIC_API_KEY", "")
     monkeypatch.setattr(config, "SMTP_HOST", "")
     monkeypatch.setattr(config, "DEVICE_TOKEN", "")  # the cloud forwarder stays disabled
+    monkeypatch.setattr(config, "VOICE_BACKEND", "none")  # never render a clip from a test
+    monkeypatch.setattr(config, "ELEVENLABS_API_KEY", "")
     monkeypatch.setattr(config, "IRIN_DB", str(tmp_path / "irin-test.db"))
     try:
         from app import main

@@ -187,3 +187,27 @@ def test_settings_rejects_bad_values(client):
     assert c.post("/api/settings", json={"nope": 1}, headers=H).status_code == 400
     assert c.post("/api/settings", json=[1, 2], headers=H).status_code in (400, 422)
     assert c.get("/api/settings").json()["night_window_end"] == "07:00"  # nothing applied
+
+
+def test_demo_basal_time_never_reaches_the_saved_live_settings(client):
+    """Press the demo basal button, change an unrelated setting (which saves the
+    whole Settings), switch to live, restart: the live basal_time comes back."""
+    c = client
+    assert c.post("/api/settings", json={"basal_time": "21:30"}, headers=H).status_code == 200
+    assert c.post("/api/demo/basal_time", headers=H).status_code == 200
+    assert c.post("/api/settings", json={"volume": 0.5}, headers=H).status_code == 200  # persists while the demo value is live
+    assert c.post("/api/mode", json={"mode": "nightscout"}, headers=H).status_code == 200
+    assert c.get("/api/settings").json()["basal_time"] == "21:30"
+    for name in Settings.model_fields:  # a restart: memory forgets, the store remembers
+        setattr(main.runtime.settings, name, getattr(Settings(), name))
+    main._load_settings()
+    assert main.runtime.settings.basal_time == "21:30" and main.runtime.settings.volume == 0.5
+    c.post("/api/mode", json={"mode": "replay"}, headers=H)
+
+
+def test_presence_override_is_not_persisted_so_a_reboot_starts_in_auto(client):
+    c = client
+    assert c.post("/api/presence", json={"override": "away"}, headers=H).status_code == 200
+    setattr(main.runtime.settings, "presence_override", "auto")
+    main._load_settings()
+    assert main.runtime.settings.presence_override == "auto"

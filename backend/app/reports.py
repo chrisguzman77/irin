@@ -170,16 +170,18 @@ SYSTEM_PROMPT = (
 )
 
 
-def claude_narrative(prompt: str) -> str:
-    """The direct Claude call (until R13). Raises on any failure; the caller falls back."""
+def claude_narrative(prompt: str, system: str = SYSTEM_PROMPT, task: str = "morning_report") -> str:
+    """The direct Claude call (until R13's narrative.py chain). Raises on any
+    failure; the caller falls back to its template. `task` picks the model from
+    NARRATIVE_ROUTING when that row names anthropic."""
     import anthropic
 
     if not config.ANTHROPIC_API_KEY:
         raise RuntimeError("ANTHROPIC_API_KEY not set")
-    routing = config.NARRATIVE_ROUTING.get("morning_report") or []
+    routing = config.NARRATIVE_ROUTING.get(task) or []
     model = routing[1] if len(routing) == 2 and routing[0] == "anthropic" else DEFAULT_MODEL
     client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY, timeout=20.0, max_retries=1)
-    response = client.messages.create(model=model, max_tokens=600, system=SYSTEM_PROMPT,
+    response = client.messages.create(model=model, max_tokens=600, system=system,
                                       messages=[{"role": "user", "content": prompt}])
     if response.stop_reason == "refusal":
         raise RuntimeError("refused")
@@ -210,7 +212,9 @@ class SmtpMailer:
         msg["From"], msg["To"], msg["Subject"] = config.SMTP_USER, to, subject
         msg.set_content(body)
         for p in attachments:
-            msg.add_attachment(p.read_bytes(), maintype="image", subtype="png", filename=p.name)
+            maintype, subtype = {"png": ("image", "png"), "mp3": ("audio", "mpeg")}.get(p.suffix.lstrip("."),
+                                                                                       ("application", "octet-stream"))
+            msg.add_attachment(p.read_bytes(), maintype=maintype, subtype=subtype, filename=p.name)
         with smtplib.SMTP(config.SMTP_HOST, 587, timeout=20) as smtp:
             smtp.starttls()
             smtp.login(config.SMTP_USER, config.SMTP_PASS)

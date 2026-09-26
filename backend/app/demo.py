@@ -37,6 +37,12 @@ def bind(runtime) -> None:
     _runtime = runtime
 
 
+def live_basal_time() -> tuple[str | None] | None:
+    """The stashed live basal_time while the demo button overrides it (None otherwise),
+    so persistence writes the live value, never the demo one."""
+    return _live_basal_time
+
+
 def restore_live_settings() -> bool:
     """Called by the mode switch on the way back to live: the basal-time button's
     value never reaches the live nudge ladder. Returns True when something changed."""

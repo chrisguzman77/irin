@@ -10,7 +10,7 @@ from datetime import date, datetime
 from pathlib import Path
 
 from .config import config
-from .contracts import MorningReport, Reading, Treatment
+from .contracts import FamilyStory, MorningReport, Reading, Treatment
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS readings (
@@ -202,3 +202,39 @@ def select_treatment_rows(after_rowid: int, limit: int, conn: sqlite3.Connection
     return [(int(r["rid"]), {"timestamp": r["timestamp"], "kind": r["kind"], "insulin_units": r["insulin_units"],
                                 "carbs_g": r["carbs_g"], "dose_label": r["dose_label"], "text": r["text"],
                                 "confirmed": bool(r["confirmed"]), "is_demo": bool(r["is_demo"])}) for r in rows]
+
+
+# --- Family Story (F3): one row per story, replaced on status change ---
+
+
+def upsert_family_story(story: FamilyStory, conn: sqlite3.Connection | None = None) -> None:
+    own = conn is None
+    conn = conn or connect()
+    with conn:
+        conn.execute("INSERT OR REPLACE INTO family_stories VALUES (?, ?)", (story.story_id, story.model_dump_json()))
+    if own:
+        conn.close()
+
+
+def select_family_story(story_id: str, conn: sqlite3.Connection | None = None) -> FamilyStory | None:
+    own = conn is None
+    conn = conn or connect()
+    r = conn.execute("SELECT json FROM family_stories WHERE story_id = ?", (story_id,)).fetchone()
+    if own:
+        conn.close()
+    return FamilyStory.model_validate_json(r["json"]) if r else None
+
+
+def select_family_stories(night_date: date | None = None, limit: int = 100,
+                          conn: sqlite3.Connection | None = None) -> list[FamilyStory]:
+    """Newest night first; filtered to one morning when night_date is given."""
+    own = conn is None
+    conn = conn or connect()
+    rows = conn.execute("SELECT json FROM family_stories").fetchall()
+    if own:
+        conn.close()
+    stories = [FamilyStory.model_validate_json(r["json"]) for r in rows]
+    if night_date is not None:
+        stories = [s for s in stories if s.night_date == night_date]
+    stories.sort(key=lambda s: (s.night_date, s.story_id), reverse=True)
+    return stories[:limit]

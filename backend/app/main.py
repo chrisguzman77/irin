@@ -10,6 +10,7 @@ import asyncio
 import dataclasses
 import logging
 import math
+import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
@@ -27,17 +28,20 @@ from .alarm import AlarmEngine, Transition
 from .auth import require_pin
 from .clock import clock
 from .config import REPO_ROOT, config
-from .contracts import FRESH_PIN_ENDPOINTS, AlarmState, MorningReport, Reading, Settings, Treatment, WSMessage
+from .contracts import (FRESH_PIN_ENDPOINTS, AlarmState, FamilyRecipient, FamilyStory, MorningReport, Reading,
+                        Settings, Treatment, WSMessage)
 from .datasource.base import DataSource
 from .datasource.nightscout import NightscoutDataSource
 from .datasource.replay import ReplayDataSource
-from .demo import bind as bind_demo, restore_live_settings, router as demo_router
+from .demo import bind as bind_demo, live_basal_time, restore_live_settings, router as demo_router
+from .family_story import FamilyStoryService
 from .forecast import Forecaster
 from .forward import Forwarder, from_config as forwarder_from_config
 from .outputs import GatedOutputs
 from .presence import PresenceMachine, PresenceState
 from .reports import ReportBuilder, SmtpMailer
 from .scheduler import Scheduler, basal_logged_on, timedatectl_synced
+from . import voice_out
 from .voice import MAX_CARBS_G, MAX_UNITS, VoiceLogger
 from .windows import parse_hhmm
 from .ws import Hub
@@ -69,6 +73,7 @@ class Runtime:
     scheduler: "Scheduler | None" = None
     reports: "ReportBuilder | None" = None
     forwarder: "Forwarder | None" = None
+    family: "FamilyStoryService | None" = None
 
 
 runtime = Runtime(mode="nightscout" if config.DATASOURCE == "nightscout" else "replay",
@@ -118,11 +123,19 @@ def _treatments_between(start: datetime, end: datetime) -> list[Treatment]:
 
 
 runtime.reports = ReportBuilder(readings_for=_readings_between, treatments_for=_treatments_between,
-                                mailer=SmtpMailer() if config.SMTP_HOST else None, settings=runtime.settings)
+                                settings=runtime.settings)
 
 
-def _build_report(night_date: date, scheduled: bool = False) -> MorningReport | None:
-    """The datasource is read ONCE: is_demo and the readings come from the same
+_mailer = SmtpMailer() if config.SMTP_HOST else None
+runtime.reports.mailer = _mailer
+runtime.family = FamilyStoryService(
+    settings=runtime.settings, mailer=_mailer, render_clip=voice_out.render,
+    family_view_url=config.APP_ORIGIN.replace("://", "://family.", 1) if config.APP_ORIGIN.startswith("https://") else "")
+
+
+def _build_night(night_date: date, scheduled: bool = False) -> tuple[MorningReport | None, list[FamilyStory]]:
+    """The morning report, then one Family Story per active recipient (F3).
+    The datasource is read ONCE: is_demo and the readings come from the same
     source, so a mode switch mid-build can never email scenario rows as a real
     night (invariant 1). The scheduled job never rebuilds a night that already
     has a report (a restart inside the catch-up window would re-email it);
@@ -130,18 +143,42 @@ def _build_report(night_date: date, scheduled: bool = False) -> MorningReport | 
     ds = runtime.datasource
     if scheduled and store.select_report(night_date) is not None:
         logging.getLogger("irin.main").info("morning report for %s already exists; not rebuilt", night_date)
-        return None
+        return None, []
     builder = dataclasses.replace(runtime.reports, readings_for=lambda a, b: _readings_from(ds, a, b))
+    is_demo = isinstance(ds, ReplayDataSource)
     try:
-        return builder.build(night_date, is_demo=isinstance(ds, ReplayDataSource))
+        report = builder.build(night_date, is_demo=is_demo)
     except Exception:
         logging.getLogger("irin.main").exception("morning report build failed")
-        return None
+        return None, []
+    try:
+        stories = runtime.family.build(night_date, report.stats, is_demo)
+    except Exception:
+        logging.getLogger("irin.main").exception("family stories failed; the report stands")
+        stories = []
+    return report, stories
+
+
+def _build_report(night_date: date, scheduled: bool = False) -> MorningReport | None:
+    return _build_night(night_date, scheduled)[0]
+
+
+async def _announce_stories(stories: list[FamilyStory]) -> None:
+    for story in stories:
+        if story.status == "pending_approval":
+            await hub.broadcast(WSMessage(type="family_story_pending", payload=story.model_dump(mode="json")))
+        elif story.status in ("sent", "demo"):
+            await hub.broadcast(WSMessage(type="family_story_sent", payload=story.model_dump(mode="json")))
+
+
+async def _night_job(night_date: date) -> None:
+    _, stories = await asyncio.to_thread(_build_night, night_date, True)
+    await _announce_stories(stories)
 
 
 def _morning_report_job(night_date: date) -> None:
     """The scheduler job at night-window end: the build runs in a worker thread."""
-    task = asyncio.get_running_loop().create_task(asyncio.to_thread(_build_report, night_date, True))
+    task = asyncio.get_running_loop().create_task(_night_job(night_date))
     _broadcast_tasks.add(task)
     task.add_done_callback(_broadcast_tasks.discard)
 
@@ -212,6 +249,7 @@ async def _alarm_tick_loop() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     store.init_db()
+    _load_settings()
     await runtime.datasource.start()
     hub.start()
     tick_task = asyncio.create_task(_alarm_tick_loop())
@@ -303,7 +341,7 @@ async def set_mode(req: ModeRequest) -> dict:
     runtime.voice.reset()
     hub._last = None
     if req.mode == "nightscout" and restore_live_settings():  # the demo basal-time button never reaches live
-        await hub.broadcast(WSMessage(type="settings_change", payload=runtime.settings.model_dump(mode="json")))
+        await _settings_changed()
     await hub.broadcast(WSMessage(type="mode_change", payload={"mode": runtime.mode}))
     return {"mode": runtime.mode, "changed": True}
 
@@ -403,7 +441,7 @@ async def set_presence(req: PresenceOverride) -> PresenceState:
     """The manual Home/Away toggle (Settings.presence_override). It always beats
     the radar; it gates room outputs only and never touches alarm logic."""
     state = runtime.presence.set_override(req.override)
-    await hub.broadcast(WSMessage(type="settings_change", payload=runtime.settings.model_dump(mode="json")))
+    await _settings_changed()
     return state
 
 
@@ -492,6 +530,8 @@ async def update_settings(patch: dict) -> Settings:
     unknown = set(patch) - set(Settings.model_fields)
     if unknown:
         raise HTTPException(status_code=400, detail=f"unknown settings: {sorted(unknown)}")
+    if "family_recipients" in patch:  # consent has its own routes (validated email, first story waits, revoke is final)
+        raise HTTPException(status_code=400, detail="family_recipients change only through /api/family/recipients")
     try:
         new = Settings.model_validate(_deep_merge(runtime.settings.model_dump(), patch))
         _check_settings(new)
@@ -502,7 +542,7 @@ async def update_settings(patch: dict) -> Settings:
         setattr(runtime.settings, name, getattr(new, name))
     if override_changed:
         runtime.presence.set_override(new.presence_override)
-    await hub.broadcast(WSMessage(type="settings_change", payload=runtime.settings.model_dump(mode="json")))
+    await _settings_changed()
     return runtime.settings
 
 
@@ -547,10 +587,167 @@ class BuildReportRequest(BaseModel):
 async def build_report(req: BuildReportRequest) -> MorningReport:
     """Build (or rebuild) a report now: the demo panel's button and the
     pre-generated fallback for the no-network demo."""
-    report = await asyncio.to_thread(_build_report, req.night_date or clock.now().date())
+    report, stories = await asyncio.to_thread(_build_night, req.night_date or clock.now().date())
     if report is None:
         raise HTTPException(status_code=500, detail="report build failed; see the log")
+    await _announce_stories(stories)
     return report
+
+
+# --- Family Story (F1, F3): recipients live in Settings; stories ride the morning report ---
+
+_EMAIL = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
+
+
+class RecipientRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=60)
+    email: str = Field(pattern=_EMAIL, max_length=120)
+    level: Literal["story_only", "story_and_view"] = "story_only"
+    send_mode: Literal["automatic", "approve_each"] = "approve_each"
+
+
+class RecipientPatch(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=60)
+    email: str | None = Field(default=None, pattern=_EMAIL, max_length=120)
+    level: Literal["story_only", "story_and_view"] | None = None
+    send_mode: Literal["automatic", "approve_each"] | None = None
+
+
+def _recipient_or_404(recipient_id: str) -> FamilyRecipient:
+    for r in runtime.settings.family_recipients:
+        if r.recipient_id == recipient_id:
+            return r
+    raise HTTPException(status_code=404, detail="no such recipient")
+
+
+SETTINGS_KEY = "settings"
+
+
+NOT_PERSISTED = ("presence_override",)  # a reboot starts in auto: a power blip at night never leaves the room Away
+
+
+def _persist_settings() -> None:
+    data = runtime.settings.model_dump(mode="json")
+    stash = live_basal_time()
+    if stash is not None:
+        data["basal_time"] = stash[0]  # the demo button's value never reaches the saved live settings
+    for name in NOT_PERSISTED:
+        data[name] = getattr(Settings(), name)
+    store.set_kv(SETTINGS_KEY, Settings.model_validate(data).model_dump_json())
+
+
+def _load_settings() -> None:
+    """At boot: the last saved Settings (thresholds, windows, family consent) come
+    back from the store; a fresh Pi starts with the defaults. An unreadable blob
+    is kept aside as settings.unreadable, never silently overwritten."""
+    raw = store.get_kv(SETTINGS_KEY)
+    if not raw:
+        return
+    try:
+        saved = Settings.model_validate_json(raw)
+    except Exception:
+        logging.getLogger("irin.main").exception("saved settings unreadable; defaults kept, blob saved aside")
+        store.set_kv(SETTINGS_KEY + ".unreadable", raw)
+        return
+    for name in Settings.model_fields:
+        if name not in NOT_PERSISTED:
+            setattr(runtime.settings, name, getattr(saved, name))
+
+
+async def _settings_changed() -> None:
+    _persist_settings()
+    await hub.broadcast(WSMessage(type="settings_change", payload=runtime.settings.model_dump(mode="json")))
+
+
+@app.get("/api/family/recipients", response_model=list[FamilyRecipient])
+async def list_recipients() -> list[FamilyRecipient]:
+    return runtime.settings.family_recipients
+
+
+@app.post("/api/family/recipients", dependencies=[Depends(require_pin)], response_model=FamilyRecipient)
+async def add_recipient(req: RecipientRequest) -> FamilyRecipient:
+    """A new recipient's first story always waits for the patient's approval."""
+    r = FamilyRecipient(recipient_id=uuid.uuid4().hex[:12], **req.model_dump())
+    runtime.settings.family_recipients.append(r)
+    await _settings_changed()
+    return r
+
+
+@app.post("/api/family/recipients/{recipient_id}", dependencies=[Depends(require_pin)], response_model=FamilyRecipient)
+async def edit_recipient(recipient_id: str, req: RecipientPatch) -> FamilyRecipient:
+    r = _recipient_or_404(recipient_id)
+    if r.state == "revoked":
+        raise HTTPException(status_code=409, detail="a revoked recipient cannot be edited; add them again")
+    changes = req.model_dump(exclude_none=True)
+    for k, v in changes.items():
+        setattr(r, k, v)
+    if "email" in changes or "level" in changes:
+        # a new address or a new disclosure level is a new consent: the next story waits for a tap,
+        # and anything already pending at the old level is dropped
+        r.first_story_approved = False
+        await asyncio.to_thread(runtime.family.skip_pending, r.recipient_id)
+    await _settings_changed()
+    return r
+
+
+@app.post("/api/family/recipients/{recipient_id}/pause", dependencies=[Depends(require_pin)], response_model=FamilyRecipient)
+async def pause_recipient(recipient_id: str) -> FamilyRecipient:
+    r = _recipient_or_404(recipient_id)
+    if r.state == "active":
+        r.state = "paused"
+        await _settings_changed()
+    return r
+
+
+@app.post("/api/family/recipients/{recipient_id}/resume", dependencies=[Depends(require_pin)], response_model=FamilyRecipient)
+async def resume_recipient(recipient_id: str) -> FamilyRecipient:
+    r = _recipient_or_404(recipient_id)
+    if r.state == "paused":
+        r.state = "active"
+        await _settings_changed()
+    return r
+
+
+@app.post("/api/family/recipients/{recipient_id}/revoke", dependencies=[Depends(require_pin)], response_model=FamilyRecipient)
+async def revoke_recipient(recipient_id: str) -> FamilyRecipient:
+    """Instant and final: a revoked recipient receives nothing (invariant 19)."""
+    r = _recipient_or_404(recipient_id)
+    r.state = "revoked"
+    await _settings_changed()
+    return r
+
+
+@app.get("/api/family/stories", response_model=list[FamilyStory])
+async def list_stories(night_date: date | None = None, limit: int = 50) -> list[FamilyStory]:
+    """The morning chip ("Sent to Mom"): the stories of one morning, or the latest."""
+    return store.select_family_stories(night_date, max(1, min(limit, 500)))
+
+
+@app.get("/api/family/stories/{story_id}/audio.mp3")
+async def story_audio(story_id: str) -> FileResponse:
+    story = store.select_family_story(story_id)
+    if story is None or story.audio_url is None or not voice_out.clip_path(story.text).is_file():
+        raise HTTPException(status_code=404, detail="no clip for that story")
+    return FileResponse(voice_out.clip_path(story.text), media_type="audio/mpeg")
+
+
+@app.post("/api/family/stories/{story_id}/approve", dependencies=[Depends(require_pin)], response_model=FamilyStory)
+async def approve_story(story_id: str) -> FamilyStory:
+    story = await asyncio.to_thread(runtime.family.approve, story_id)
+    if story is None:
+        raise HTTPException(status_code=404, detail="no such story")
+    if story.status == "sent":
+        await _settings_changed()  # first_story_approved may have flipped
+        await hub.broadcast(WSMessage(type="family_story_sent", payload=story.model_dump(mode="json")))
+    return story
+
+
+@app.post("/api/family/stories/{story_id}/skip", dependencies=[Depends(require_pin)], response_model=FamilyStory)
+async def skip_story(story_id: str) -> FamilyStory:
+    story = await asyncio.to_thread(runtime.family.skip, story_id)  # the lock may be held by a send in a worker
+    if story is None:
+        raise HTTPException(status_code=404, detail="no such story")
+    return story
 
 
 @app.websocket("/ws")
