@@ -1,4 +1,5 @@
 import { useDevice } from "../lib/device";
+import LiveView from "./device/LiveView";
 
 // The Device tab. A2 (pairing) is not built yet: without the development
 // override it shows the pairing entry point.
@@ -17,12 +18,5 @@ export default function DeviceTab() {
       </section>
     );
   }
-  return (
-    <section className="flex flex-col gap-2">
-      <h2 className="text-xl font-semibold">Irin Device</h2>
-      <p className="text-neutral-400 text-sm">
-        {socket.connected ? "Connected" : "Connecting…"} · {target.url}
-      </p>
-    </section>
-  );
+  return <LiveView snap={socket.snapshot} baseUrl={target.url} stale={socket.disconnectedLong} />;
 }
