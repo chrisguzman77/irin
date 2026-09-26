@@ -1,0 +1,621 @@
+{
+  "scenario": "titration_synthetic",
+  "kind": "titration",
+  "synthetic": true,
+  "overlay_synthetic": true,
+  "night_window": {
+    "start": "22:00",
+    "end": "07:00"
+  },
+  "reason_codes": {
+    "2020-01-01": {
+      "codes": [
+        "clean"
+      ],
+      "code_source": "inferred"
+    },
+    "2020-01-02": {
+      "codes": [
+        "clean"
+      ],
+      "code_source": "inferred"
+    },
+    "2020-01-03": {
+      "codes": [
+        "clean"
+      ],
+      "code_source": "inferred"
+    },
+    "2020-01-04": {
+      "codes": [
+        "clean"
+      ],
+      "code_source": "inferred"
+    },
+    "2020-01-05": {
+      "codes": [
+        "clean"
+      ],
+      "code_source": "inferred"
+    },
+    "2020-01-06": {
+      "codes": [
+        "clean"
+      ],
+      "code_source": "inferred"
+    },
+    "2020-01-07": {
+      "codes": [
+        "clean"
+      ],
+      "code_source": "inferred"
+    },
+    "2020-01-08": {
+      "codes": [
+        "clean"
+      ],
+      "code_source": "inferred"
+    },
+    "2020-01-09": {
+      "codes": [
+        "clean"
+      ],
+      "code_source": "inferred"
+    },
+    "2020-01-10": {
+      "codes": [
+        "clean"
+      ],
+      "code_source": "inferred"
+    },
+    "2020-01-11": {
+      "codes": [
+        "clean"
+      ],
+      "code_source": "inferred"
+    },
+    "2020-01-12": {
+      "codes": [
+        "clean"
+      ],
+      "code_source": "inferred"
+    },
+    "2020-01-13": {
+      "codes": [
+        "clean"
+      ],
+      "code_source": "inferred"
+    },
+    "2020-01-14": {
+      "codes": [
+        "clean"
+      ],
+      "code_source": "inferred"
+    },
+    "2020-01-15": {
+      "codes": [
+        "clean"
+      ],
+      "code_source": "inferred"
+    },
+    "2020-01-16": {
+      "codes": [
+        "clean"
+      ],
+      "code_source": "inferred"
+    },
+    "2020-01-17": {
+      "codes": [
+        "clean"
+      ],
+      "code_source": "inferred"
+    },
+    "2020-01-18": {
+      "codes": [
+        "clean"
+      ],
+      "code_source": "inferred"
+    },
+    "2020-01-19": {
+      "codes": [
+        "clean"
+      ],
+      "code_source": "inferred"
+    },
+    "2020-01-20": {
+      "codes": [
+        "clean"
+      ],
+      "code_source": "inferred"
+    },
+    "2020-01-21": {
+      "codes": [
+        "clean"
+      ],
+      "code_source": "inferred"
+    },
+    "2020-01-22": {
+      "codes": [
+        "clean"
+      ],
+      "code_source": "inferred"
+    },
+    "2020-01-23": {
+      "codes": [
+        "clean"
+      ],
+      "code_source": "inferred"
+    },
+    "2020-01-24": {
+      "codes": [
+        "clean"
+      ],
+      "code_source": "inferred"
+    },
+    "2020-01-25": {
+      "codes": [
+        "clean"
+      ],
+      "code_source": "inferred"
+    },
+    "2020-01-26": {
+      "codes": [
+        "clean"
+      ],
+      "code_source": "inferred"
+    },
+    "2020-01-27": {
+      "codes": [
+        "clean"
+      ],
+      "code_source": "inferred"
+    },
+    "2020-01-28": {
+      "codes": [
+        "clean"
+      ],
+      "code_source": "inferred"
+    },
+    "2020-01-29": {
+      "codes": [
+        "clean"
+      ],
+      "code_source": "inferred"
+    },
+    "2020-01-30": {
+      "codes": [
+        "clean"
+      ],
+      "code_source": "inferred"
+    },
+    "2020-01-31": {
+      "codes": [
+        "clean"
+      ],
+      "code_source": "inferred"
+    },
+    "2020-02-01": {
+      "codes": [
+        "clean"
+      ],
+      "code_source": "inferred"
+    },
+    "2020-02-02": {
+      "codes": [
+        "clean"
+      ],
+      "code_source": "inferred"
+    },
+    "2020-02-03": {
+      "codes": [
+        "clean"
+      ],
+      "code_source": "inferred"
+    },
+    "2020-02-04": {
+      "codes": [
+        "clean"
+      ],
+      "code_source": "inferred"
+    },
+    "2020-02-05": {
+      "codes": [
+        "clean"
+      ],
+      "code_source": "inferred"
+    },
+    "2020-02-06": {
+      "codes": [
+        "clean"
+      ],
+      "code_source": "inferred"
+    },
+    "2020-02-07": {
+      "codes": [
+        "clean"
+      ],
+      "code_source": "inferred"
+    },
+    "2020-02-08": {
+      "codes": [
+        "clean"
+      ],
+      "code_source": "inferred"
+    },
+    "2020-02-09": {
+      "codes": [
+        "clean"
+      ],
+      "code_source": "inferred"
+    },
+    "2020-02-10": {
+      "codes": [
+        "clean"
+      ],
+      "code_source": "inferred"
+    },
+    "2020-02-11": {
+      "codes": [
+        "clean"
+      ],
+      "code_source": "inferred"
+    },
+    "2020-02-12": {
+      "codes": [
+        "clean"
+      ],
+      "code_source": "inferred"
+    },
+    "2020-02-13": {
+      "codes": [
+        "clean"
+      ],
+      "code_source": "inferred"
+    },
+    "2020-02-14": {
+      "codes": [
+        "clean"
+      ],
+      "code_source": "inferred"
+    },
+    "2020-02-15": {
+      "codes": [
+        "clean"
+      ],
+      "code_source": "inferred"
+    },
+    "2020-02-16": {
+      "codes": [
+        "clean"
+      ],
+      "code_source": "inferred"
+    },
+    "2020-02-17": {
+      "codes": [
+        "clean"
+      ],
+      "code_source": "inferred"
+    },
+    "2020-02-18": {
+      "codes": [
+        "clean"
+      ],
+      "code_source": "inferred"
+    }
+  },
+  "plan": {
+    "plan_id": "demo-tirzepatide",
+    "drug_class": "gip_glp1",
+    "drug_label": "tirzepatide",
+    "steps": [
+      {
+        "index": 0,
+        "dose_label": "2.5 mg",
+        "planned_start": "2020-01-15"
+      },
+      {
+        "index": 1,
+        "dose_label": "5 mg",
+        "planned_start": "2020-02-12"
+      },
+      {
+        "index": 2,
+        "dose_label": "7.5 mg",
+        "planned_start": "2020-03-11"
+      },
+      {
+        "index": 3,
+        "dose_label": "10 mg",
+        "planned_start": "2020-04-08"
+      },
+      {
+        "index": 4,
+        "dose_label": "12.5 mg",
+        "planned_start": "2020-05-06"
+      },
+      {
+        "index": 5,
+        "dose_label": "15 mg",
+        "planned_start": "2020-06-03"
+      }
+    ],
+    "started_at": "2020-01-15",
+    "on_insulin": true,
+    "options": {
+      "ketone_prompts": true,
+      "step_week_vigilance": false,
+      "vigilance_offset_mgdl": 10.0
+    },
+    "status": "active",
+    "is_demo": true
+  },
+  "dose_change": null,
+  "symptom_checks": [
+    {
+      "date": "2020-01-15",
+      "gi": "fine",
+      "is_demo": true
+    },
+    {
+      "date": "2020-01-16",
+      "gi": "fine",
+      "is_demo": true
+    },
+    {
+      "date": "2020-01-17",
+      "gi": "fine",
+      "is_demo": true
+    },
+    {
+      "date": "2020-01-18",
+      "gi": "fine",
+      "is_demo": true
+    },
+    {
+      "date": "2020-01-19",
+      "gi": "fine",
+      "is_demo": true
+    },
+    {
+      "date": "2020-01-20",
+      "gi": "fine",
+      "is_demo": true
+    },
+    {
+      "date": "2020-01-21",
+      "gi": "fine",
+      "is_demo": true
+    },
+    {
+      "date": "2020-01-22",
+      "gi": "fine",
+      "is_demo": true
+    },
+    {
+      "date": "2020-01-23",
+      "gi": "fine",
+      "is_demo": true
+    },
+    {
+      "date": "2020-01-24",
+      "gi": "fine",
+      "is_demo": true
+    },
+    {
+      "date": "2020-01-25",
+      "gi": "fine",
+      "is_demo": true
+    },
+    {
+      "date": "2020-01-26",
+      "gi": "fine",
+      "is_demo": true
+    },
+    {
+      "date": "2020-01-27",
+      "gi": "fine",
+      "is_demo": true
+    },
+    {
+      "date": "2020-01-28",
+      "gi": "fine",
+      "is_demo": true
+    },
+    {
+      "date": "2020-01-29",
+      "gi": "fine",
+      "is_demo": true
+    },
+    {
+      "date": "2020-01-30",
+      "gi": "fine",
+      "is_demo": true
+    },
+    {
+      "date": "2020-01-31",
+      "gi": "fine",
+      "is_demo": true
+    },
+    {
+      "date": "2020-02-01",
+      "gi": "fine",
+      "is_demo": true
+    },
+    {
+      "date": "2020-02-02",
+      "gi": "fine",
+      "is_demo": true
+    },
+    {
+      "date": "2020-02-03",
+      "gi": "fine",
+      "is_demo": true
+    },
+    {
+      "date": "2020-02-04",
+      "gi": "fine",
+      "is_demo": true
+    },
+    {
+      "date": "2020-02-05",
+      "gi": "fine",
+      "is_demo": true
+    },
+    {
+      "date": "2020-02-06",
+      "gi": "fine",
+      "is_demo": true
+    },
+    {
+      "date": "2020-02-07",
+      "gi": "fine",
+      "is_demo": true
+    },
+    {
+      "date": "2020-02-08",
+      "gi": "fine",
+      "is_demo": true
+    },
+    {
+      "date": "2020-02-09",
+      "gi": "fine",
+      "is_demo": true
+    },
+    {
+      "date": "2020-02-10",
+      "gi": "fine",
+      "is_demo": true
+    },
+    {
+      "date": "2020-02-11",
+      "gi": "fine",
+      "is_demo": true
+    },
+    {
+      "date": "2020-02-12",
+      "gi": "fine",
+      "is_demo": true
+    },
+    {
+      "date": "2020-02-13",
+      "gi": "fine",
+      "is_demo": true
+    },
+    {
+      "date": "2020-02-14",
+      "gi": "rough",
+      "is_demo": true
+    },
+    {
+      "date": "2020-02-15",
+      "gi": "fine",
+      "is_demo": true
+    },
+    {
+      "date": "2020-02-16",
+      "gi": "rough",
+      "is_demo": true
+    },
+    {
+      "date": "2020-02-17",
+      "gi": "rough",
+      "is_demo": true
+    },
+    {
+      "date": "2020-02-18",
+      "gi": "fine",
+      "is_demo": true
+    }
+  ],
+  "injections": [
+    {
+      "timestamp": "2020-01-15T09:00:00",
+      "kind": "glp1_dose",
+      "dose_label": "2.5 mg",
+      "confirmed": true
+    },
+    {
+      "timestamp": "2020-01-22T09:00:00",
+      "kind": "glp1_dose",
+      "dose_label": "2.5 mg",
+      "confirmed": true
+    },
+    {
+      "timestamp": "2020-01-29T09:00:00",
+      "kind": "glp1_dose",
+      "dose_label": "2.5 mg",
+      "confirmed": true
+    },
+    {
+      "timestamp": "2020-02-05T09:00:00",
+      "kind": "glp1_dose",
+      "dose_label": "2.5 mg",
+      "confirmed": true
+    },
+    {
+      "timestamp": "2020-02-12T09:00:00",
+      "kind": "glp1_dose",
+      "dose_label": "5 mg",
+      "confirmed": true
+    },
+    {
+      "timestamp": "2020-02-19T09:00:00",
+      "kind": "glp1_dose",
+      "dose_label": "5 mg",
+      "confirmed": true
+    }
+  ],
+  "recall_answers": {
+    "low-20200216T025000": "dont_remember"
+  },
+  "alarm_events": [
+    {
+      "event_id": "demo-nm-44",
+      "tier": "predicted_low",
+      "started_at": "2020-02-15T02:30:00",
+      "acknowledged_at": "2020-02-15T02:33:00",
+      "ack_source": "device",
+      "escalated": false,
+      "rearm_count": 0,
+      "crossed_actual": false,
+      "presence_during": "home",
+      "is_demo": true
+    },
+    {
+      "event_id": "demo-warn-45",
+      "tier": "predicted_low",
+      "started_at": "2020-02-16T02:20:00",
+      "acknowledged_at": null,
+      "ack_source": null,
+      "escalated": true,
+      "rearm_count": 0,
+      "crossed_actual": true,
+      "presence_during": "home",
+      "is_demo": true
+    },
+    {
+      "event_id": "demo-low-45",
+      "tier": "actual_low",
+      "started_at": "2020-02-16T02:50:00",
+      "acknowledged_at": "2020-02-16T02:56:00",
+      "ack_source": "device",
+      "escalated": true,
+      "rearm_count": 0,
+      "crossed_actual": true,
+      "presence_during": "home",
+      "is_demo": true
+    },
+    {
+      "event_id": "demo-nm-47",
+      "tier": "predicted_low",
+      "started_at": "2020-02-18T02:30:00",
+      "acknowledged_at": "2020-02-18T02:33:00",
+      "ack_source": "device",
+      "escalated": false,
+      "rearm_count": 0,
+      "crossed_actual": false,
+      "presence_during": "home",
+      "is_demo": true
+    }
+  ]
+}
