@@ -75,3 +75,14 @@ def test_presence_toggle_reaches_the_snapshot(monkeypatch):
             assert snap["presence"]["mode"] == "away" and snap["settings"]["presence_override"] == "away"
         c.post("/api/presence", json={"override": "auto"}, headers={"X-PIN": "1234"})
         assert c.get("/api/presence").json()["mode"] == "home"
+
+
+def test_scheduler_state_and_clock_synced_flag():
+    with TestClient(app) as c:
+        r = c.get("/api/scheduler")
+        assert r.status_code == 200 and r.json()["clock_synced"] is True  # mock: the guard is bypassed
+        assert r.json()["display_mode"] in ("detail", "night", "morning")
+        with c.websocket_connect("/ws") as ws:
+            import json
+
+            assert json.loads(ws.receive_text())["payload"]["clock_synced"] is True

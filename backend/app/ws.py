@@ -41,7 +41,7 @@ class Hub:
             presence=self.runtime.presence.state if self.runtime.presence else None,
             settings=self.runtime.settings,
             mode=self.runtime.mode,
-            clock_synced=True,  # the NTP guard (chris.md step 10) is bypassed under mock/replay
+            clock_synced=self.runtime.scheduler.clock_synced if self.runtime.scheduler else True,
         )
 
     async def connect(self, ws: WebSocket) -> None:

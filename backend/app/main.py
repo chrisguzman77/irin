@@ -10,7 +10,7 @@ import asyncio
 import math
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from datetime import timedelta
+from datetime import datetime, time, timedelta
 from typing import Literal
 
 from fastapi import Depends, FastAPI, HTTPException, WebSocket
@@ -30,6 +30,7 @@ from .datasource.replay import ReplayDataSource
 from .forecast import Forecaster
 from .outputs import GatedOutputs
 from .presence import PresenceMachine, PresenceState
+from .scheduler import Scheduler, basal_logged_on, timedatectl_synced
 from .voice import MAX_CARBS_G, MAX_UNITS, VoiceLogger
 from .ws import Hub
 
@@ -57,6 +58,7 @@ class Runtime:
     voice: "VoiceLogger | None" = None
     presence: "PresenceMachine | None" = None
     outputs: "GatedOutputs | None" = None
+    scheduler: "Scheduler | None" = None
 
 
 runtime = Runtime(mode="nightscout" if config.DATASOURCE == "nightscout" else "replay",
@@ -75,6 +77,17 @@ runtime.outputs = GatedOutputs(_hal(), runtime.presence)  # Away gates room outp
 runtime.alarm = AlarmEngine(runtime.settings, hal=runtime.outputs)
 runtime.forecaster = Forecaster()
 runtime.voice = VoiceLogger()
+
+
+def _sync_check() -> bool:
+    """The NTP guard on real hardware; bypassed in replay (the clock is the scenario's)."""
+    return True if runtime.mode == "replay" else timedatectl_synced()
+
+
+runtime.scheduler = Scheduler(runtime.settings, sync_check=None if config.IRIN_HW == "mock" else _sync_check)
+runtime.scheduler.basal_logged_today = lambda d: basal_logged_on(
+    store.select_treatments(datetime.combine(d, time.min)), d)
+runtime.scheduler.on_synced = lambda: clock.resync() if runtime.mode != "replay" else None
 
 ALARM_TICK_CLOCK_SECONDS = 30.0
 _broadcast_tasks: set[asyncio.Task] = set()  # references held so a broadcast is never GC'd mid-flight
@@ -128,12 +141,14 @@ async def lifespan(app: FastAPI):
     await runtime.datasource.start()
     hub.start()
     tick_task = asyncio.create_task(_alarm_tick_loop())
+    sched_task = asyncio.create_task(runtime.scheduler.run())
     yield
-    tick_task.cancel()
-    try:
-        await tick_task
-    except asyncio.CancelledError:
-        pass
+    for task in (tick_task, sched_task):
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
     await hub.stop()
     await runtime.datasource.stop()
 
@@ -318,6 +333,17 @@ async def set_presence(req: PresenceOverride) -> PresenceState:
 @app.get("/api/presence", response_model=PresenceState)
 async def presence_state() -> PresenceState:
     return runtime.presence.state
+
+
+@app.get("/api/scheduler")
+async def scheduler_state() -> dict:
+    """clock_synced (the NTP guard), display_mode (detail | night | morning, from
+    backend state), and the basal nudge (none | visual | email)."""
+    sch = runtime.scheduler
+    return {"clock_synced": sch.clock_synced, "display_mode": sch.display_mode(),
+            "basal_nudge": {"level": sch.nudge.level, "since": sch.nudge.since.isoformat() if sch.nudge.since else None},
+            "jobs": [{"name": j.name, "at": j.at, "last_fired": j.last_fired.isoformat() if j.last_fired else None}
+                     for j in sch.jobs]}
 
 
 @app.get("/api/alarm", response_model=AlarmState)
