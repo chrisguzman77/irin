@@ -7,8 +7,9 @@
 // updates after it (hard client rule 1); never assumes it saw messages while
 // disconnected. Time on the graph is the Pi's clock (reading timestamps),
 // never the browser's.
-// Fresh-PIN verbs (later steps) read their list from GET /api/contracts/fresh_pin,
-// never a hand copy.
+// Fresh-PIN verbs (pairing confirm, doctor-message confirm/decline) read their
+// list from GET /api/contracts/fresh_pin, never a hand copy, and ALWAYS
+// re-prompt the keypad (postFresh), cached PIN or not (invariant 12).
 const $ = (id) => document.getElementById(id);
 
 const WINDOW_MIN = 180;        // graph history span
@@ -401,13 +402,55 @@ async function onAckTap() {
   render();
 }
 
+// --- fresh-PIN verbs (invariant 12) ---
+
+// The list comes from the Pi (contracts.FRESH_PIN_ENDPOINTS). Route templates
+// like /api/rounds/messages/{message_id}/confirm match one path segment per {}.
+let freshPatterns = null;
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const templateToRegExp = (t) => new RegExp("^" + t.split(/\{[^}]+\}/).map(escapeRe).join("[^/]+") + "$");
+async function loadFreshPins() {
+  if (freshPatterns) return freshPatterns;
+  const res = await fetch("/api/contracts/fresh_pin", { cache: "no-store" });
+  if (!res.ok) throw new Error(`fresh-PIN list unavailable (${res.status})`);
+  const { endpoints } = await res.json();
+  freshPatterns = (endpoints || []).map(templateToRegExp);
+  return freshPatterns;
+}
+async function isFreshPath(path) {
+  return (await loadFreshPins()).some((re) => re.test(path));
+}
+
+// A high-stakes verb from the kiosk: the keypad ALWAYS opens, the cached ack
+// PIN is never used, and what is typed is never stored. Refuses (without
+// sending) a path that is not on the fresh list, so no caller can use it to
+// skip the cache rules the other way.
+async function postFresh(path, body, title = "Enter PIN to confirm") {
+  if (!(await isFreshPath(path))) throw new Error(`${path} is not a fresh-PIN endpoint`);
+  const pin = await promptPin(title);
+  if (!pin) return { ok: false, cancelled: true };
+  try {
+    const res = await fetch(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-PIN": pin },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    if (res.status === 401) return { ok: false, badPin: true, reason: "PIN not accepted" };
+    if (!res.ok) return { ok: false, status: res.status, reason: `the device refused (${res.status})` };
+    return { ok: true, value: await res.json().catch(() => null) };
+  } catch {
+    return { ok: false, reason: "could not reach the device" };
+  }
+}
+
 // Touch keypad. Resolves with the digits, or null on cancel.
-function promptPin() {
+function promptPin(title = "Enter PIN") {
   return new Promise((resolve) => {
     let digits = "";
     const pad = $("keypad"), keys = $("keypad-keys"), dots = $("keypad-dots");
     const show = () => { dots.textContent = "•".repeat(digits.length); };
     const done = (v) => { pad.classList.add("hidden"); keys.replaceChildren(); resolve(v); };
+    $("keypad-title").textContent = title;
     keys.replaceChildren();
     for (const k of ["1", "2", "3", "4", "5", "6", "7", "8", "9", "✕", "0", "OK"]) {
       const b = document.createElement("button");
