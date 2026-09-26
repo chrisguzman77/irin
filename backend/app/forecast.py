@@ -25,15 +25,15 @@ from . import config as _config  # noqa: F401  (puts the repo root on sys.path s
 from .contracts import Forecast, Reading
 
 log = logging.getLogger("irin.forecast")
-HISTORY_MINUTES = 75  # what latest_window wants at minimum
 PredictFn = Callable[[np.ndarray, float], float]  # (slot window, hour) -> predicted mg/dL
 
 try:
-    from ml.models.features import latest_window
+    from ml.models.features import HISTORY_MIN as HISTORY_MINUTES, latest_window
 
     ML_IMPORT_ERROR: str | None = None
 except Exception as _e:  # ml/ missing or broken: say so, never masquerade as a gap
     ML_IMPORT_ERROR = f"{type(_e).__name__}: {_e}"
+    HISTORY_MINUTES = 100  # George's features.HISTORY_MIN: what latest_window wants at minimum
 
     def latest_window(ts_sec, values):  # type: ignore[misc]
         return None
