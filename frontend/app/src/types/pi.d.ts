@@ -261,6 +261,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/forwarder": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Forwarder State
+         * @description The cloud forwarder: enabled, cursor, batches sent, failures (the under-the-hood panel).
+         */
+        get: operations["forwarder_state_api_forwarder_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/scheduler": {
         parameters: {
             query?: never;
@@ -293,6 +313,30 @@ export interface paths {
         get: operations["alarm_state_api_alarm_get"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/settings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Settings */
+        get: operations["get_settings_api_settings_get"];
+        put?: never;
+        /**
+         * Update Settings
+         * @description Merge the given fields into the live settings (a partial body is fine;
+         *     nested objects merge field by field, lists replace whole). The alarm
+         *     engine, presence machine, scheduler, and report builder all hold the
+         *     same Settings object, so they see the change at once.
+         */
+        post: operations["update_settings_api_settings_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -391,6 +435,129 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/demo/scenarios": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Scenarios
+         * @description Read-only, any mode: the CSVs a demo may play.
+         */
+        get: operations["list_scenarios_api_demo_scenarios_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/demo/scenario": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Select Scenario
+         * @description Play another scenario CSV from its first row (clock reset to its start).
+         */
+        post: operations["select_scenario_api_demo_scenario_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/demo/speed": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Set Speed
+         * @description Change the replay multiplier without moving the clock.
+         */
+        post: operations["set_speed_api_demo_speed_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/demo/pause": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Pause Feed
+         * @description Pause the FEED (the sensor stops), not the clock: after 15 clock
+         *     minutes the reading is shown stale, the honest outcome.
+         */
+        post: operations["pause_feed_api_demo_pause_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/demo/inject_low": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Inject Low
+         * @description Overlay one reading at the current clock time (at the pause moment while
+         *     paused, so it shows at once); the CSV stays clean.
+         */
+        post: operations["inject_low_api_demo_inject_low_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/demo/basal_time": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Basal Time Button
+         * @description Set basal_time to 61 clock minutes ago so the basal nudge shows at once.
+         *     The live value is stashed and restored on the switch back to live.
+         */
+        post: operations["basal_time_button_api_demo_basal_time_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -423,10 +590,57 @@ export interface components {
             /** Night Date */
             night_date?: string | null;
         };
+        /** EmergencyScript */
+        EmergencyScript: {
+            /** Steps */
+            steps?: string[];
+        };
+        /** FamilyRecipient */
+        FamilyRecipient: {
+            /** Recipient Id */
+            recipient_id: string;
+            /** Name */
+            name: string;
+            /** Email */
+            email: string;
+            /**
+             * Level
+             * @default story_only
+             * @enum {string}
+             */
+            level: "story_only" | "story_and_view";
+            /**
+             * Send Mode
+             * @default approve_each
+             * @enum {string}
+             */
+            send_mode: "automatic" | "approve_each";
+            /**
+             * State
+             * @default active
+             * @enum {string}
+             */
+            state: "active" | "paused" | "revoked";
+            /**
+             * First Story Approved
+             * @default false
+             */
+            first_story_approved: boolean;
+        };
         /** HTTPValidationError */
         HTTPValidationError: {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
+        };
+        /** InjectRequest */
+        InjectRequest: {
+            /** Glucose Mgdl */
+            glucose_mgdl: number;
+            /**
+             * Trend
+             * @default SingleDown
+             */
+            trend: string;
         };
         /** ModeRequest */
         ModeRequest: {
@@ -465,6 +679,34 @@ export interface components {
              * @default false
              */
             is_demo: boolean;
+        };
+        /** NightBuddyOptIns */
+        NightBuddyOptIns: {
+            /**
+             * Have Buddy
+             * @default false
+             */
+            have_buddy: boolean;
+            /**
+             * Be Watcher
+             * @default false
+             */
+            be_watcher: boolean;
+            /**
+             * Hub Watchable
+             * @default false
+             */
+            hub_watchable: boolean;
+            /**
+             * Hub Volunteer
+             * @default false
+             */
+            hub_volunteer: boolean;
+        };
+        /** PauseRequest */
+        PauseRequest: {
+            /** Paused */
+            paused: boolean;
         };
         /** PresenceOverride */
         PresenceOverride: {
@@ -515,6 +757,101 @@ export interface components {
              * @default false
              */
             is_stale: boolean;
+        };
+        /** ScenarioRequest */
+        ScenarioRequest: {
+            /** Name */
+            name: string;
+        };
+        /** Settings */
+        Settings: {
+            /**
+             * Low Threshold
+             * @default 70
+             */
+            low_threshold: number;
+            /**
+             * High Threshold
+             * @default 250
+             */
+            high_threshold: number;
+            /**
+             * Predictive Enabled
+             * @default true
+             */
+            predictive_enabled: boolean;
+            /**
+             * Predictive Lead Min
+             * @default 30
+             */
+            predictive_lead_min: number;
+            /**
+             * Consecutive Predictions N
+             * @default 2
+             */
+            consecutive_predictions_n: number;
+            /**
+             * Night Window Start
+             * @default 22:00
+             */
+            night_window_start: string;
+            /**
+             * Night Window End
+             * @default 07:00
+             */
+            night_window_end: string;
+            /**
+             * High Alert Mode
+             * @default oneshot
+             * @enum {string}
+             */
+            high_alert_mode: "oneshot" | "remind";
+            /** High Remind Hours */
+            high_remind_hours?: number | null;
+            /** Led Colors */
+            led_colors?: {
+                [key: string]: string;
+            };
+            /**
+             * Sound
+             * @default alarm_soft
+             */
+            sound: string;
+            /**
+             * Volume
+             * @default 0.8
+             */
+            volume: number;
+            /** Report Email */
+            report_email?: string | null;
+            /** Basal Time */
+            basal_time?: string | null;
+            /**
+             * Iob Duration Hours
+             * @default 4
+             */
+            iob_duration_hours: number;
+            /**
+             * Presence Override
+             * @default auto
+             * @enum {string}
+             */
+            presence_override: "auto" | "home" | "away";
+            /** Basal Units */
+            basal_units?: number | null;
+            /** Glucagon On Hand */
+            glucagon_on_hand?: boolean | null;
+            /** Glucagon Expiry */
+            glucagon_expiry?: string | null;
+            night_buddy?: components["schemas"]["NightBuddyOptIns"];
+            emergency_script?: components["schemas"]["EmergencyScript"] | null;
+            /** Family Recipients */
+            family_recipients?: components["schemas"]["FamilyRecipient"][];
+        };
+        /** SpeedRequest */
+        SpeedRequest: {
+            /** Speed */
+            speed: number;
         };
         /**
          * Treatment
@@ -995,6 +1332,28 @@ export interface operations {
             };
         };
     };
+    forwarder_state_api_forwarder_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
     scheduler_state_api_scheduler_get: {
         parameters: {
             query?: never;
@@ -1033,6 +1392,63 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AlarmState"];
+                };
+            };
+        };
+    };
+    get_settings_api_settings_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Settings"];
+                };
+            };
+        };
+    };
+    update_settings_api_settings_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-PIN"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    [key: string]: unknown;
+                };
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["Settings"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };
@@ -1172,6 +1588,209 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MorningReport"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_scenarios_api_demo_scenarios_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+        };
+    };
+    select_scenario_api_demo_scenario_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-PIN"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ScenarioRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_speed_api_demo_speed_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-PIN"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SpeedRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    pause_feed_api_demo_pause_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-PIN"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PauseRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    inject_low_api_demo_inject_low_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-PIN"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["InjectRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    basal_time_button_api_demo_basal_time_post: {
+        parameters: {
+            query?: never;
+            header?: {
+                "X-PIN"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
                 };
             };
             /** @description Validation Error */
