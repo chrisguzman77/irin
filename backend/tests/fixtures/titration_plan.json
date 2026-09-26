@@ -1,0 +1,26 @@
+{
+  "plan_id": "p1",
+  "drug_class": "gip_glp1",
+  "drug_label": "tirzepatide",
+  "steps": [
+    {
+      "index": 0,
+      "dose_label": "2.5 mg",
+      "planned_start": "2020-01-01"
+    },
+    {
+      "index": 1,
+      "dose_label": "5 mg",
+      "planned_start": "2020-01-29"
+    }
+  ],
+  "started_at": "2020-01-01",
+  "on_insulin": true,
+  "options": {
+    "ketone_prompts": true,
+    "step_week_vigilance": true,
+    "vigilance_offset_mgdl": 10.0
+  },
+  "status": "active",
+  "is_demo": true
+}

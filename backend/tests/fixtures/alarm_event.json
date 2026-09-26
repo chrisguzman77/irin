@@ -1,0 +1,12 @@
+{
+  "event_id": "e1",
+  "tier": "actual_low",
+  "started_at": "2020-01-01T22:00:00",
+  "acknowledged_at": "2020-01-01T22:08:00",
+  "ack_source": "device",
+  "escalated": true,
+  "rearm_count": 1,
+  "crossed_actual": true,
+  "presence_during": "home",
+  "is_demo": true
+}

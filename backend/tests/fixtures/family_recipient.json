@@ -1,0 +1,9 @@
+{
+  "recipient_id": "r1",
+  "name": "Mom",
+  "email": "mom@example.com",
+  "level": "story_only",
+  "send_mode": "approve_each",
+  "state": "active",
+  "first_story_approved": false
+}

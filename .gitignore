@@ -19,6 +19,7 @@ __pycache__/
 *.pyc
 .venv/
 .pytest_cache/
+.mypy_cache/
 
 # Node (frontend/app/dist/ and frontend/app/.env.production are committed on purpose, decision 28)
 node_modules/

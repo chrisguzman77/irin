@@ -1,0 +1,8 @@
+{
+  "device_id": "irin-dev-0001",
+  "user_id": "chris",
+  "device_url": "http://localhost:8000",
+  "token": "tok",
+  "paired_at": "2020-01-01T22:00:00",
+  "state": "paired"
+}

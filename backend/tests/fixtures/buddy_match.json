@@ -1,0 +1,12 @@
+{
+  "match_id": "mt1",
+  "user_id": "u1",
+  "candidate_id": "u2",
+  "score": 14.0,
+  "hours_covered": 10.0,
+  "mirror": true,
+  "shared_languages": [
+    "en"
+  ],
+  "status": "offered"
+}
