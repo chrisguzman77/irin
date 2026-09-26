@@ -57,3 +57,38 @@ def test_replay_sets_clock_to_scenario_time(tmp_path):
         assert clock.speed == 1.0
 
     asyncio.run(run())
+
+
+def test_the_save_plays_end_to_end_at_60x():
+    """The shipped scenario: every reading is served in order, none is stale
+    mid-scenario, and the feed turns stale 15 clock minutes after the CSV ends."""
+    from app.config import config
+
+    ds = ReplayDataSource(config.scenario_path, speed=60.0)
+    assert len(ds.rows) == 97 and ds.speed == 60.0
+
+    async def run():
+        await ds.start()
+        seen = []
+        for _ in range(97):
+            r = await ds.get_latest()
+            assert r is not None and not r.is_stale and r.source == "replay"
+            if not seen or r.timestamp != seen[-1].timestamp:
+                seen.append(r)
+            clock.advance(5 * 60)  # one reading interval; 5 s of wall time at 60x
+        assert len(seen) == 97
+        assert all(a.timestamp < b.timestamp for a, b in zip(seen, seen[1:]))
+        assert min(r.glucose_mgdl for r in seen) == 55
+
+        # now = 8 h 05 min (+ a few seconds of wall jitter at 60x) after the first row
+        hist = await ds.history(minutes=60)
+        assert hist[-1].timestamp == seen[-1].timestamp
+        assert 11 <= len(hist) <= 12  # 05:05 is on the boundary, 05:10..06:00 always inside
+        assert all(not h.is_stale for h in hist)  # history rows are facts, never stale
+
+        clock.advance(10 * 60)  # 15 min since the last row -> stale, honestly
+        last = await ds.get_latest()
+        assert last.timestamp == seen[-1].timestamp and last.is_stale
+        await ds.stop()
+
+    asyncio.run(run())
