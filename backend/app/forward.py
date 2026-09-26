@@ -93,10 +93,12 @@ class Forwarder:
             run, replay_rows = self.replay_readings(None)
         replay_cursor = self.replay_cursor
         if replay_rows:
+            # at most BATCH_ROWS per tick (a seek or a long scenario drains over ticks, never a 422 drop)
+            replay_rows = sorted(replay_rows, key=lambda r: r["timestamp"])[:BATCH_ROWS]
             for row in replay_rows:
                 row["is_demo"] = True
             lists["readings"] = lists["readings"] + replay_rows
-            replay_cursor = max(datetime.fromisoformat(r["timestamp"]) for r in replay_rows)
+            replay_cursor = datetime.fromisoformat(replay_rows[-1]["timestamp"])
         if not any(lists.values()):
             return None
         return {"device_id": self.device_id, **lists}, advance, replay_cursor
@@ -120,8 +122,9 @@ class Forwarder:
             async with httpx.AsyncClient(transport=self.transport, timeout=10.0) as client:
                 r = await client.post(f"{self.cloud_url.rstrip('/')}/v1/ingest", json=payload,
                                       headers={"X-Device-Id": self.device_id, "X-Device-Token": self.device_token})
-            if 400 <= r.status_code < 500 and r.status_code not in (401, 403, 408, 429):
+            if r.status_code == 422:
                 # the cloud will never accept these rows: skip them rather than retry the same window forever
+                # (every other status is retried: 401/403/404 mean a config problem someone will fix)
                 self.dropped_batches += 1
                 self.last_error = f"cloud rejected a batch: {r.status_code} {r.text[:120]}"
                 log.error("forward: %s; batch skipped", self.last_error)

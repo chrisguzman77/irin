@@ -50,6 +50,8 @@ class Cloud:
                 return httpx.Response(503, json={"detail": "storage unavailable"})
             if self.fail == "422":
                 return httpx.Response(422, json={"detail": "bad row"})
+            if self.fail == "404":
+                return httpx.Response(404, json={"detail": "wrong CLOUD_URL"})
             body = json.loads(request.content)
             assert request.headers["X-Device-Id"] == "irin-test" and request.headers["X-Device-Token"] == "tok"
             self.batches.append(body)
@@ -122,6 +124,30 @@ def test_replay_rows_are_demo_and_restart_per_scenario_run(db):
     runs["key"] = object()  # scenario re-selected (or live -> demo): the run replays from its first row
     assert asyncio.run(f.tick()) is True and mgdl(cloud.batches[1]) == [90, 91, 92]
     assert f.replay_cursor == T0 + timedelta(minutes=10)
+
+
+def test_a_long_scenario_drains_over_ticks_never_dropped(db, monkeypatch):
+    """A seek or a long scenario can expose thousands of rows at once; the cloud
+    caps a list at 5000, so the forwarder sends BATCH_ROWS per tick."""
+    from app import forward
+
+    monkeypatch.setattr(forward, "BATCH_ROWS", 4)
+    key = object()
+    rows = [Reading(timestamp=T0 + timedelta(minutes=5 * i), glucose_mgdl=100 + i, trend="Flat", source="replay")
+            .model_dump(mode="json") for i in range(10)]
+    cloud = Cloud()
+    f = make(cloud, replay_readings=lambda c: (key, [r for r in rows if c is None or datetime.fromisoformat(r["timestamp"]) > c]))
+    assert asyncio.run(f.tick()) is True and mgdl(cloud.batches[0]) == [100, 101, 102, 103]
+    assert asyncio.run(f.tick()) is True and mgdl(cloud.batches[1]) == [104, 105, 106, 107]
+    assert asyncio.run(f.tick()) is True and mgdl(cloud.batches[2]) == [108, 109]
+    assert asyncio.run(f.tick()) is True and len(cloud.batches) == 3
+
+
+def test_config_errors_are_retried_not_skipped(db):
+    cache(0)
+    cloud = Cloud(fail="404")
+    f = make(cloud)
+    assert asyncio.run(f.tick()) is False and f.dropped_batches == 0 and f.cursors["readings"] == 0
 
 
 def test_live_readings_after_a_demo_are_not_skipped(db):

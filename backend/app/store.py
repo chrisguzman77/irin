@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS readings (
 CREATE TABLE IF NOT EXISTS treatments (
     id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp TEXT NOT NULL, kind TEXT NOT NULL,
     insulin_units REAL, carbs_g REAL, dose_label TEXT, text TEXT,
-    confirmed INTEGER NOT NULL DEFAULT 0);
+    confirmed INTEGER NOT NULL DEFAULT 0, is_demo INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS alarm_events (event_id TEXT PRIMARY KEY, json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS night_records (night_date TEXT PRIMARY KEY, json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS low_events (low_event_id TEXT PRIMARY KEY, json TEXT NOT NULL);
