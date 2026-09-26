@@ -59,3 +59,19 @@ def test_history_and_forecast_endpoints():
         assert r.status_code == 200 and isinstance(r.json(), list)
         r = c.get("/api/forecast")
         assert r.status_code == 200 and r.json()["status"] in ("ok", "suspended", "unavailable")
+
+
+def test_presence_toggle_reaches_the_snapshot(monkeypatch):
+    import json
+
+    from app import auth
+
+    monkeypatch.setattr(auth.config, "PIN", "1234")
+    with TestClient(app) as c:
+        r = c.post("/api/presence", json={"override": "away"}, headers={"X-PIN": "1234"})
+        assert r.status_code == 200 and r.json()["mode"] == "away" and r.json()["source"] == "toggle"
+        with c.websocket_connect("/ws") as ws:
+            snap = json.loads(ws.receive_text())["payload"]
+            assert snap["presence"]["mode"] == "away" and snap["settings"]["presence_override"] == "away"
+        c.post("/api/presence", json={"override": "auto"}, headers={"X-PIN": "1234"})
+        assert c.get("/api/presence").json()["mode"] == "home"
