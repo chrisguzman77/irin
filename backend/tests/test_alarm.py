@@ -139,6 +139,49 @@ def test_pending_to_active_on_5_min_timeout(engine):
     assert eng.state.state == "active" and log[-1].escalated and sounds(hal)[-1] == "alarm_urgent"
 
 
+def test_timed_out_warning_then_ack_then_crossing_fires_a_fresh_full_alarm(engine):
+    """Review finding: the ack of a timed-out warning must never swallow the actual crossing."""
+    eng, hal, log = engine
+    warn(eng)
+    clock.advance(PENDING_TIMEOUT_MIN * 60)
+    eng.tick()
+    assert eng.state.state == "active" and eng.trigger == "predicted_low"
+    assert eng.acknowledge("app") is True and eng.state.state == "acknowledged"
+    n = len(hal.calls)
+    eng.process_reading(reading(62))  # the actual crossing, 14 min before any re-arm
+    assert eng.state.state == "active" and eng.trigger == "actual_low"
+    assert eng.state.acknowledged_at is None and log[-1].old_state == "acknowledged"
+    assert sounds(hal)[-1] == "alarm_urgent" and leds(hal)[-1] == "full" and len(hal.calls) > n
+
+
+def test_timed_out_warning_unacked_crossing_emits_actual_low_transition(engine):
+    eng, hal, log = engine
+    warn(eng)
+    clock.advance(PENDING_TIMEOUT_MIN * 60)
+    eng.tick()
+    eng.process_reading(reading(62))
+    assert (log[-1].old_state, log[-1].new_state, log[-1].trigger_type) == ("active", "active", "actual_low")
+    assert eng.trigger == "actual_low"  # R2's crossed_actual can see it
+
+
+def test_timed_out_warning_still_strobes_after_5_more_minutes(engine):
+    eng, hal, log = engine
+    warn(eng)
+    clock.advance(PENDING_TIMEOUT_MIN * 60)
+    eng.tick()
+    assert leds(hal)[-1] == "full"
+    clock.advance(ESCALATION_MIN * 60)
+    eng.tick()
+    assert leds(hal)[-1] == "strobe" and log[-1].escalated and log[-1].old_state == "active"
+
+
+def test_stale_respects_quiet_hours(engine):
+    eng, hal, log = engine
+    clock.set(speed=60.0, start=NIGHT)
+    eng.process_reading(reading(120, stale=True))
+    assert eng.trigger == "stale" and sounds(hal) == []  # indicator only at night
+
+
 def test_pending_to_idle_on_two_recovered_forecasts_and_rewarns_next_episode(engine):
     eng, hal, log = engine
     warn(eng)

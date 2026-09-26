@@ -24,7 +24,7 @@ Trigger types: predicted_low | actual_low | high | stale
   Highs: ONE-SHOT (one chirp, indicator until recrossing); no ack, no re-arm; an
   optional off-by-default reminder every N hours while still high. Highs respect quiet
   hours (the night window). ONLY lows override quiet hours (invariant 3).
-  Stale (no low running): one chirp, indicator until a fresh reading.
+  Stale (no low running): one chirp (quiet hours respected), indicator until a fresh reading.
 
 Outputs go through hal (LEDs, sound); presence gating of those outputs is the hal
 layer's job (step 9). alarm.py NEVER reads presence and is never edited by Rounds or
@@ -138,9 +138,7 @@ class AlarmEngine:
         else:
             same_episode = old != "idle" and self.trigger == trigger
             started = self.state.started_at if same_episode and self.state.started_at else now
-            acked = self.state.acknowledged_at if new_state in ("acknowledged",) and same_episode and old == "acknowledged" else None
-            if new_state == "acknowledged" and ack_source is not None:
-                acked = now
+            acked = now if new_state == "acknowledged" else None
             self.state = AlarmState(state=new_state, trigger_type=trigger, started_at=started, acknowledged_at=acked)
         t = Transition(old, new_state, trigger, reading, now, ack_source=ack_source, escalated=escalated)
         for cb in list(self._observers):
@@ -193,7 +191,7 @@ class AlarmEngine:
             # is the banner). With nothing running, it is a one-shot indicator tier.
             if not self._low_running() and self.trigger != "stale":
                 self._go("active", "stale", reading)
-                self._chirp(respect_quiet_hours=False)
+                self._chirp(respect_quiet_hours=True)  # only lows override quiet hours
             return
 
         if self.trigger == "stale":  # a fresh reading clears the stale indicator
@@ -202,8 +200,10 @@ class AlarmEngine:
         below = reading.glucose_mgdl < s.low_threshold
         if below:
             self._recovered = 0
-            if not self._full_running():
-                self._start_full(reading)  # from idle, pending, high, or stale; never inherits an ack
+            if not (self._full_running() and self.trigger == "actual_low"):
+                # From idle, pending, high, stale, or a timed-out warning (active, acknowledged,
+                # or rearmed with trigger predicted_low): a fresh actual_low, never inheriting an ack.
+                self._start_full(reading)
             return
 
         if self._full_running():
@@ -264,8 +264,9 @@ class AlarmEngine:
         now = clock.now()
         st = self.state.state
         if st == "pending" and self._deadline and now >= self._deadline:
-            # 5 min unacknowledged: the warning escalates to the full alarm
-            self._escalated = True
+            # 5 min unacknowledged: the warning escalates to the full alarm; the strobe
+            # step follows 5 min later like any other unacknowledged full alarm
+            self._escalated = False
             self._deadline = now + timedelta(minutes=ESCALATION_MIN)
             self._go("active", "predicted_low", self.last_reading, escalated=True)
             self._full_outputs()

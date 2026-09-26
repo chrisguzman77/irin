@@ -56,6 +56,7 @@ runtime.hub = hub
 runtime.alarm = AlarmEngine(runtime.settings)
 
 ALARM_TICK_CLOCK_SECONDS = 30.0
+_broadcast_tasks: set[asyncio.Task] = set()  # references held so a broadcast is never GC'd mid-flight
 
 
 def _broadcast_transition(t: Transition) -> None:
@@ -63,9 +64,11 @@ def _broadcast_transition(t: Transition) -> None:
     payload = {**runtime.alarm.state.model_dump(mode="json"), "old_state": t.old_state,
                "escalated": t.escalated, "ack_source": t.ack_source}
     try:
-        asyncio.get_running_loop().create_task(hub.broadcast(WSMessage(type="alarm_state_change", payload=payload)))
+        task = asyncio.get_running_loop().create_task(hub.broadcast(WSMessage(type="alarm_state_change", payload=payload)))
     except RuntimeError:  # no running loop (a synchronous test driving the engine directly)
-        pass
+        return
+    _broadcast_tasks.add(task)
+    task.add_done_callback(_broadcast_tasks.discard)
 
 
 runtime.alarm.on_transition(_broadcast_transition)
