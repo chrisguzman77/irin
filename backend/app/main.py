@@ -105,17 +105,12 @@ class ModeRequest(BaseModel):
 @app.post("/api/mode", dependencies=[Depends(require_pin)])
 async def set_mode(req: ModeRequest) -> dict:
     """Swap the active datasource at runtime (chris.md step 12). Day one: the
-    swap mechanism; alarm reset and the mode_change broadcast are wired here
-    as the alarm engine lands. Switching to nightscout returns 501 until the
-    poller exists."""
+    swap mechanism; alarm reset is wired here as the alarm engine lands. On
+    return to live the poller serves the cached reading marked stale until a
+    fresh poll lands."""
     if req.mode == runtime.mode:
         return {"mode": runtime.mode, "changed": False}
     new = make_datasource(req.mode)
-    if req.mode == "nightscout":
-        try:
-            await new.get_latest()
-        except NotImplementedError as e:
-            raise HTTPException(status_code=501, detail=str(e))
     await runtime.datasource.stop()
     runtime.datasource = new
     runtime.mode = req.mode
