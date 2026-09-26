@@ -1,16 +1,17 @@
 import { useEffect, useState } from "react";
-import type { components } from "../../types/pi";
 import { PinRejected } from "../../lib/api";
 import type { Settings } from "../../lib/contracts";
-import { applied, saveSettings } from "../../lib/settings";
+import {
+  addRecipient, editRecipient, pauseRecipient, resumeRecipient, revokeRecipient, type Recipient,
+} from "../../lib/family";
+import { sameValue } from "../../lib/settings";
 
 // Family Story F1 (docs/FAMILY_STORY.md): who receives the morning story,
-// how much they see, and whether each story waits for approval. Stored in
-// Settings.family_recipients through the PIN-gated POST /api/settings (the
-// list is replaced whole, built from the Pi's own current list). Each action
-// saves at once and counts only when the Pi echoes it (settings_change).
-// Revoked recipients stay on the list, marked, and never receive anything.
-type Recipient = components["schemas"]["FamilyRecipient"];
+// how much they see, and whether each story waits for approval. Read from
+// Settings.family_recipients; changed only through the Pi's PIN-gated
+// recipient routes (add, edit, pause, resume, revoke). Each action counts
+// only once the Pi's settings_change carries the recipient as the route
+// returned it. Revoked recipients stay on the list, marked, with no actions.
 type Level = NonNullable<Recipient["level"]>;
 type SendMode = NonNullable<Recipient["send_mode"]>;
 
@@ -29,15 +30,9 @@ const input = "bg-neutral-900 border border-neutral-700 rounded-lg px-3 py-2 tex
 const btn = "rounded-lg px-3 py-2 text-sm font-semibold disabled:opacity-40";
 const EMAIL = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
 
-/** An id that works on plain http too (randomUUID needs a secure context). */
-function newId(): string {
-  const b = crypto.getRandomValues(new Uint8Array(16));
-  return Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
-}
-
 export default function FamilySection({ current, baseUrl }: { current: Settings | undefined; baseUrl: string }) {
   const list: Recipient[] = current?.family_recipients ?? [];
-  const [pending, setPending] = useState<Partial<Settings> | null>(null);
+  const [pending, setPending] = useState<Recipient | null>(null);
   const [msg, setMsg] = useState<{ text: string; tone: "info" | "ok" | "error" } | null>(null);
   const [confirmRevoke, setConfirmRevoke] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
@@ -47,7 +42,7 @@ export default function FamilySection({ current, baseUrl }: { current: Settings 
   const [mode, setMode] = useState<SendMode>("approve_each");
 
   useEffect(() => {
-    if (pending && current && applied(current, pending)) {
+    if (pending && current && (current.family_recipients ?? []).some((r) => sameValue(r, pending))) {
       setPending(null);
       setMsg({ text: "Saved on your Irin.", tone: "ok" });
     }
@@ -64,18 +59,20 @@ export default function FamilySection({ current, baseUrl }: { current: Settings 
 
   const busy = !!pending;
 
-  /** Send the whole new list; true when the Pi accepted it. */
-  const save = async (next: Recipient[], sending: string): Promise<boolean> => {
+  /** One recipient route; true when the Pi accepted it. */
+  const act = async (
+    call: () => Promise<{ ok: true; value: Recipient } | { ok: false; reason: string }>,
+    sending: string,
+  ): Promise<boolean> => {
     if (busy) return false;
-    const patch: Partial<Settings> = { family_recipients: next };
     setMsg({ text: sending, tone: "info" });
     try {
-      const res = await saveSettings(baseUrl, patch);
+      const res = await call();
       if (!res.ok) {
         setMsg({ text: res.reason, tone: "error" });
         return false;
       }
-      setPending(patch);
+      setPending(res.value);
       return true;
     } catch (e) {
       if (!(e instanceof PinRejected)) setMsg({ text: "Could not reach your Irin. Nothing was saved.", tone: "error" });
@@ -83,25 +80,18 @@ export default function FamilySection({ current, baseUrl }: { current: Settings 
     }
   };
 
-  const update = (id: string, change: Partial<Recipient>, sending: string) =>
-    save(list.map((r) => (r.recipient_id === id ? { ...r, ...change } : r)), sending);
-
   const nameOk = name.trim().length > 0 && name.trim().length <= 60;
   const emailOk = EMAIL.test(email.trim());
   const duplicate = list.some((r) => r.state !== "revoked" && r.email.toLowerCase() === email.trim().toLowerCase());
 
   const add = async () => {
     if (!nameOk || !emailOk || duplicate) return;
-    const r: Recipient = {
-      recipient_id: newId(),
-      name: name.trim(),
-      email: email.trim(),
-      level,
-      send_mode: mode,
-      state: "active",
-      first_story_approved: false,
-    };
-    if (await save([...list, r], `Adding ${r.name}…`)) {
+    const who = name.trim();
+    const ok = await act(
+      () => addRecipient(baseUrl, { name: who, email: email.trim(), level, send_mode: mode }),
+      `Adding ${who}…`,
+    );
+    if (ok) {
       setAdding(false);
       setName("");
       setEmail("");
@@ -147,7 +137,9 @@ export default function FamilySection({ current, baseUrl }: { current: Settings 
                       className={input}
                       disabled={busy}
                       value={r.level ?? "story_only"}
-                      onChange={(e) => update(r.recipient_id, { level: e.target.value as Level }, "Saving…")}
+                      onChange={(e) =>
+                        act(() => editRecipient(baseUrl, r.recipient_id, { level: e.target.value as Level }), "Saving…")
+                      }
                     >
                       {LEVELS.map(([v, label]) => (
                         <option key={v} value={v}>{label}</option>
@@ -158,13 +150,20 @@ export default function FamilySection({ current, baseUrl }: { current: Settings 
                       className={input}
                       disabled={busy}
                       value={r.send_mode ?? "approve_each"}
-                      onChange={(e) => update(r.recipient_id, { send_mode: e.target.value as SendMode }, "Saving…")}
+                      onChange={(e) =>
+                        act(() => editRecipient(baseUrl, r.recipient_id, { send_mode: e.target.value as SendMode }), "Saving…")
+                      }
                     >
                       {MODES.map(([v, short]) => (
                         <option key={v} value={v}>{short}</option>
                       ))}
                     </select>
                   </div>
+                  {r.first_story_approved && (
+                    <span className="text-xs text-neutral-500">
+                      Changing what {r.name} receives means the next story waits for your approval again.
+                    </span>
+                  )}
                   {confirmRevoke === r.recipient_id ? (
                     <div className="flex flex-col gap-2 border border-red-800 rounded-lg p-2">
                       <span className="text-sm text-red-300">
@@ -180,7 +179,7 @@ export default function FamilySection({ current, baseUrl }: { current: Settings 
                           className={`${btn} flex-1 bg-red-600 text-white`}
                           onClick={async () => {
                             setConfirmRevoke(null);
-                            await update(r.recipient_id, { state: "revoked" }, `Revoking ${r.name}…`);
+                            await act(() => revokeRecipient(baseUrl, r.recipient_id), `Revoking ${r.name}…`);
                           }}
                         >
                           Revoke
@@ -194,7 +193,9 @@ export default function FamilySection({ current, baseUrl }: { current: Settings 
                         disabled={busy}
                         className={`${btn} flex-1 ${paused ? "bg-white text-black" : "bg-neutral-800 text-neutral-200"}`}
                         onClick={() =>
-                          update(r.recipient_id, { state: paused ? "active" : "paused" }, paused ? `Resuming ${r.name}…` : `Pausing ${r.name}…`)
+                          paused
+                            ? act(() => resumeRecipient(baseUrl, r.recipient_id), `Resuming ${r.name}…`)
+                            : act(() => pauseRecipient(baseUrl, r.recipient_id), `Pausing ${r.name}…`)
                         }
                       >
                         {paused ? "Resume" : "Pause"}
