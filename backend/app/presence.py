@@ -44,6 +44,7 @@ class PresenceMachine:
         self.settings = settings
         self.state = PresenceState(mode="home", source="radar", since=clock.now())
         self._absent_since: datetime | None = None
+        self._absent_at_night = False  # the running absence began (or continued) inside the night window
         self._observers: list[PresenceObserver] = []
 
     def on_change(self, callback: PresenceObserver) -> None:
@@ -67,6 +68,7 @@ class PresenceMachine:
         self.settings.presence_override = mode  # type: ignore[assignment]
         if mode == "auto":
             self._absent_since = None
+            self._absent_at_night = False
             self._set("home", "radar")  # start from Home; the radar decides from here
         else:
             self._set(mode, "toggle")
@@ -83,11 +85,16 @@ class PresenceMachine:
         now = clock.now()
         if raw is True:
             self._absent_since = None
+            self._absent_at_night = False
             self._set("home", "radar")
         elif raw is False:
             night = in_window(now.time(), self.settings.night_window_start, self.settings.night_window_end)
-            if night or self._absent_since is None:
-                self._absent_since = now  # at night the timer never accumulates; it restarts at window end
+            if night:
+                self._absent_since = now  # at night the timer never accumulates
+                self._absent_at_night = True
+            elif self._absent_since is None or self._absent_at_night:
+                self._absent_since = now  # a fresh daytime timer (also the restart at window end)
+                self._absent_at_night = False
             elif now - self._absent_since >= timedelta(minutes=AWAY_AFTER_MIN):
                 self._set("away", "radar")
         # raw is None: no evidence, nothing changes
