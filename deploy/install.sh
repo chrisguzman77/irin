@@ -85,7 +85,13 @@ ok "blanking off"
 
 say "8. backlight udev rule"
 RULE=/etc/udev/rules.d/90-backlight.rules
-if [ ! -f "$RULE" ]; then
+need_rule=0
+for b in /sys/class/backlight/*/brightness; do
+  [ -e "$b" ] && [ ! -w "$b" ] && need_rule=1
+done
+# Only the OUTCOME matters: Raspberry Pi OS Trixie already makes brightness
+# group-video writable, so the rule is written only when that is not the case.
+if [ "$need_rule" = 1 ] && [ ! -f "$RULE" ]; then
   echo 'SUBSYSTEM=="backlight", RUN+="/bin/chgrp video /sys/class/backlight/%k/brightness", RUN+="/bin/chmod g+w /sys/class/backlight/%k/brightness"' | sudo tee "$RULE" >/dev/null
   sudo udevadm control --reload && sudo udevadm trigger --subsystem-match=backlight
 fi
