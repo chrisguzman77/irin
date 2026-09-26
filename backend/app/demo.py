@@ -29,11 +29,22 @@ SCENARIOS_DIR = REPO_ROOT / "demo" / "scenarios"
 
 router = APIRouter(prefix="/api/demo", tags=["demo"])
 _runtime = None  # set by main.py: the Runtime (mode, datasource, settings, alarm, hub)
+_live_basal_time: tuple[str | None] | None = None  # the real basal_time while the demo button overrides it
 
 
 def bind(runtime) -> None:
     global _runtime
     _runtime = runtime
+
+
+def restore_live_settings() -> bool:
+    """Called by the mode switch on the way back to live: the basal-time button's
+    value never reaches the live nudge ladder. Returns True when something changed."""
+    global _live_basal_time
+    if _live_basal_time is None:
+        return False
+    (_runtime.settings.basal_time,), _live_basal_time = _live_basal_time, None
+    return True
 
 
 def require_demo() -> None:
@@ -107,20 +118,25 @@ async def pause_feed(req: PauseRequest) -> dict:
 
 class InjectRequest(BaseModel):
     glucose_mgdl: float = Field(ge=39, le=401)
-    trend: str = "SingleDown"
+    trend: str = Field(default="SingleDown", pattern=r"^[A-Za-z]{1,20}$")  # a Nightscout direction name
 
 
 @router.post("/inject_low", dependencies=[Depends(require_pin), Depends(require_demo)])
 async def inject_low(req: InjectRequest) -> dict:
-    """Overlay one reading at the current clock time; the CSV stays clean."""
+    """Overlay one reading at the current clock time (at the pause moment while
+    paused, so it shows at once); the CSV stays clean."""
     r = _replay().inject(req.glucose_mgdl, req.trend)
     return {"injected": r.model_dump(mode="json")}
 
 
 @router.post("/basal_time", dependencies=[Depends(require_pin), Depends(require_demo)])
 async def basal_time_button() -> dict:
-    """Set basal_time to 61 clock minutes ago so the basal nudge shows at once."""
+    """Set basal_time to 61 clock minutes ago so the basal nudge shows at once.
+    The live value is stashed and restored on the switch back to live."""
+    global _live_basal_time
     t = (clock.now() - timedelta(minutes=61)).strftime("%H:%M")
+    if _live_basal_time is None:
+        _live_basal_time = (_runtime.settings.basal_time,)
     _runtime.settings.basal_time = t
     await _broadcast("settings_change", _runtime.settings.model_dump(mode="json"))
     return {"basal_time": t}

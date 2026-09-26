@@ -30,6 +30,11 @@ def client(monkeypatch, tmp_path):
     restored = Settings.model_validate(saved)
     for name in Settings.model_fields:
         setattr(main.runtime.settings, name, getattr(restored, name))
+    main.runtime.presence.set_override("auto")
+    main.runtime.datasource = main.make_datasource(main.runtime.mode)  # no overlay, pause, or speed leaks
+    from app import demo
+
+    demo._live_basal_time = None
 
 
 def snapshot(c) -> dict:
@@ -108,12 +113,26 @@ def test_inject_is_an_overlay_and_the_csv_stays_clean(client):
     assert client.get("/api/latest").json()["glucose_mgdl"] != 52
 
 
-def test_basal_time_button_arms_the_nudge(client):
-    r = client.post("/api/demo/basal_time", headers=H)
+def test_basal_time_button_arms_the_nudge_and_never_reaches_live(client):
+    c = client
+    assert c.post("/api/settings", json={"basal_time": "21:30"}, headers=H).status_code == 200  # the real one
+    r = c.post("/api/demo/basal_time", headers=H)
     assert r.status_code == 200
     expect = (clock.now() - timedelta(minutes=61)).strftime("%H:%M")
     assert r.json()["basal_time"] in (expect, (clock.now() - timedelta(minutes=62)).strftime("%H:%M"))
-    assert snapshot(client)["settings"]["basal_time"] == r.json()["basal_time"]
+    assert snapshot(c)["settings"]["basal_time"] == r.json()["basal_time"]
+    c.post("/api/demo/basal_time", headers=H)  # pressed twice: the stash still holds the real value
+    assert c.post("/api/mode", json={"mode": "nightscout"}, headers=H).status_code == 200
+    assert c.get("/api/settings").json()["basal_time"] == "21:30"  # live nudge ladder runs on the real time
+    c.post("/api/mode", json={"mode": "replay"}, headers=H)
+
+
+def test_inject_while_paused_shows_at_once(client):
+    c = client
+    assert c.post("/api/demo/pause", json={"paused": True}, headers=H).status_code == 200
+    r = c.post("/api/demo/inject_low", json={"glucose_mgdl": 45}, headers=H)
+    assert r.status_code == 200 and c.get("/api/latest").json()["glucose_mgdl"] == 45
+    assert c.post("/api/demo/inject_low", json={"glucose_mgdl": 45, "trend": "<script>"}, headers=H).status_code == 422
 
 
 def test_demo_treatments_stay_local(client):
@@ -143,10 +162,24 @@ def test_settings_partial_update_reaches_every_engine_and_the_snapshot(client):
     assert jobs["morning_report"] == "08:00"  # the report job moved with the window
     r = c.post("/api/settings", json={"presence_override": "away"}, headers=H)
     assert r.status_code == 200 and c.get("/api/presence").json()["mode"] == "away"
+    # nested objects merge field by field: one opt-in never resets the other three
+    c.post("/api/settings", json={"night_buddy": {"have_buddy": True}}, headers=H)
+    r = c.post("/api/settings", json={"night_buddy": {"be_watcher": True}}, headers=H)
+    assert r.json()["night_buddy"]["have_buddy"] is True and r.json()["night_buddy"]["be_watcher"] is True
+    r = c.post("/api/settings", json={"led_colors": {"ambient": "#000000"}}, headers=H)
+    assert r.json()["led_colors"]["ambient"] == "#000000" and len(r.json()["led_colors"]) > 1
 
 
 def test_settings_rejects_bad_values(client):
     c = client
+    # invariant 3: a NaN or absurd threshold would make the actual-low alarm never fire
+    for body in ('{"low_threshold": NaN}', '{"low_threshold": -Infinity}', '{"high_threshold": Infinity}'):
+        r = c.post("/api/settings", content=body, headers={**H, "Content-Type": "application/json"})
+        assert r.status_code == 422, body
+    for body in ({"low_threshold": 20}, {"low_threshold": 150}, {"high_threshold": 5000}, {"volume": 99},
+                 {"consecutive_predictions_n": 0}, {"iob_duration_hours": -1}, {"basal_units": 0}):
+        assert c.post("/api/settings", json=body, headers=H).status_code == 422, body
+    assert c.get("/api/settings").json()["low_threshold"] == 70
     assert c.post("/api/settings", json={"night_window_end": "25:00"}, headers=H).status_code == 422
     assert c.post("/api/settings", json={"basal_time": "9pm"}, headers=H).status_code == 422
     assert c.post("/api/settings", json={"low_threshold": 300}, headers=H).status_code == 422

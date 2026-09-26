@@ -56,7 +56,7 @@ class ReplayDataSource(DataSource):
 
     def inject(self, glucose_mgdl: float, trend: str) -> Reading:
         """Overlay one reading at the current clock time. rows is never touched."""
-        row = (clock.now(), float(glucose_mgdl), trend)
+        row = (self._cutoff(clock.now()), float(glucose_mgdl), trend)  # visible even while paused
         self._overlay.append(row)
         return self._to_reading(row)
 

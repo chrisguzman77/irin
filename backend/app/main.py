@@ -31,7 +31,7 @@ from .contracts import FRESH_PIN_ENDPOINTS, AlarmState, MorningReport, Reading, 
 from .datasource.base import DataSource
 from .datasource.nightscout import NightscoutDataSource
 from .datasource.replay import ReplayDataSource
-from .demo import bind as bind_demo, router as demo_router
+from .demo import bind as bind_demo, restore_live_settings, router as demo_router
 from .forecast import Forecaster
 from .outputs import GatedOutputs
 from .presence import PresenceMachine, PresenceState
@@ -282,6 +282,8 @@ async def set_mode(req: ModeRequest) -> dict:
     runtime.forecaster.reset()
     runtime.voice.reset()
     hub._last = None
+    if req.mode == "nightscout" and restore_live_settings():  # the demo basal-time button never reaches live
+        await hub.broadcast(WSMessage(type="settings_change", payload=runtime.settings.model_dump(mode="json")))
     await hub.broadcast(WSMessage(type="mode_change", payload={"mode": runtime.mode}))
     return {"mode": runtime.mode, "changed": True}
 
@@ -414,26 +416,61 @@ async def get_settings() -> Settings:
     return runtime.settings
 
 
+def _deep_merge(base: dict, patch: dict) -> dict:
+    """Nested objects (led_colors, night_buddy, emergency_script) merge field by
+    field so patching one buddy opt-in never resets the other three; lists
+    (family_recipients) are replaced whole."""
+    out = dict(base)
+    for k, v in patch.items():
+        out[k] = _deep_merge(out[k], v) if isinstance(v, dict) and isinstance(out.get(k), dict) else v
+    return out
+
+
+SETTINGS_BOUNDS = {  # (low, high) inclusive; every numeric setting must be finite and inside
+    "low_threshold": (54, 100),
+    "high_threshold": (120, 400),
+    "predictive_lead_min": (5, 60),
+    "consecutive_predictions_n": (1, 5),
+    "high_remind_hours": (0.5, 24),
+    "volume": (0.0, 1.0),
+    "iob_duration_hours": (1.0, 12.0),
+    "basal_units": (0.5, 200),
+}
+
+
+def _check_settings(new: Settings) -> None:
+    """Raises ValueError. A NaN threshold would make every comparison in the
+    alarm engine False and the actual-low alarm never fire (invariant 3)."""
+    for name, (lo, hi) in SETTINGS_BOUNDS.items():
+        value = getattr(new, name)
+        if value is None:
+            continue
+        if not (math.isfinite(value) and lo <= value <= hi):
+            raise ValueError(f"{name} must be a number in [{lo}, {hi}]")
+    for name in ("night_window_start", "night_window_end", "basal_time"):
+        value = getattr(new, name)
+        if value is not None:
+            parse_hhmm(value)  # "HH:MM" only; time() rejects out-of-range fields
+    if new.low_threshold >= new.high_threshold:
+        raise ValueError("low_threshold must be below high_threshold")
+
+
 @app.post("/api/settings", dependencies=[Depends(require_pin)], response_model=Settings)
 async def update_settings(patch: dict) -> Settings:
-    """Merge the given fields into the live settings (a partial body is fine).
-    The alarm engine, presence machine, scheduler, and report builder all
-    hold the same Settings object, so they see the change at once."""
+    """Merge the given fields into the live settings (a partial body is fine;
+    nested objects merge field by field, lists replace whole). The alarm
+    engine, presence machine, scheduler, and report builder all hold the
+    same Settings object, so they see the change at once."""
     if not isinstance(patch, dict):
         raise HTTPException(status_code=400, detail="body must be an object of settings fields")
     unknown = set(patch) - set(Settings.model_fields)
     if unknown:
         raise HTTPException(status_code=400, detail=f"unknown settings: {sorted(unknown)}")
     try:
-        new = Settings.model_validate({**runtime.settings.model_dump(), **patch})
-        for name in ("night_window_start", "night_window_end", "basal_time"):
-            value = getattr(new, name)
-            if value is not None:
-                parse_hhmm(value)  # "HH:MM" only; time() rejects out-of-range fields
+        new = Settings.model_validate(_deep_merge(runtime.settings.model_dump(), patch))
+        _check_settings(new)
     except (ValueError, TypeError) as e:
         raise HTTPException(status_code=422, detail=f"invalid settings: {e}")
-    if new.low_threshold >= new.high_threshold:
-        raise HTTPException(status_code=422, detail="low_threshold must be below high_threshold")
     override_changed = new.presence_override != runtime.settings.presence_override
     for name in Settings.model_fields:
         setattr(runtime.settings, name, getattr(new, name))
