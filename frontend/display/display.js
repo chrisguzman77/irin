@@ -48,6 +48,8 @@ const state = {
   doctorMsg: "",
   doctorAsking: null,  // message_id the keypad is open for
   pairing: {},         // pairing_state (snapshot + pairing_state messages)
+  planState: {},       // Step Watch plan_state (snapshot + plan_state messages); {active: false} = no watch
+  activePlan: null,    // the snapshot's active_plan (TitrationPlan), for the fallback in renderWatch
   ackMsg: "",
 };
 
@@ -121,6 +123,8 @@ function onMessage(msg) {
       state.familyStories = Array.isArray(p.family_story_status) ? p.family_story_status : [];
       state.doctorMessages = Array.isArray(p.pending_doctor_messages) ? p.pending_doctor_messages : [];
       setPairing(p.pairing_state);
+      state.planState = p.plan_state || {};
+      state.activePlan = p.active_plan || null;
       if (p.latest_reading) addReading(p.latest_reading);
       else state.latest = null;
       backfillHistory();
@@ -162,6 +166,9 @@ function onMessage(msg) {
       break;
     case "pairing_state":
       setPairing(p);
+      break;
+    case "plan_state":
+      state.planState = p || {};
       break;
     default:
       return; // other types belong to later steps; the hub's echo replies have no type
@@ -284,6 +291,7 @@ function render() {
   // IOB, last dose, and today's TIR are not in the snapshot yet (contracts
   // request to Chris, see journal); the tiles stay "—" until they are.
   renderAlarm(num, arrow);
+  renderWatch();
   renderPair();
   renderDoctor();
   if (mode === "detail") drawGraph();
@@ -328,6 +336,36 @@ async function answerDoctor(verb) {
   if (res.cancelled) return;
   state.doctorMsg = res.ok ? "sent — waiting for your Irin" : res.reason;
   render();
+}
+
+// --- Step Watch strip (R1): where the watch is, as a glance; the app carries every input ---
+
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const dayLabel = (iso) => { const [, m, d] = String(iso).slice(0, 10).split("-").map(Number); return m ? `${MONTHS[m - 1]} ${d}` : ""; };
+// While the snapshot does not carry plan_state (contracts.StateSnapshot has no
+// such field yet: FOR CHRIS), the strip applies the Pi's own step_watch rules to
+// the snapshot's active_plan on the Pi's date: the current step is the latest
+// planned_start on or before today, day 1 is its planned start, the next step
+// is the earliest later one. A plan_state message always wins.
+function planFromActive(plan, today) {
+  if (!plan || plan.status !== "active" || !today || !Array.isArray(plan.steps)) return {};
+  const started = plan.steps.filter((s) => s.planned_start <= today).sort((a, b) => a.planned_start.localeCompare(b.planned_start));
+  const later = plan.steps.filter((s) => s.planned_start > today).sort((a, b) => a.planned_start.localeCompare(b.planned_start));
+  const cur = started[started.length - 1];
+  const utc = (iso) => { const [y, m, d] = iso.slice(0, 10).split("-").map(Number); return Date.UTC(y, m - 1, d); };
+  const days = (a, b) => Math.round((utc(a) - utc(b)) / 86400000);
+  return { active: true, drug_label: plan.drug_label, dose_label: cur ? cur.dose_label : null,
+    day_in_step: cur ? days(today, cur.planned_start) + 1 : null, next_step_on: later[0] ? later[0].planned_start : null };
+}
+function renderWatch() {
+  const w = typeof (state.planState || {}).active === "boolean" ? state.planState : planFromActive(state.activePlan, state.piDate);
+  const on = w.active === true && typeof w.dose_label === "string";
+  $("watch-strip").classList.toggle("hidden", !on);
+  if (!on) return;
+  const parts = [`Step Watch · ${w.drug_label || ""} ${w.dose_label}`.replace(/\s+/g, " ")];
+  if (typeof w.day_in_step === "number") parts.push(`day ${w.day_in_step}`);
+  if (w.next_step_on) parts.push(`next step ${dayLabel(w.next_step_on)}`);
+  $("watch-strip").textContent = parts.join(" · ");
 }
 
 // --- Share with my doctor (R1): the QR screen ---
