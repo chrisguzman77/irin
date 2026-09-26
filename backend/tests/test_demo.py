@@ -72,7 +72,7 @@ def test_scenario_list_and_select(client):
     assert client.post("/api/demo/scenario", json={"name": "nope"}, headers=H).status_code == 404
     assert client.post("/api/demo/scenario", json={"name": "../etc"}, headers=H).status_code == 422
     r = client.post("/api/demo/scenario", json={"name": "the_save"}, headers=H)
-    assert r.status_code == 200 and clock.now().year == 2020
+    assert r.status_code == 200 and abs((clock.now() - main.runtime.datasource.rows[0][0]).total_seconds()) < 5  # the clock restarted at the first row
 
 
 def test_speed_changes_multiplier_without_moving_the_clock(client):
