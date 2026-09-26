@@ -315,6 +315,15 @@ that trained on that same night:
 | normal_night, failure, meal_context, high_spike | real, date-shifted | forecast_v1, in-sample | nothing claimed: they demonstrate display, staleness, context, and the high alert, not a warning |
 | titration_synthetic | SYNTHETIC (2020 timestamps) | a labeled overlay written to reproduce the R10 worked example | no model involved |
 
+### Dashboards vs cards (step 9)
+
+The My Irin dashboards' numbers come from SQL (cloud/sql/: hypertables,
+continuous aggregates, and the `nightly` view); every card's number comes
+from ml/models/nights.py. Where they compute the same thing (a night's
+coverage, low point, and minutes under 70), ml/tests/test_agreement.py loads
+the same nights into both and asserts they match to the reading (verified
+against Tiger Cloud, 50+ nights). Dashboards draw pictures and never decide.
+
 ### Demo scenarios: what is real, what is not (step 7)
 
 - **Real glucose, date-shifted by whole days** (the time of day the forecaster
