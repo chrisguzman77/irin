@@ -17,12 +17,18 @@ from app.reports import (
     ReportBuilder,
     compute_stats,
     extract_numbers,
+    night_bounds,
     render_graph,
     template_narrative,
     validate_narrative,
 )
 
-T0 = datetime(2020, 1, 1, 22, 0)
+# The shipped scenario, whatever George cuts it to: the expectations below are
+# computed from its rows by hand (min, max, count), never hard-coded.
+_ROWS = ReplayDataSource(config.scenario_path, speed=60.0).rows
+NIGHT = _ROWS[-1][0].date()  # the morning the scenario's night ends on
+WINDOW = night_bounds(NIGHT, "22:00", "07:00")
+EXPECTED = 9 * 12 + 1  # readings expected in a 22:00-07:00 window
 
 
 @pytest.fixture
@@ -35,22 +41,32 @@ def db(tmp_path, monkeypatch):
 
 
 def the_save_readings() -> list[Reading]:
-    ds = ReplayDataSource(config.scenario_path, speed=60.0)
-    return [Reading(timestamp=t, glucose_mgdl=g, trend=tr, source="replay") for t, g, tr in ds.rows]
+    return [Reading(timestamp=t, glucose_mgdl=g, trend=tr, source="replay") for t, g, tr in _ROWS]
 
 
 def test_stats_from_the_save():
-    s = compute_stats(the_save_readings(), [], night_start="22:00", night_end="07:00")
-    assert s["low_mgdl"] == 55 and s["low_at"] == "04:00"
-    assert s["high_mgdl"] == 131 and s["readings"] == 97
-    assert 0 < s["tbr_pct"] < 20 and s["tir_pct"] > 70 and s["tar_pct"] == 0
-    assert s["minutes_below_70"] > 0 and s["coverage_pct"] > 85
+    s = compute_stats(the_save_readings(), [], *WINDOW)
+    lo = min(_ROWS, key=lambda r: r[1])
+    hi = max(_ROWS, key=lambda r: r[1])
+    assert s["low_mgdl"] == round(lo[1]) and s["low_at"] == lo[0].strftime("%H:%M")
+    assert s["high_mgdl"] == round(hi[1]) and s["readings"] == len(_ROWS)
+    assert s["tbr_pct"] == pytest.approx(100 * sum(1 for r in _ROWS if r[1] < 70) / len(_ROWS), abs=0.1)
+    assert s["minutes_below_70"] == 5 * sum(1 for r in _ROWS if r[1] < 70) > 0  # The Save has its low
+    assert s["coverage_pct"] == pytest.approx(min(100.0, 100 * len(_ROWS) / EXPECTED), abs=0.1)
     assert s["tir_pct"] + s["tbr_pct"] + s["tar_pct"] == pytest.approx(100.0)
 
 
 def test_no_data_night_is_honest():
-    s = compute_stats([], [], night_start="22:00", night_end="07:00")
+    s = compute_stats([], [], *WINDOW)
     assert s["readings"] == 0 and s["low_mgdl"] is None and s["coverage_pct"] == 0.0
+
+
+def test_coverage_is_over_the_night_window_not_the_readings_present():
+    """A sensor that dies after the first hour is a ~11% night, never a 100% one."""
+    first_hour = [r for r in the_save_readings() if r.timestamp < _ROWS[0][0] + timedelta(hours=1)]
+    s = compute_stats(first_hour, [], *WINDOW)
+    assert s["readings"] == len(first_hour) and s["coverage_pct"] == pytest.approx(100 * len(first_hour) / EXPECTED, abs=0.1)
+    assert s["coverage_pct"] < 15 and "coverage" in template_narrative(s).lower()
 
 
 def test_graph_png_is_written(tmp_path):
@@ -59,16 +75,20 @@ def test_graph_png_is_written(tmp_path):
 
 
 def test_validator_accepts_numbers_in_stats_and_rejects_invented_ones():
-    s = compute_stats(the_save_readings(), [], night_start="22:00", night_end="07:00")
+    s = compute_stats(the_save_readings(), [], *WINDOW)
     assert validate_narrative(template_narrative(s), s)
-    assert not validate_narrative("You dipped to 48 at 3:10 and recovered.", s)  # 48 and 3:10 are invented
-    assert validate_narrative("Your lowest point was 55 mg/dL at 04:00; time in range was "
+    assert not validate_narrative("You dipped to 48 at 13:10 and recovered.", s)  # 48 and 13:10 are invented
+    h, m = s["low_at"].split(":")
+    assert not validate_narrative(f"You had {int(h)} lows overnight.", s)  # the hour of the low is not a count
+    assert not validate_narrative(f"You had {int(m) or 22} alarms.", s)
+    assert validate_narrative(f"The low came at {int(h) % 12 or 12}:{m}.", s)
+    assert validate_narrative(f"Your lowest point was {s['low_mgdl']} mg/dL at {s['low_at']}; time in range was "
                               f"{s['tir_pct']:.0f}%.", s)
     assert extract_numbers("2 alarms, 55 mg/dL at 4:00 AM, 88.5% in range") == {"2", "55", "4:00", "88.5"}
 
 
 def test_template_never_says_fine_for_a_no_data_night():
-    s = compute_stats([], [], night_start="22:00", night_end="07:00")
+    s = compute_stats([], [], *WINDOW)
     text = template_narrative(s)
     assert "didn't have data" in text.lower()
     assert "fine" not in text.lower()
@@ -87,27 +107,27 @@ def test_build_stores_emails_with_png_and_uses_the_template_offline(db, tmp_path
     mailer = FakeMailer()
     b = ReportBuilder(readings_for=lambda a, c: readings, treatments_for=lambda a, c: [],
                       mailer=mailer, out_dir=tmp_path, narrative_backend="template")
-    r = b.build(date(2020, 1, 2), is_demo=False)
-    assert r.stats["low_mgdl"] == 55 and r.graph_png_path and r.night_date == date(2020, 1, 2)
+    r = b.build(NIGHT, is_demo=False)
+    assert r.stats["low_mgdl"] == round(min(g for _, g, _ in _ROWS)) and r.graph_png_path and r.night_date == NIGHT
     assert validate_narrative(r.narrative, r.stats) and r.is_demo is False
     assert mailer.sent and mailer.sent[0][0] == "you@example.com" and mailer.sent[0][3][0].endswith(".png")
-    assert store.select_report(date(2020, 1, 2)).report_id == r.report_id
-    assert [x.night_date for x in store.select_reports()] == [date(2020, 1, 2)]
+    assert store.select_report(NIGHT).report_id == r.report_id
+    assert [x.night_date for x in store.select_reports()] == [NIGHT]
 
 
 def test_demo_report_is_stored_and_shown_but_never_emailed(db, tmp_path):
     mailer = FakeMailer()
     b = ReportBuilder(readings_for=lambda a, c: the_save_readings(), treatments_for=lambda a, c: [],
                       mailer=mailer, out_dir=tmp_path)
-    r = b.build(date(2020, 1, 2), is_demo=True)
-    assert r.is_demo and mailer.sent == [] and store.select_report(date(2020, 1, 2)) is not None
+    r = b.build(NIGHT, is_demo=True)
+    assert r.is_demo and mailer.sent == [] and store.select_report(NIGHT) is not None
 
 
 def test_invented_number_from_a_model_falls_back_to_the_template(db, tmp_path):
     b = ReportBuilder(readings_for=lambda a, c: the_save_readings(), treatments_for=lambda a, c: [],
                       mailer=FakeMailer(), out_dir=tmp_path,
                       narrative_backend="anthropic", model_call=lambda prompt: "You dropped to 41 and slept through it.")
-    r = b.build(date(2020, 1, 2), is_demo=True)
+    r = b.build(NIGHT, is_demo=True)
     assert r.narrative == template_narrative(r.stats)
 
 
@@ -117,21 +137,22 @@ def test_model_error_or_missing_key_falls_back_to_the_template(db, tmp_path):
 
     b = ReportBuilder(readings_for=lambda a, c: the_save_readings(), treatments_for=lambda a, c: [],
                       mailer=FakeMailer(), out_dir=tmp_path, narrative_backend="anthropic", model_call=boom)
-    r = b.build(date(2020, 1, 2), is_demo=True)
+    r = b.build(NIGHT, is_demo=True)
     assert r.narrative == template_narrative(r.stats)
 
 
 def test_valid_model_text_is_used(db, tmp_path):
-    good = "Your lowest point was 55 mg/dL around 04:00. Nothing else stood out."
+    lo = min(_ROWS, key=lambda r: r[1])
+    good = f"Your lowest point was {round(lo[1])} mg/dL around {lo[0].strftime('%H:%M')}. Nothing else stood out."
     b = ReportBuilder(readings_for=lambda a, c: the_save_readings(), treatments_for=lambda a, c: [],
                       mailer=FakeMailer(), out_dir=tmp_path, narrative_backend="anthropic", model_call=lambda p: good)
-    r = b.build(date(2020, 1, 2), is_demo=True)
+    r = b.build(NIGHT, is_demo=True)
     assert r.narrative == good
 
 
 def test_rebuild_replaces_the_stored_report(db, tmp_path):
     b = ReportBuilder(readings_for=lambda a, c: the_save_readings(), treatments_for=lambda a, c: [],
                       mailer=FakeMailer(), out_dir=tmp_path)
-    b.build(date(2020, 1, 2), is_demo=True)
-    b.build(date(2020, 1, 2), is_demo=True)
+    b.build(NIGHT, is_demo=True)
+    b.build(NIGHT, is_demo=True)
     assert len(store.select_reports()) == 1

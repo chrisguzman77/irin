@@ -49,15 +49,16 @@ def night_bounds(night_date: date, night_start: str, night_end: str) -> tuple[da
     return start, end
 
 
-def compute_stats(readings: list[Reading], treatments: list[Treatment], night_start: str, night_end: str) -> dict:
+def compute_stats(readings: list[Reading], treatments: list[Treatment], start: datetime, end: datetime) -> dict:
+    """Coverage is readings over the readings EXPECTED in the whole night window
+    [start, end] (one per 5 min), so a sensor that dies at midnight reads as a
+    half-covered night, never a fully covered short one."""
     rows = sorted((r for r in readings if not r.is_stale), key=lambda r: r.timestamp)
     if not rows:
         return {"readings": 0, "coverage_pct": 0.0, "low_mgdl": None, "low_at": None, "high_mgdl": None,
                 "high_at": None, "tir_pct": None, "tbr_pct": None, "tar_pct": None, "minutes_below_70": 0,
                 "carbs_g": 0.0, "insulin_units": 0.0}
-    start, end = rows[0].timestamp, rows[-1].timestamp
-    hours = max(1.0, (end - start).total_seconds() / 3600 + 5 / 60)
-    expected = hours * 12
+    expected = max(1.0, (end - start).total_seconds() / 300 + 1)
     values = [r.glucose_mgdl for r in rows]
     n = len(values)
     below = sum(1 for v in values if v < LOW)
@@ -84,14 +85,14 @@ def compute_stats(readings: list[Reading], treatments: list[Treatment], night_st
 
 
 def render_graph(readings: list[Reading], path: Path, night_start: str, night_end: str) -> Path:
-    import matplotlib
-
-    matplotlib.use("Agg")
+    """A plain Figure (no pyplot): no global figure registry, so two builds in
+    two threads never share state."""
     import matplotlib.dates as mdates
-    import matplotlib.pyplot as plt
+    from matplotlib.figure import Figure
 
     rows = sorted((r for r in readings if not r.is_stale), key=lambda r: r.timestamp)
-    fig, ax = plt.subplots(figsize=(9, 3.2), dpi=110)
+    fig = Figure(figsize=(9, 3.2), dpi=110)
+    ax = fig.subplots()
     ax.axhspan(LOW, HIGH, color="#3cb46e", alpha=0.12, lw=0)
     ax.axhline(LOW, color="#ff3b30", lw=0.8, alpha=0.6)
     if rows:
@@ -106,8 +107,7 @@ def render_graph(readings: list[Reading], path: Path, night_start: str, night_en
         ax.spines[s].set_visible(False)
     fig.tight_layout()
     path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(path)
-    plt.close(fig)
+    fig.savefig(path, format="png")
     return path
 
 
@@ -134,13 +134,7 @@ _NUM_TOKEN = re.compile(r"\d{1,2}:\d{2}|\d+(?:\.\d+)?")
 
 
 def extract_numbers(text: str) -> set[str]:
-    out = set()
-    for m in _NUM_TOKEN.finditer(text):
-        tok = m.group(0)
-        if tok.endswith("%"):
-            tok = tok[:-1]
-        out.add(tok)
-    return out
+    return {m.group(0) for m in _NUM_TOKEN.finditer(text)}
 
 
 def _allowed_forms(s: dict) -> set[str]:
@@ -149,12 +143,11 @@ def _allowed_forms(s: dict) -> set[str]:
         if v is None:
             continue
         if isinstance(v, str) and re.fullmatch(r"\d{2}:\d{2}", v):
+            # 04:00, 4:00, and the 12-hour form; never the bare hour ("4" would let "4 lows" through)
             forms.add(v)
-            forms.add(v.lstrip("0") if not v.startswith("00") else v)  # 04:00 and 4:00
+            forms.add(v.lstrip("0") if not v.startswith("00") else v)
             h, m = v.split(":")
-            forms.add(f"{int(h) % 12 or 12}:{m}")  # 12-hour form
-            forms.add(h)
-            forms.add(str(int(h) % 12 or 12))
+            forms.add(f"{int(h) % 12 or 12}:{m}")
         elif isinstance(v, (int, float)):
             forms.add(f"{v:g}")
             forms.add(f"{round(v)}")
@@ -196,8 +189,10 @@ def claude_narrative(prompt: str) -> str:
     return text
 
 
-def narrative_prompt(night_date: date, s: dict) -> str:
-    return f"Night ending {night_date.isoformat()}. Data (the only numbers you may use): {s}"
+def narrative_prompt(s: dict) -> str:
+    """No date in the prompt: a model echoing "January 2" or "2020-01-02" would
+    only trip the validator; the night is "last night"."""
+    return f"Last night's data (the only numbers you may use): {s}"
 
 
 # --- mail ---
@@ -242,7 +237,7 @@ class ReportBuilder:
             return fallback
         call = self.model_call or claude_narrative
         try:
-            text = call(narrative_prompt(night_date, s))
+            text = call(narrative_prompt(s))
         except Exception as e:  # no key, no network, refusal, timeout: the template stands
             log.warning("narrative backend failed (%s); using the template", type(e).__name__)
             return fallback
@@ -261,17 +256,17 @@ class ReportBuilder:
         start, end = night_bounds(night_date, night_start, night_end)
         readings = self.readings_for(start, end)
         treatments = self.treatments_for(start, end)
-        s = compute_stats(readings, treatments, night_start, night_end)
+        s = compute_stats(readings, treatments, start, end)
         png = render_graph(readings, self.out_dir / f"{night_date.isoformat()}.png", night_start, night_end)
         report = MorningReport(report_id=uuid.uuid4().hex, night_date=night_date, generated_at=clock.now(), stats=s,
                                narrative=self._narrative(night_date, s), graph_png_path=str(png), is_demo=is_demo)
         store.insert_report(report)
         if is_demo:
             log.info("demo report stored, not emailed (invariant 1)")
-        elif self.mailer is not None and config.REPORT_EMAIL:
+        elif self.mailer is not None and (self.settings.report_email or config.REPORT_EMAIL):
             try:
-                self.mailer.send(config.REPORT_EMAIL, f"Irin morning report, {night_date.isoformat()}",
-                                 report.narrative, [png])
+                self.mailer.send(self.settings.report_email or config.REPORT_EMAIL,
+                                 f"Irin morning report, {night_date.isoformat()}", report.narrative, [png])
             except Exception:
                 log.exception("morning report email failed; the report is stored and shown")
         return report

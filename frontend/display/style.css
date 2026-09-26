@@ -14,7 +14,7 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif; overflow: hidden; }
 
 #flags { position: fixed; top: 1.5vh; left: 1.5vw; right: 1.5vw; display: flex; gap: 1vw;
-  flex-wrap: wrap; z-index: 10; pointer-events: none; }
+  flex-wrap: wrap; z-index: 25; pointer-events: none; } /* above the alarm takeover: DEMO is on every screen */
 .flag { font-weight: 800; padding: 0.6vh 1.2vw; border-radius: 0.4rem; font-size: 2.2vh; letter-spacing: 0.04em; }
 .flag-demo { background: var(--amber); color: #000; font-size: 3vh; }
 .flag-clock { background: #333; color: var(--fg); border: 1px solid var(--grey); }
@@ -55,3 +55,84 @@ body.is-stale #glucose { text-decoration: line-through; text-decoration-thicknes
     grid-template-areas: "now" "graph" "tiles"; }
   #glucose { font-size: min(30vw, 20vh); }
 }
+
+/* --- Night: dim clock, smaller number (step 2) --- */
+#night { height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+#night-clock { font-size: min(26vw, 45vh); font-weight: 300; color: #3a3a3a; font-variant-numeric: tabular-nums; line-height: 1; }
+#night-reading { display: flex; align-items: center; gap: 1.2vw; margin-top: 3vh; color: #6a6a6a; }
+#night-glucose { font-size: min(9vw, 16vh); font-weight: 700; font-variant-numeric: tabular-nums; }
+#night-trend { font-size: min(5vw, 9vh); }
+body.mode-night .flag-clock { opacity: 0.75; } /* DEMO, STALE, DISCONNECTED stay full strength */
+body.mode-night.is-stale #night-glucose, body.mode-night.is-disconnected #night-glucose { color: #3a3a3a; }
+body.mode-night.is-stale #night-glucose { text-decoration: line-through; }
+
+/* --- Morning: overnight summary (step 2) --- */
+#morning { height: 100vh; box-sizing: border-box; padding: 8vh 4vw 3vh; display: flex; flex-direction: column; }
+#morning-title { font-size: 4vh; color: var(--dim); text-transform: uppercase; letter-spacing: 0.08em; }
+#morning-body { flex: 1; display: flex; align-items: center; justify-content: space-around; gap: 4vw; min-height: 0; }
+#morning-ring-wrap { position: relative; height: min(55vh, 40vw); aspect-ratio: 1; }
+#morning-ring { width: 100%; height: 100%; transform: rotate(-90deg); }
+#morning-ring circle { fill: none; stroke-width: 12; }
+.ring-track { stroke: #1c1c1c; }
+.ring-in { stroke: #3cb46e; }
+.ring-below { stroke: var(--red); }
+.ring-above { stroke: var(--amber); }
+#morning-tir { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+#tir-night { font-size: min(10vh, 7vw); font-weight: 700; font-variant-numeric: tabular-nums; }
+#morning-tir small { font-size: 2.4vh; color: var(--dim); }
+#morning-stats { display: grid; grid-template-columns: 1fr 1fr; gap: 3vh 4vw; margin: 0; }
+#morning-stats dt { font-size: 2.4vh; color: var(--dim); text-transform: uppercase; letter-spacing: 0.06em; }
+#morning-stats dd { margin: 0.5vh 0 0; font-size: 5.5vh; font-weight: 700; font-variant-numeric: tabular-nums; }
+#morning-stats dd small { font-size: 2.4vh; color: var(--dim); font-weight: 400; margin-left: 0.5vw; }
+#morning-note { font-size: 2vh; color: var(--faint); text-align: center; min-height: 2vh; }
+#morning-now { font-size: 3.2vh; color: var(--dim); text-align: right; }
+#morning-glucose { color: var(--fg); font-weight: 700; font-variant-numeric: tabular-nums; }
+body.mode-morning.is-stale #morning-glucose, body.mode-morning.is-disconnected #morning-glucose { color: var(--grey); }
+/* segments stay empty until the backend sends the overnight split */
+.ring-in, .ring-below, .ring-above { stroke-dasharray: 0 315; }
+
+/* --- Alarm visuals (step 3). Two tiers, always distinct:
+   WARNING (predicted low) = amber, slow ramp; FULL (actual low) = red, bright
+   pulse, strobe on re-arm. Flashes stay at or under 2 per second. --- */
+.flag-high { background: var(--amber); color: #000; }
+.flag-acked { background: #400; color: #fff; border: 1px solid var(--red); }
+body.alarm-high::after { content: ""; position: fixed; inset: 0; pointer-events: none;
+  background: rgba(255, 176, 0, 0.12); box-shadow: inset 0 0 0 0.8vh var(--amber); }
+
+#alarm { position: fixed; inset: 0; z-index: 20; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 2vh; color: #000; }
+#alarm-title { font-size: 7vh; font-weight: 900; letter-spacing: 0.08em; }
+#alarm-reading { display: flex; align-items: center; gap: 2vw; line-height: 1; }
+#alarm-glucose { font-size: min(18vw, 32vh); font-weight: 800; font-variant-numeric: tabular-nums; }
+#alarm-trend { font-size: min(9vw, 16vh); }
+#alarm-sub { font-size: 3vh; font-weight: 600; }
+#alarm-ack { font: inherit; font-size: 5vh; font-weight: 800; padding: 2.5vh 8vw; border-radius: 1.5vh;
+  border: 0.6vh solid #000; background: #000; color: #fff; cursor: pointer; min-width: 50vw; }
+#alarm-ack:active { transform: scale(0.98); }
+#alarm-ack-msg { font-size: 2.4vh; font-weight: 700; min-height: 2.4vh; }
+
+/* WARNING: amber, patient ramp (slow brighten, never a flash) */
+#alarm.tier-warning { background: #ffb000; animation: amber-ramp 4s ease-in-out infinite alternate; }
+#alarm.tier-warning.escalated { animation-duration: 1.6s; }
+@keyframes amber-ramp { from { background: #4d3500; } to { background: #ffb000; } }
+#alarm.tier-warning #alarm-ack { color: #ffb000; }
+
+/* FULL: red, bright pulse; strobe once re-armed (<= 2 flashes/s) */
+#alarm.tier-full { background: #ff1a1a; animation: red-pulse 1s ease-in-out infinite; color: #fff; }
+#alarm.tier-full #alarm-ack { background: #fff; color: #c00; border-color: #fff; }
+@keyframes red-pulse { 0%, 100% { background: #ff1a1a; } 50% { background: #7a0000; } }
+#alarm.tier-full.strobe { animation: red-strobe 0.5s steps(1, end) infinite; }
+@keyframes red-strobe { 0% { background: #ff0000; } 50% { background: #fff; color: #c00; } }
+body.is-stale #alarm-glucose, body.is-disconnected #alarm-glucose { opacity: 0.55; }
+
+/* keypad */
+#keypad { position: fixed; inset: 0; z-index: 30; background: rgba(0,0,0,0.94); display: flex;
+  flex-direction: column; align-items: center; justify-content: center; gap: 2vh; }
+#keypad-title { font-size: 4vh; color: var(--fg); }
+#keypad-dots { font-size: 5vh; letter-spacing: 1vw; min-height: 6vh; color: var(--fg); }
+#keypad-keys { display: grid; grid-template-columns: repeat(3, 13vh); gap: 1.5vh; }
+#keypad-keys button { font: inherit; font-size: 5vh; height: 11vh; border-radius: 1.2vh; border: 1px solid #333;
+  background: #151515; color: var(--fg); cursor: pointer; }
+#keypad-keys button:active { background: #333; }
+#alarm.tier-full.strobe #alarm-ack { background: #000; color: #fff; border-color: #000; } /* visible on red and white frames */
+body.alarm-on .flag-demo { background: #000; color: #ffb000; box-shadow: 0 0 0 0.3vh #ffb000; } /* stays readable on amber and red */

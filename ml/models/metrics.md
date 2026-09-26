@@ -19,6 +19,12 @@ Every forecast in these numbers comes from a model trained only on data
 from before it; the model's settings were chosen on these same blocks, so
 treat 75% as an upper estimate. n = 1 person, retrospective.
 
+**Rounds (Clinical Signal Cards):** on one confirmed basal increase in the
+same history, Rounds' Basal Check would have flagged rising overnight
+glucose **at least 2 weeks before the change, on 69% of mornings**, against
+a 14% background rate in stable stretches. Retrospective, observational,
+n = 1: "since the change", never "the change caused".
+
 <!-- END HEADLINE -->
 
 ## Event definitions (ml/events.py; every number below uses these)
@@ -196,3 +202,111 @@ never filtered by this review.
 
 Reproduce: `python -m ml.clean_clarity && python -m ml.build_dataset &&
 python -m ml.train && python -m ml.evaluate` (the raw exports stay off-repo).
+
+## Rounds section (george.md steps 5-6; step 7 adds the demo windows)
+
+### What is real, what is inferred, what is not in the data
+
+- **Real:** the glucose, every night of it (ml/label_history.py runs the
+  cleaned history through ml/models/nights.py, the one module the device's
+  ledger and cards also use).
+- **Inferred from glucose, and labeled so everywhere:** reason codes (no
+  treatments on history: late meal from a fast early-night rise, treated
+  low from a rebound of more than 60 mg/dL within 2 h; basal timing,
+  exercise, and away are never asserted), and the alarm events, which are
+  forecast_v1's warnings replayed through the warning rule at 85. A night
+  with nothing visible in the glucose is coded clean with code source
+  "inferred".
+- **Not in the data, never fabricated:** acknowledge times, escalation,
+  presence, morning recall answers, stomach check-ins, injection logs. They
+  appear only as a labeled overlay in the demo scenarios (step 7), and the
+  Basal Check demo is described every time as: "glucose real; reason codes
+  inferred and labeled; acknowledge, presence, and recall data are a
+  labeled overlay".
+- **Therapy changes:** 2 basal increases confirmed by Chris (A and B) and 1
+  date picked from the data and NOT confirmed (C, labeled inferred and never
+  used in a headline). Candidates were proposed by ml/find_basal_changes.py
+  from a drop in overnight LEVEL, a different signal from the overnight RISE
+  the Basal Check tests, so the search did not favor dates the rule catches.
+  The dates themselves stay in the gitignored ml/data/therapy_changes.txt.
+
+### The three measured numbers (ml/evaluate_rounds.py)
+
+Rule thresholds are the starting values from docs/plans/chris.md R8 / R10,
+applied by the validation script until backend/app/rounds/standing.py and
+step_watch.py land (then rerun with theirs).
+
+**1. Basal Check lead time** (the rule run every morning over the prior
+history; lead = change date minus the first morning it flags rising nights):
+
+| Change | Source | Lead | Mornings flagged | Last 14 mornings flagged |
+|---|---|---|---|---|
+| A | confirmed | at least 15 days (the data starts then) | 69% | 64% |
+| B | confirmed | 60 days, but not in the final 2 weeks; about 5 weeks of it is a CGM gap | 54% | 0% |
+| C | inferred | none: sporadic flags at the background rate, none in the run-up | 34% | 0% |
+
+Only A supports a claim. The background rate below is what makes 69% mean
+something.
+
+**2. Firing rates over stable stretches** (windows more than 30 days from
+every listed change; 28 fortnights, 76 evaluable 5-day windows):
+
+| Signal | Fires | Note |
+|---|---|---|
+| Basal Check, rising (> +30, >= 70%) | 14% | |
+| Basal Check, falling (< -30, >= 70%) | 21% | |
+| Basal Check, "possibly too high" (>= 5 near-misses in 14 nights) | 14% (out-of-sample 0 of 3) | moved from 3 at checkpoint 6 |
+| Hypo Response, glucose-side proxy (>= 1 inferred-unfelt low) | 0% | escalations, re-arms, ack times, and reported unfelt lows are not in the data |
+| Step Watch, low-point shift <= -15 | 42% | kept; see below |
+| Step Watch, TBR > 4.0% | 1% | |
+| Step Watch, near-misses >= 2 in 5 days | 21% (out-of-sample 27%) | |
+| Step Watch, highs (>= 2 ketone-risk episodes) | 100% | see below |
+
+Tolerance (stomach check-ins) and awareness (morning answers) cannot be
+tuned on history; no number is invented for them.
+
+**3. Detection lag** (days after a change until the 5-night low point
+differs from the 14 nights before by 15 mg/dL or more): 5 days for A, B, and
+C (shifts of -35, -24, and -42 mg/dL), the earliest the rule can answer.
+Because the same rule fires in 42% of stable windows for this patient, the
+lag is not evidence of sensitivity on its own.
+
+### Threshold decisions (checkpoint 6, George and Chris, 2026-09-26)
+
+- **Near-miss count for Basal Check's "possibly too high": 3 -> 5 per 14
+  nights.** The one change, made for a mechanical reason rather than to fit
+  this patient: the shipped warning (85 on a 20th-percentile forecast)
+  produces about 0.2 false warnings per night by design, so about 2.8 per 14
+  nights, and ">= 3" fired in half of all stable fortnights. At 5 it fires
+  at the same background as the rising Basal Check (14%). The sweep: 3 -> 50%,
+  4 -> 25%, 5 -> 14%, 6 -> 0%.
+- **Low-point shift -15: kept.** It fires in 42% of stable windows for this
+  patient (-20: 34%, -25: 26%, -30: 19.5%), but it is a safety signal during
+  a titration (missing a real shift costs more than a false one), it is
+  rate-limited to one check per step, and the Step Watch worked example
+  (-22) must fire.
+- **Step Watch near-misses >= 2: kept** (the worked example has exactly 2).
+- **Ketone-risk definition (>= 200 for >= 120 min): kept, and documented.**
+  It fires in every window for this patient (>= 250 for 240 min: 71%; >= 300
+  for 240 min: 3%): his highs are real, but for someone who runs high most
+  nights an absolute definition carries no news. The better design is
+  relative to the patient's own baseline; that is a Step Watch design
+  change for later, not a threshold tweak. It does not affect the demo,
+  whose Step Watch scenario is SYNTHETIC.
+- **Basal Check (5 clean nights, beyond +/-30, 70% same direction): kept.**
+
+### Leakage guard (george.md step 6.4)
+
+Near-miss counts rest on forecast_v1's replayed warnings. Before the
+forecaster's train/test split the model trained on those nights, so a
+near-miss there is not evidence; every near-miss signal above is also
+reported on out-of-sample windows only (few: 3 fortnights, 11 five-day
+windows). The demo windows' answer to the guard is recorded with them in
+step 7.
+
+### Caveats, in the spec's own words
+
+n = 1; observational; retrospective. "Since the change", never "the change
+caused". All Rounds thresholds are starting values chosen at design time and
+tuned here against one person's data, never presented as researched facts.
+
