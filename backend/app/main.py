@@ -26,6 +26,7 @@ from pydantic import BaseModel, Field
 
 from . import store
 from .alarm import AlarmEngine, Transition
+from .backlight import BacklightController
 from .auth import require_fresh_pin, require_pin
 from .clock import clock
 from .config import REPO_ROOT, config
@@ -411,6 +412,12 @@ runtime.alarm.on_transition(_broadcast_transition)
 runtime.alarm_events = AlarmEventRecorder(is_demo=lambda: runtime.mode == "replay",
                                           brain_only=lambda: config.IRIN_BRAIN_ONLY)
 runtime.alarm.on_transition(runtime.alarm_events)  # R2 observes; it never calls back into alarm.py
+# The backlight: dim in the night window, full by day and whenever a low alarm
+# sounds. It observes alarm transitions (never raises into them) and the tick
+# below follows the night window; it writes through the output gate.
+runtime.backlight = BacklightController(runtime.outputs, lambda: runtime.scheduler.display_mode(),
+                                        lambda: runtime.alarm.state)
+runtime.alarm.on_transition(runtime.backlight.update)
 
 
 def _broadcast_presence(state: PresenceState) -> None:
@@ -439,6 +446,7 @@ async def _alarm_tick_loop() -> None:
             raw = runtime.outputs.get_presence()
             runtime.presence.sample(raw)
             runtime.alarm_events.sample(raw)  # the same raw radar sample, aggregated per episode (B7)
+            runtime.backlight.update()  # follows the night window (writes only on a change)
         except Exception:
             logging.getLogger("irin.main").exception("tick failed; continuing")
         await clock.sleep(ALARM_TICK_CLOCK_SECONDS)
