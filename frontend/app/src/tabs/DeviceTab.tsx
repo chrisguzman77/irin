@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useBasalNudge } from "../lib/useBasalNudge";
 import { useDevice } from "../lib/device";
 import AckBar from "./device/AckBar";
 import DemoPanel from "./device/DemoPanel";
@@ -20,6 +21,7 @@ const DEMO_PATH = "/demo";
 export default function DeviceTab() {
   const { target, socket } = useDevice();
   const [view, setView] = useState<View>("Live");
+  const nudge = useBasalNudge(target.status === "ready" ? target.url : null);
 
   useEffect(() => {
     if (location.pathname === DEMO_PATH) history.replaceState(null, "", "/");
@@ -84,7 +86,7 @@ export default function DeviceTab() {
           demo
         </button>
       </div>
-      {view === "Live" && <LiveView snap={snap} stale={socket.disconnectedLong} />}
+      {view === "Live" && <LiveView snap={snap} stale={socket.disconnectedLong} basalNudge={nudge !== "none"} onLog={() => setView("Log")} />}
       {view === "Log" && <LogView baseUrl={target.url} settings={snap?.settings} />}
       {view === "Reports" && <ReportsView baseUrl={target.url} mode={snap?.mode} />}
       {view === "Settings" && <SettingsForm current={snap?.settings} baseUrl={target.url} />}
