@@ -45,7 +45,9 @@ from .rounds import crypto
 from .rounds.alarm_events import AlarmEventRecorder
 from .rounds.ledger import Ledger
 from .rounds.low_events import LowEventDetector
+from .rounds.cards import CardSender
 from .rounds.pairing import PairingError, PairingService, RelayPairing
+from .rounds.relay_client import RelayClient
 from .rounds.nights_adapter import NightsAdapter
 from .scheduler import Scheduler, basal_logged_on, timedatectl_synced
 from . import voice_out
@@ -85,6 +87,8 @@ class Runtime:
     ledger: "Ledger | None" = None
     low_events: "LowEventDetector | None" = None
     pairing: "PairingService | None" = None
+    relay_client: "RelayClient | None" = None
+    cards: "CardSender | None" = None
 
 
 runtime = Runtime(mode="nightscout" if config.DATASOURCE == "nightscout" else "replay",
@@ -271,6 +275,22 @@ def _broadcast_pairing_state(state: dict) -> None:
     task.add_done_callback(_broadcast_tasks.discard)
 
 
+def _broadcast_card_sent(payload: dict) -> None:
+    try:
+        task = asyncio.get_running_loop().create_task(hub.broadcast(WSMessage(type="card_sent", payload=payload)))
+    except RuntimeError:
+        return
+    _broadcast_tasks.add(task)
+    task.add_done_callback(_broadcast_tasks.discard)
+
+
+def _make_relay_client() -> RelayClient:
+    return RelayClient(relay_url=config.RELAY_URL, source_key=config.RELAY_SOURCE_KEY,
+                       device_id=config.DEVICE_ID or "irin-dev", is_demo=lambda: runtime.mode == "replay",
+                       on_pairings=lambda states: runtime.pairing.apply_remote_states(states),
+                       on_tick=lambda: runtime.cards.flush())
+
+
 def _make_pairing() -> PairingService:
     return PairingService(relay=RelayPairing(config.RELAY_URL, config.RELAY_SOURCE_KEY),
                           device_id=config.DEVICE_ID or "irin-dev", device_pk_fn=crypto.device_public_key,
@@ -336,13 +356,17 @@ async def lifespan(app: FastAPI):
     store.init_db()
     _load_settings()
     runtime.pairing = _make_pairing()  # after init_db: it loads the stored pairings
+    runtime.relay_client = _make_relay_client()
+    runtime.cards = CardSender(recipients=runtime.pairing.recipients, post=runtime.relay_client.post_card,
+                               device_id=config.DEVICE_ID or "irin-dev", on_sent=_broadcast_card_sent)
     await runtime.datasource.start()
     hub.start()
     tick_task = asyncio.create_task(_alarm_tick_loop())
     sched_task = asyncio.create_task(runtime.scheduler.run())
     forward_task = asyncio.create_task(runtime.forwarder.run())
+    relay_task = asyncio.create_task(runtime.relay_client.run())
     yield
-    for task in (tick_task, sched_task, forward_task):
+    for task in (tick_task, sched_task, forward_task, relay_task):
         task.cancel()
         try:
             await task
@@ -424,6 +448,7 @@ async def set_mode(req: ModeRequest) -> dict:
     await new.start()
     runtime.alarm.reset()  # switch semantics (step 12): alarm state back to idle
     runtime.alarm_events.reset()  # an episode cut by the switch is dropped, never written
+    runtime.pairing.cancel()  # a pending QR token belongs to the old clock and the old is_demo
     runtime.forecaster.reset()
     runtime.voice.reset()
     hub._last = None
@@ -579,7 +604,7 @@ async def pair_start(req: PairStartRequest) -> dict:
         raise _pairing_error(e)
 
 
-@app.get("/api/pair/status")
+@app.get("/api/pair/status", dependencies=[Depends(require_pin)])
 async def pair_status() -> dict:
     """Polls the relay once: awaiting_scan | awaiting_confirm (with code4) | idle, plus the pairings."""
     try:
@@ -610,6 +635,18 @@ async def pair_revoke(doctor_id: str) -> Pairing:
 @app.get("/api/pairings", response_model=list[Pairing])
 async def pairings() -> list[Pairing]:
     return [p.model_copy(update={"doctor_pk": ""}) for p in runtime.pairing.pairings.values()]
+
+
+@app.get("/api/rounds/cards")
+async def rounds_cards(limit: int = 50) -> list[dict]:
+    """The device's own record of the cards it sealed (R7): card, delivery status, recipients."""
+    return store.select_cards(max(1, min(limit, 500)))
+
+
+@app.get("/api/relay")
+async def relay_state() -> dict:
+    """The relay client: polls, failures, undelivered cards (the under-the-hood panel)."""
+    return {**runtime.relay_client.status(), "pending_cards": sorted(runtime.cards.pending)}
 
 
 @app.get("/api/nights", response_model=list[NightRecord])

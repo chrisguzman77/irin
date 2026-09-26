@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import secrets
+import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Callable
@@ -23,11 +24,13 @@ import httpx
 from .. import store
 from ..clock import clock
 from ..contracts import Pairing
-from .crypto import code4
+from nacl.public import PublicKey
+
+from .crypto import code4, unb64
 
 log = logging.getLogger("irin.rounds.pairing")
 
-TOKEN_TTL = timedelta(minutes=10)
+TOKEN_TTL = timedelta(minutes=10)  # WALL minutes: a human scans the QR, so the deadline is scaled by clock.speed
 
 
 class PairingError(Exception):
@@ -107,10 +110,18 @@ class PairingService:
     on_state: Callable[[dict], None] | None = None  # pairing_state broadcast
     pending: PendingPairing | None = None
     pairings: dict[str, Pairing] = field(default_factory=dict)  # by doctor_id, loaded from the store
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def __post_init__(self) -> None:
         for p in store.select_pairings():
             self.pairings[p.doctor_id] = p
+
+    def cancel(self) -> None:
+        """A mode switch: the pending token is dropped (its clock and its is_demo no longer hold)."""
+        with self._lock:
+            if self.pending is not None:
+                self.pending = None
+                self._changed()
 
     @property
     def device_pk(self) -> str:
@@ -141,71 +152,110 @@ class PairingService:
     # --- the handshake ---
 
     def start(self, peer_kind: str = "doctor") -> dict[str, Any]:
-        token = secrets.token_hex(16)  # 128 bits, single use
-        now = clock.now()
-        demo = self.is_demo()
-        self.relay.register(token, self.device_pk, demo, peer_kind)
-        self.pending = PendingPairing(token=token, peer_kind=peer_kind, is_demo=demo, started_at=now,
-                                      expires_at=now + TOKEN_TTL)
-        page = self.watch_url if peer_kind == "buddy" else self.inbox_url
-        qr_url = f"{page.rstrip('/')}/pair#token={token}&device_pk={self.device_pk}&relay={self.relay_url}"
-        self._changed()
-        return {"token": token, "qr_url": qr_url, "expires_at": self.pending.expires_at.isoformat(),
-                "peer_kind": peer_kind, "is_demo": demo}
+        with self._lock:
+            token = secrets.token_hex(16)  # 128 bits, single use
+            now = clock.now()
+            demo = self.is_demo()
+            self.relay.register(token, self.device_pk, demo, peer_kind)
+            ttl = TOKEN_TTL * clock.speed  # 10 wall minutes whatever the replay speed
+            self.pending = PendingPairing(token=token, peer_kind=peer_kind, is_demo=demo, started_at=now,
+                                          expires_at=now + ttl)
+            page = self.watch_url if peer_kind == "buddy" else self.inbox_url
+            qr_url = f"{page.rstrip('/')}/pair#token={token}&device_pk={self.device_pk}&relay={self.relay_url}"
+            self._changed()
+            return {"token": token, "qr_url": qr_url, "expires_at": self.pending.expires_at.isoformat(),
+                    "expires_in_s": int(TOKEN_TTL.total_seconds()), "peer_kind": peer_kind, "is_demo": demo}
+
+    @staticmethod
+    def _valid_pk(value: Any) -> bool:
+        try:
+            PublicKey(unb64(value))
+            return isinstance(value, str)
+        except Exception:
+            return False
+
+    def _poll_locked(self) -> None:
+        pend = self.pending
+        if pend is None or pend.used or pend.expired() or pend.doctor_pk is not None:
+            return
+        st = self.relay.state(pend.token)
+        if st.get("status") == "completed" and st.get("doctor_pk") is not None:
+            if not self._valid_pk(st.get("doctor_pk")):
+                log.error("relay returned a malformed peer key; pairing dropped")
+                self.pending = None
+                self._changed()
+                raise PairingError(502, "relay returned a malformed key; start again")
+            name = st.get("doctor_display_name")
+            pend.doctor_pk = st["doctor_pk"]
+            pend.doctor_display_name = (str(name)[:60] if name else None) or pend.peer_kind.title()
+            self._changed()
+        elif st.get("status") == "expired":
+            self.pending = None
+            self._changed()
 
     def poll(self) -> dict[str, Any]:
         """Ask the relay whether the browser peer has posted its key; then state()."""
-        pend = self.pending
-        if pend is not None and not pend.used and not pend.expired() and pend.doctor_pk is None:
-            st = self.relay.state(pend.token)
-            if st.get("status") == "completed" and st.get("doctor_pk"):
-                pend.doctor_pk = st["doctor_pk"]
-                pend.doctor_display_name = st.get("doctor_display_name") or pend.peer_kind.title()
-                self._changed()
-            elif st.get("status") == "expired":
-                self.pending = None
-                self._changed()
-        return self.state()
+        with self._lock:
+            self._poll_locked()
+            return self.state()
 
     def confirm(self) -> Pairing:
         """The patient's fresh-PIN confirmation on the device. Single use: an
-        expired or already-used token is refused and nothing is paired."""
-        pend = self.pending
-        if pend is None or pend.used:
-            raise PairingError(409, "no pairing in progress")
-        if pend.expired():
+        expired or already-used token is refused and nothing is paired. The key
+        sealed to is exactly the key code4 was shown for (poll stores it once)."""
+        with self._lock:
+            pend = self.pending
+            if pend is None or pend.used:
+                raise PairingError(409, "no pairing in progress")
+            if pend.expired():
+                self.pending = None
+                self._changed()
+                raise PairingError(410, "pairing token expired; start again")
+            if pend.doctor_pk is None:
+                self._poll_locked()
+                if self.pending is not pend or pend.doctor_pk is None:
+                    raise PairingError(409, "the other side has not scanned yet")
+            result = self.relay.confirm(pend.token)
+            doctor_id = result.get("doctor_id") or result.get("pairing_id")
+            if not isinstance(doctor_id, str) or not doctor_id:
+                raise PairingError(502, "relay confirmed without a doctor id")
+            pend.used = True
+            pairing = Pairing(device_id=self.device_id, doctor_id=doctor_id,
+                              doctor_display_name=pend.doctor_display_name or pend.peer_kind.title(),
+                              doctor_pk=pend.doctor_pk, status="paired", confirmed_at=clock.now(),
+                              peer_kind=pend.peer_kind, is_demo=pend.is_demo)
+            self.pairings[pairing.doctor_id] = pairing
+            store.upsert_pairing(pairing)
             self.pending = None
             self._changed()
-            raise PairingError(410, "pairing token expired; start again")
-        if pend.doctor_pk is None:
-            self.poll()
-            if pend.doctor_pk is None:
-                raise PairingError(409, "the other side has not scanned yet")
-        result = self.relay.confirm(pend.token)
-        pend.used = True
-        pairing = Pairing(device_id=self.device_id, doctor_id=str(result.get("doctor_id") or result.get("pairing_id")),
-                          doctor_display_name=pend.doctor_display_name or pend.peer_kind.title(), doctor_pk=pend.doctor_pk,
-                          status="paired", confirmed_at=clock.now(), peer_kind=pend.peer_kind, is_demo=pend.is_demo)
-        self.pairings[pairing.doctor_id] = pairing
-        store.upsert_pairing(pairing)
-        self.pending = None
-        self._changed()
-        return pairing
+            return pairing
 
     def revoke(self, doctor_id: str) -> Pairing:
-        """Instant: the relay drops the bearer and the peer key, the device forgets the key."""
-        pairing = self.pairings.get(doctor_id)
-        if pairing is None:
-            raise PairingError(404, "no such pairing")
-        try:
-            self.relay.revoke(doctor_id)
-        except PairingError:
-            log.warning("relay revoke failed; the device side is revoked regardless")
-        pairing = pairing.model_copy(update={"status": "revoked", "doctor_pk": ""})
-        self.pairings[doctor_id] = pairing
-        store.upsert_pairing(pairing)
-        self._changed()
-        return pairing
+        """Instant: the relay drops the bearer and the peer key (by doctor_id), the device forgets the key."""
+        with self._lock:
+            pairing = self.pairings.get(doctor_id)
+            if pairing is None:
+                raise PairingError(404, "no such pairing")
+            try:
+                self.relay.revoke(doctor_id)
+            except PairingError:
+                log.warning("relay revoke failed; the device side is revoked regardless")
+            pairing = pairing.model_copy(update={"status": "revoked", "doctor_pk": ""})
+            self.pairings[doctor_id] = pairing
+            store.upsert_pairing(pairing)
+            self._changed()
+            return pairing
+
+    def apply_remote_states(self, states: list[dict]) -> None:
+        """The relay's view of this device's pairings (the poll): a revoke from
+        the inbox side takes effect here without calling the relay back."""
+        for st in states:
+            p = self.pairings.get(str(st.get("doctor_id")))
+            if p is not None and st.get("status") == "revoked" and p.status != "revoked":
+                self.pairings[p.doctor_id] = p.model_copy(update={"status": "revoked", "doctor_pk": ""})
+                store.upsert_pairing(self.pairings[p.doctor_id])
+                log.info("pairing %s revoked from the inbox", p.doctor_id)
+                self._changed()
 
     # --- what the card path (R7) asks ---
 

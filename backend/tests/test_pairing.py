@@ -97,7 +97,7 @@ def test_expired_token_is_rejected(svc):
     out = s.start()
     _, doc_pk = crypto.generate_keypair()
     relay.scan(out["token"], doc_pk)
-    clock.advance(10 * 60 + 1)
+    clock.advance(10 * 60 * 60 + 60)  # 10 wall minutes at 60x, and a little
     with pytest.raises(PairingError) as e:
         s.confirm()
     assert e.value.status == 410 and s.state()["status"] == "idle" and s.recipients(True) == []
@@ -166,11 +166,12 @@ def test_endpoints_confirm_needs_the_fresh_pin_route(monkeypatch, tmp_path):
         assert c.post("/api/pair/start", json={"peer_kind": "doctor"}).status_code == 401
         r = c.post("/api/pair/start", json={"peer_kind": "doctor"}, headers=H)
         assert r.status_code == 200 and r.json()["qr_url"].split("#")[0].endswith("/pair")
-        assert c.get("/api/pair/status").json()["status"] == "awaiting_scan"
+        assert c.get("/api/pair/status").status_code == 401  # it drives relay traffic: PIN
+        assert c.get("/api/pair/status", headers=H).json()["status"] == "awaiting_scan"
         assert c.post("/api/pair/confirm", headers=H).status_code == 409  # not scanned yet
         _, doc_pk = crypto.generate_keypair()
         relay.scan(r.json()["token"], doc_pk)
-        st = c.get("/api/pair/status").json()
+        st = c.get("/api/pair/status", headers=H).json()
         assert st["status"] == "awaiting_confirm" and len(st["code4"]) == 4
         p = c.post("/api/pair/confirm", headers=H).json()
         assert p["status"] == "paired" and p["doctor_pk"] == "" and p["is_demo"] is True
@@ -179,3 +180,60 @@ def test_endpoints_confirm_needs_the_fresh_pin_route(monkeypatch, tmp_path):
             snap = json.loads(ws.receive_text())["payload"]
             assert snap["pairing_state"]["pairings"][0]["status"] == "paired"
         assert c.post(f"/api/pair/{p['doctor_id']}/revoke", headers=H).json()["status"] == "revoked"
+
+
+def test_token_lives_ten_wall_minutes_at_replay_speed(svc):
+    """At 60x a clock-time TTL would kill the QR in 10 wall seconds."""
+    s, relay, _ = svc
+    out = s.start()
+    assert out["expires_in_s"] == 600
+    clock.advance(10 * 60 * 60 - 60)  # 599 wall seconds at 60x
+    _, doc_pk = crypto.generate_keypair()
+    relay.scan(out["token"], doc_pk)
+    assert s.confirm().status == "paired"
+
+
+def test_malformed_relay_key_drops_the_pairing_and_never_breaks_state(svc):
+    s, relay, _ = svc
+    out = s.start()
+    relay.tokens[out["token"]].update(status="completed", doctor_pk="not-base64!", doctor_display_name="X")
+    with pytest.raises(PairingError) as e:
+        s.poll()
+    assert e.value.status == 502 and s.state()["status"] == "idle"
+    out = s.start()
+    relay.tokens[out["token"]].update(status="completed", doctor_pk=12345, doctor_display_name="X")
+    with pytest.raises(PairingError):
+        s.confirm()
+    assert s.state()["code4"] is None and s.pairings == {}
+
+
+def test_relay_confirm_without_an_id_pairs_nothing(svc):
+    s, relay, _ = svc
+    out = s.start()
+    _, doc_pk = crypto.generate_keypair()
+    relay.scan(out["token"], doc_pk)
+    real = relay.transport
+
+    def handler(request):
+        if request.url.path.endswith("/confirm"):
+            return httpx.Response(200, json={})
+        return real().handler(request)
+
+    s.relay = RelayPairing("http://relay.test", "src-key", transport=httpx.MockTransport(handler))
+    with pytest.raises(PairingError) as e:
+        s.confirm()
+    assert e.value.status == 502 and s.pairings == {}
+
+
+def test_mode_switch_cancels_a_pending_token(monkeypatch):
+    from app import auth, main
+
+    monkeypatch.setattr(auth.config, "PIN", "1234")
+    relay = FakeRelay()
+    with TestClient(main.app) as c:
+        main.runtime.pairing.relay = RelayPairing("http://relay.test", "src-key", transport=relay.transport())
+        assert c.post("/api/pair/start", json={}, headers=H).status_code == 200
+        assert c.get("/api/pair/status", headers=H).json()["status"] == "awaiting_scan"
+        assert c.post("/api/mode", json={"mode": "nightscout"}, headers=H).status_code == 200
+        assert c.get("/api/pair/status", headers=H).json()["status"] == "idle"
+        c.post("/api/mode", json={"mode": "replay"}, headers=H)

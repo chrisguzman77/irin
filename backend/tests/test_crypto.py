@@ -53,3 +53,10 @@ def test_code4_is_four_digits_and_binds_both_keys_and_the_token():
     assert re.fullmatch(r"\d{4}", a) and a == code4("devpk", "docpk", "ab" * 16)
     assert a != code4("devpk", "otherpk", "ab" * 16) or a != code4("devpk", "docpk", "cd" * 16)
     assert code4("A", "B", "C") == f"{int.from_bytes(__import__('hashlib').sha256(b'ABC').digest()[:4], 'big') % 10000:04d}"
+
+
+def test_a_loose_private_key_file_is_tightened_on_load(tmp_path):
+    crypto.device_keypair(tmp_path)
+    os.chmod(tmp_path / "device_private.key", 0o644)
+    crypto.device_keypair(tmp_path)
+    assert stat.S_IMODE(os.stat(tmp_path / "device_private.key").st_mode) == 0o600

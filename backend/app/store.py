@@ -5,13 +5,14 @@ and plans, R7 cards, R5 pairings, R9 doctor_messages, F3 family_stories)."""
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import date, datetime
 from pathlib import Path
 
 from .config import config
 from .contracts import (AlarmEvent, FamilyStory, LowEvent, MorningReport, NightRecord, Pairing, PresenceState, Reading,
-                        Treatment)
+                        SignalCard, Treatment)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS readings (
@@ -388,3 +389,30 @@ def select_pairings(conn: sqlite3.Connection | None = None) -> list[Pairing]:
     if own:
         conn.close()
     return [Pairing.model_validate_json(r["json"]) for r in rows]
+
+
+# --- cards (R7): one row per card_id with its delivery status; a re-evaluation replaces it ---
+
+
+def upsert_card(card: SignalCard, status: str = "unsent", recipients: list[str] | None = None,
+                conn: sqlite3.Connection | None = None) -> None:
+    own = conn is None
+    conn = conn or connect()
+    doc = {"card": card.model_dump(mode="json"), "status": status, "recipients": list(recipients or []),
+           "stored_at": card.generated_at.isoformat()}
+    with conn:
+        conn.execute("INSERT OR REPLACE INTO cards VALUES (?, ?)", (card.card_id, json.dumps(doc)))
+    if own:
+        conn.close()
+
+
+def select_cards(limit: int = 100, conn: sqlite3.Connection | None = None) -> list[dict]:
+    """Newest first: {card, status, recipients, stored_at}."""
+    own = conn is None
+    conn = conn or connect()
+    rows = conn.execute("SELECT json FROM cards").fetchall()
+    if own:
+        conn.close()
+    docs = [json.loads(r["json"]) for r in rows]
+    docs.sort(key=lambda d: d["stored_at"], reverse=True)
+    return docs[:limit]

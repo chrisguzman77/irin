@@ -138,6 +138,26 @@ async def inject_low(req: InjectRequest) -> dict:
     return {"injected": r.model_dump(mode="json")}
 
 
+class SendCardRequest(BaseModel):
+    fixture: str = Field(default="signal_card_standing", pattern=r"^signal_card_(standing|step)$")
+
+
+@router.post("/send_card", dependencies=[Depends(require_pin), Depends(require_demo)])
+async def send_fixture_card(req: SendCardRequest) -> dict:
+    """R7: seal a fixture card (SYNTHETIC, badged DEMO) to every paired demo
+    peer, so the inbox shell has something to list before R8 evaluates real
+    nights. The sponsor controls (Bedside | Brain-only, Spark, jump) join at R12/R14."""
+    import json as _json
+
+    from .config import BACKEND_DIR
+    from .contracts import SignalCard
+
+    card = SignalCard.model_validate(_json.loads((BACKEND_DIR / "tests" / "fixtures" / f"{req.fixture}.json").read_text()))
+    card = card.model_copy(update={"is_demo": True, "generated_at": clock.now(),
+                                   "patient_pseudonym": _runtime.cards.device_id and card.patient_pseudonym})
+    return await _runtime.cards.send(card)
+
+
 @router.post("/basal_time", dependencies=[Depends(require_pin), Depends(require_demo)])
 async def basal_time_button() -> dict:
     """Set basal_time to 61 clock minutes ago so the basal nudge shows at once.

@@ -45,6 +45,8 @@ def device_keypair(keys_dir: Path | None = None) -> PrivateKey:
     keys_dir = keys_dir or KEYS_DIR
     private_path = keys_dir / PRIVATE_FILE
     if private_path.exists():
+        if os.stat(private_path).st_mode & 0o077:  # restored from a backup with loose permissions
+            os.chmod(private_path, 0o600)
         return PrivateKey(private_path.read_bytes())
     keys_dir.mkdir(parents=True, exist_ok=True)
     key = PrivateKey.generate()
