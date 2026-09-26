@@ -170,6 +170,8 @@ async def set_mode(req: ModeRequest) -> dict:
     runtime.mode = req.mode
     await new.start()
     runtime.alarm.reset()  # switch semantics (step 12): alarm state back to idle
+    runtime.forecaster.reset()
+    hub._last = None
     await hub.broadcast(WSMessage(type="mode_change", payload={"mode": runtime.mode}))
     return {"mode": runtime.mode, "changed": True}
 
