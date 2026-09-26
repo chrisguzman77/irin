@@ -6,6 +6,7 @@ Vite's dev server. Nothing here imports rounds/ or buddy/."""
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Literal
@@ -16,10 +17,11 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import store
+from .alarm import AlarmEngine, Transition
 from .auth import require_pin
 from .clock import clock
 from .config import REPO_ROOT, config
-from .contracts import FRESH_PIN_ENDPOINTS, Reading, Settings, WSMessage
+from .contracts import FRESH_PIN_ENDPOINTS, AlarmState, Reading, Settings, WSMessage
 from .datasource.base import DataSource
 from .datasource.nightscout import NightscoutDataSource
 from .datasource.replay import ReplayDataSource
@@ -44,12 +46,38 @@ class Runtime:
     datasource: DataSource
     settings: Settings = field(default_factory=Settings)
     hub: "Hub | None" = None
+    alarm: "AlarmEngine | None" = None
 
 
 runtime = Runtime(mode="nightscout" if config.DATASOURCE == "nightscout" else "replay",
                   datasource=make_datasource("nightscout" if config.DATASOURCE == "nightscout" else "replay"))
 hub = Hub(runtime)
 runtime.hub = hub
+runtime.alarm = AlarmEngine(runtime.settings)
+
+ALARM_TICK_CLOCK_SECONDS = 30.0
+_broadcast_tasks: set[asyncio.Task] = set()  # references held so a broadcast is never GC'd mid-flight
+
+
+def _broadcast_transition(t: Transition) -> None:
+    """The ws observer on alarm.py's hook: every transition becomes alarm_state_change."""
+    payload = {**runtime.alarm.state.model_dump(mode="json"), "old_state": t.old_state,
+               "escalated": t.escalated, "ack_source": t.ack_source}
+    try:
+        task = asyncio.get_running_loop().create_task(hub.broadcast(WSMessage(type="alarm_state_change", payload=payload)))
+    except RuntimeError:  # no running loop (a synchronous test driving the engine directly)
+        return
+    _broadcast_tasks.add(task)
+    task.add_done_callback(_broadcast_tasks.discard)
+
+
+runtime.alarm.on_transition(_broadcast_transition)
+
+
+async def _alarm_tick_loop() -> None:
+    while True:
+        runtime.alarm.tick()
+        await clock.sleep(ALARM_TICK_CLOCK_SECONDS)
 
 
 @asynccontextmanager
@@ -57,7 +85,13 @@ async def lifespan(app: FastAPI):
     store.init_db()
     await runtime.datasource.start()
     hub.start()
+    tick_task = asyncio.create_task(_alarm_tick_loop())
     yield
+    tick_task.cancel()
+    try:
+        await tick_task
+    except asyncio.CancelledError:
+        pass
     await hub.stop()
     await runtime.datasource.stop()
 
@@ -115,8 +149,26 @@ async def set_mode(req: ModeRequest) -> dict:
     runtime.datasource = new
     runtime.mode = req.mode
     await new.start()
+    runtime.alarm.reset()  # switch semantics (step 12): alarm state back to idle
     await hub.broadcast(WSMessage(type="mode_change", payload={"mode": runtime.mode}))
     return {"mode": runtime.mode, "changed": True}
+
+
+class AckRequest(BaseModel):
+    source: Literal["device", "app"]
+
+
+@app.post("/api/acknowledge", dependencies=[Depends(require_pin)])
+async def acknowledge(req: AckRequest) -> dict:
+    """Acknowledge the current alarm. source records which screen answered
+    (the kiosk's big button = device, the app = app) for the R2 recorder."""
+    changed = runtime.alarm.acknowledge(req.source)
+    return {"acknowledged": changed, "alarm": runtime.alarm.state.model_dump(mode="json")}
+
+
+@app.get("/api/alarm", response_model=AlarmState)
+async def alarm_state() -> AlarmState:
+    return runtime.alarm.state
 
 
 @app.websocket("/ws")

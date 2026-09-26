@@ -44,3 +44,10 @@ def test_ws_sends_state_snapshot_first_then_echoes():
             assert first["payload"]["latest_reading"]["source"] == "replay"
             ws.send_text('{"hello": 1}')
             assert json.loads(ws.receive_text()) == {"echo": {"hello": 1}}
+
+
+def test_acknowledge_is_pin_gated_and_alarm_state_is_readable():
+    with TestClient(app) as c:
+        assert c.post("/api/acknowledge", json={"source": "app"}).status_code in (401, 503)
+        r = c.get("/api/alarm")
+        assert r.status_code == 200 and r.json()["state"] == "idle"

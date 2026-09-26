@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any
 from fastapi import WebSocket, WebSocketDisconnect
 
 from .clock import clock
-from .contracts import Reading, StateSnapshot, WSMessage
+from .contracts import AlarmState, Reading, StateSnapshot, WSMessage
 
 if TYPE_CHECKING:
     from .main import Runtime
@@ -32,6 +32,7 @@ class Hub:
         latest = await self.runtime.datasource.get_latest()
         return StateSnapshot(
             latest_reading=latest,
+            alarm=self.runtime.alarm.state if self.runtime.alarm else AlarmState(),
             settings=self.runtime.settings,
             mode=self.runtime.mode,
             clock_synced=True,  # the NTP guard (chris.md step 10) is bypassed under mock/replay
@@ -81,6 +82,8 @@ class Hub:
                 reading = None
             if reading is not None and reading != self._last:
                 self._last = reading
+                if self.runtime.alarm is not None:
+                    self.runtime.alarm.process_reading(reading)
                 await self.broadcast(WSMessage(type="reading_update", payload=reading.model_dump(mode="json")))
             await clock.sleep(POLL_CLOCK_SECONDS)
 
