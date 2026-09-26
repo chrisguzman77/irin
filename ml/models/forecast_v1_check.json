@@ -1,0 +1,22 @@
+{
+  "window": [
+    130.0,
+    127.0,
+    125.0,
+    122.0,
+    118.0,
+    null,
+    111.0,
+    107.0,
+    104.0,
+    100.0,
+    97.0,
+    93.0,
+    90.0
+  ],
+  "hour": 3.5,
+  "expected": 75.87274932861328,
+  "xgboost": "3.4.1",
+  "quantile": 0.2,
+  "note": "SYNTHETIC window; predict(window with None -> NaN, hour) must return expected within 1e-3"
+}
