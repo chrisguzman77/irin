@@ -335,9 +335,11 @@ class StepWatch:
             "recalls": [r for r in _store.select_recalls(w0) if r.is_demo == demo],
             "low_events": [e for e in _store.select_low_events(w0, w1) if e.is_demo == demo],
             "alarm_events": [a for a in _store.select_alarm_events(start, end) if a.is_demo == demo],
-            "window_readings": [r for r in self.adapter.readings_for(day_start, day_end) if not r.is_stale],
+            "window_readings": [r for r in self.adapter.readings_for(day_start, day_end)
+                                if not r.is_stale and day_start <= r.timestamp < day_end],
             "window_dates": dates,
-            "expected_injections": 1 if plan.drug_class in ("glp1", "gip_glp1", "weekly_basal") and len(dates) >= 7 else None,
+            # weekly drugs: one shot per full week of the fetched span (the window plus the 7 days before it)
+            "expected_injections": (len(dates) + 7) // 7 if plan.drug_class in ("glp1", "gip_glp1", "weekly_basal") else None,
         }
 
     def evaluate(self, plan: TitrationPlan, kind: str, step: TitrationStep, window: tuple[date, date]) -> StepEvaluation:
