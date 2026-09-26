@@ -51,6 +51,32 @@ def test_partial_parse_names_the_missing_piece(text, missing):
     assert list(r.missing) == missing and not r.complete
 
 
+@pytest.mark.parametrize("text,carbs,units", [
+    ("carbs of 45 units of 5", 45, 5),
+    ("insulin 5 carbs 45", 45, 5),
+    ("5 units 45 carbs", 45, 5),
+    ("log 45 carbs 5 units", 45, 5),
+    ("45 carbs and 5 units of insulin", 45, 5),
+    ("bolus 3.5", None, 3.5),
+])
+def test_orderings_the_review_found(text, carbs, units):
+    r = parse(text)
+    assert (r.carbs_g, r.insulin_units) == (carbs, units) and r.complete
+
+
+@pytest.mark.parametrize("text", [
+    "log 45 carbs and 5 units and 10 units",  # two insulin amounts: ask, never guess
+    "5 units nope 50 units",
+    "log 45 carbs and 50 carbs",
+    "-5 units",
+    "0 units",
+    "log 45 carbs and 0 units",
+])
+def test_conflicting_or_zero_amounts_are_errors_not_guesses(text):
+    r = parse(text)
+    assert r.error and not r.complete
+
+
 @pytest.mark.parametrize("text", ["", "   ", "hello there", "x" * 201, "log 500 carbs", "log 80 units"])
 def test_malformed_or_absurd_is_an_error(text):
     r = parse(text)
@@ -167,3 +193,33 @@ def test_structured_log_rejects_future_timestamps(client):
 
     body = {"timestamp": (clock.now() + timedelta(hours=2)).isoformat(), "kind": "carbs", "carbs_g": 10}
     assert client.post("/api/log", json=body, headers=H).status_code == 400  # the app's clock is replay's
+
+
+def test_structured_log_bounds_and_kinds(client):
+    ok = {"timestamp": T0.isoformat(), "confirmed": True}
+    bad = [
+        {**ok, "kind": "bolus", "insulin_units": -5},
+        {**ok, "kind": "bolus", "insulin_units": 1e308},
+        {**ok, "kind": "bolus", "insulin_units": 0},
+        {**ok, "kind": "carbs", "carbs_g": -10},
+        {**ok, "kind": "carbs", "insulin_units": 5},  # insulin on a carbs entry
+        {**ok, "kind": "bolus"},  # a bolus with no units
+        {**ok, "kind": "carbs"},
+    ]
+    for body in bad:
+        assert client.post("/api/log", json=body, headers=H).status_code in (400, 422), body
+    assert stored() == []
+
+
+def test_structured_log_accepts_aware_timestamps_from_js(client):
+    body = {"timestamp": "2020-01-01T12:00:00Z", "kind": "carbs", "carbs_g": 10}
+    r = client.post("/api/log", json=body, headers=H)
+    assert r.status_code == 200 and "+" not in r.json()["stored"][0]["timestamp"]
+    assert stored()[0].timestamp.tzinfo is None
+
+
+def test_mode_switch_discards_pending_voice_entries(db):
+    v = VoiceLogger()
+    r = v.submit("5 units")
+    v.reset()
+    assert v.confirm(r["pending_id"])["status"] == "expired" and stored() == []

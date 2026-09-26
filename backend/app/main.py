@@ -7,6 +7,7 @@ Vite's dev server. Nothing here imports rounds/ or buddy/."""
 from __future__ import annotations
 
 import asyncio
+import math
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import timedelta
@@ -27,7 +28,7 @@ from .datasource.base import DataSource
 from .datasource.nightscout import NightscoutDataSource
 from .datasource.replay import ReplayDataSource
 from .forecast import Forecaster
-from .voice import VoiceLogger
+from .voice import MAX_CARBS_G, MAX_UNITS, VoiceLogger
 from .ws import Hub
 
 Mode = Literal["replay", "nightscout"]
@@ -175,6 +176,7 @@ async def set_mode(req: ModeRequest) -> dict:
     await new.start()
     runtime.alarm.reset()  # switch semantics (step 12): alarm state back to idle
     runtime.forecaster.reset()
+    runtime.voice.reset()
     hub._last = None
     await hub.broadcast(WSMessage(type="mode_change", payload={"mode": runtime.mode}))
     return {"mode": runtime.mode, "changed": True}
@@ -230,11 +232,30 @@ async def log_voice_cancel(pending_id: str) -> dict:
 @app.post("/api/log", dependencies=[Depends(require_pin)])
 async def log_treatment(t: Treatment) -> dict:
     """Structured logging from the app's forms (basal taken, carbs + units,
-    notes). The Treatment contract itself refuses insulin_units without
-    confirmed=True (422), so the UI's echo-and-confirm step cannot be skipped."""
-    if t.timestamp > clock.now() + timedelta(minutes=5):
+    notes). The Treatment contract refuses insulin_units without
+    confirmed=True (422); `confirmed` is the client's assertion that its
+    echo-and-confirm screen was passed, which the server cannot see, so the
+    PIN gate is what makes that assertion trustworthy."""
+    ts = t.timestamp
+    if ts.tzinfo is not None:  # JS toISOString() sends Z; the Pi keeps naive local time
+        ts = ts.astimezone().replace(tzinfo=None)
+    if ts > clock.now() + timedelta(minutes=5):
         raise HTTPException(status_code=400, detail="timestamp is in the future")
-    row = t.model_copy(update={"timestamp": t.timestamp})
+    if t.insulin_units is not None:
+        if t.kind not in ("bolus", "basal"):
+            raise HTTPException(status_code=400, detail="insulin_units only on a bolus or basal")
+        if not (math.isfinite(t.insulin_units) and 0 < t.insulin_units <= MAX_UNITS):
+            raise HTTPException(status_code=400, detail=f"insulin_units must be in (0, {MAX_UNITS}]")
+    if t.carbs_g is not None:
+        if t.kind != "carbs":
+            raise HTTPException(status_code=400, detail="carbs_g only on a carbs entry")
+        if not (math.isfinite(t.carbs_g) and 0 < t.carbs_g <= MAX_CARBS_G):
+            raise HTTPException(status_code=400, detail=f"carbs_g must be in (0, {MAX_CARBS_G}]")
+    if t.kind in ("bolus", "basal") and t.insulin_units is None:
+        raise HTTPException(status_code=400, detail=f"a {t.kind} entry needs insulin_units")
+    if t.kind == "carbs" and t.carbs_g is None:
+        raise HTTPException(status_code=400, detail="a carbs entry needs carbs_g")
+    row = t.model_copy(update={"timestamp": ts})
     store.insert_treatment(row)
     payload = row.model_dump(mode="json")
     await _announce([payload])

@@ -20,12 +20,12 @@ TIMEOUT_S = 10
 MAX_CARBS_G = 300
 MAX_UNITS = 50
 
-_NUM = r"(\d+(?:\.\d+)?)"
-_CARBS = re.compile(_NUM + r"\s*(?:g\b|grams?\b|carbs?\b|carbohydrates?\b)|(?:carbs?|carbohydrates?)\s*(?:of\s*)?" + _NUM, re.I)
-_UNITS = re.compile(_NUM + r"\s*(?:u\b|units?\b|iu\b)|(?:units?|insulin|bolus)\s*(?:of\s*)?" + _NUM, re.I)
-_BARE_CARB_WORD = re.compile(r"\b(?:carbs?|carbohydrates?)\b", re.I)
-_BARE_UNIT_WORD = re.compile(r"\b(?:units?|insulin|bolus)\b", re.I)
-_BARE_NUMBER = re.compile(_NUM)
+_NUM = re.compile(r"(?<![\d.])(-?\d+(?:\.\d+)?)(?![\d.])")
+_CARB_WORDS = {"g", "gram", "grams", "carb", "carbs", "carbohydrate", "carbohydrates"}
+_UNIT_WORDS = {"u", "iu", "unit", "units", "insulin", "bolus"}
+_LABEL_WORDS = _CARB_WORDS | _UNIT_WORDS
+_WORD = re.compile(r"[A-Za-z]+")
+_SPACE = re.compile(r"\s*")
 
 
 @dataclass(frozen=True)
@@ -48,33 +48,73 @@ class ParseResult:
         return " and ".join(parts) + ", save?" if parts else ""
 
 
-def _first(rx: re.Pattern, text: str) -> float | None:
-    m = rx.search(text)
-    if not m:
-        return None
-    return float(next(g for g in m.groups() if g is not None))
+def _label(word: str) -> str:
+    return "carbs" if word in _CARB_WORDS else "units"
+
+
+def _label_for(text: str, m: re.Match) -> str | None:
+    """carbs | units | None for one number, in this order: an explicit lead
+    "<carbs|units|insulin> of 45"; the word right after the number ("45 carbs",
+    "5 u") unless that word is itself the lead of the NEXT number ("insulin 5
+    carbs 45"); a bare lead right before it ("insulin 5")."""
+    before = [w.lower() for w in _WORD.findall(text[:m.start()])]
+    if len(before) >= 2 and before[-1] == "of" and before[-2] in _LABEL_WORDS:
+        return _label(before[-2])
+    pos = _SPACE.match(text, m.end()).end()
+    after = _WORD.match(text, pos)
+    if after and after.group(0).lower() in _LABEL_WORDS:
+        rest = _SPACE.match(text, after.end()).end()
+        if text[rest:rest + 3].lower() == "of ":
+            rest = _SPACE.match(text, rest + 3).end()
+        nxt = _NUM.match(text, rest)
+        if nxt is None:
+            return _label(after.group(0).lower())
+        # "5 carbs 45": "carbs" leads the 45 (which has no label of its own), not the 5;
+        # "5 units 45 carbs": the 45 has its own trailing label, so "units" stays with the 5.
+        pos2 = _SPACE.match(text, nxt.end()).end()
+        after2 = _WORD.match(text, pos2)
+        if after2 and after2.group(0).lower() in _LABEL_WORDS:
+            return _label(after.group(0).lower())
+    if before and before[-1] in _LABEL_WORDS:
+        return _label(before[-1])
+    return None
 
 
 def parse(text: str) -> ParseResult:
     text = (text or "").strip()
     if not text or len(text) > 200:
         return ParseResult(error="nothing to log" if not text else "too long")
-    carbs = _first(_CARBS, text)
-    units = _first(_UNITS, text)
-    missing: list[str] = []
-    if carbs is None and _BARE_CARB_WORD.search(text):
-        missing.append("carbs amount")
-    if units is None and _BARE_UNIT_WORD.search(text):
-        missing.append("insulin amount")
-    if carbs is None and units is None and not missing:
-        if _BARE_NUMBER.search(text):
-            missing.append("unit")  # "log 45": carbs or units?
+    text = text.replace(",", " ")
+    numbers = list(_NUM.finditer(text))
+    if any(m.group(1).startswith("-") for m in numbers):
+        return ParseResult(error="negative amount")
+    found: dict[str, list[float]] = {"carbs": [], "units": []}
+    unlabeled = 0
+    for m in numbers:
+        label = _label_for(text, m)
+        if label is None:
+            unlabeled += 1
         else:
-            return ParseResult(error="no amount found")
-    if carbs is not None and not (0 <= carbs <= MAX_CARBS_G):
-        return ParseResult(error=f"carbs out of range (0-{MAX_CARBS_G} g)")
-    if units is not None and not (0 <= units <= MAX_UNITS):
-        return ParseResult(error=f"units out of range (0-{MAX_UNITS})")
+            found[label].append(float(m.group(1)))
+    for label, vals in found.items():
+        if len(set(vals)) > 1:
+            return ParseResult(error=f"more than one {'insulin' if label == 'units' else 'carbs'} amount; say it once")
+    carbs = found["carbs"][0] if found["carbs"] else None
+    units = found["units"][0] if found["units"] else None
+    words = {w.lower() for w in _WORD.findall(text)}
+    missing: list[str] = []
+    if carbs is None and words & _CARB_WORDS:
+        missing.append("carbs amount")
+    if units is None and words & _UNIT_WORDS:
+        missing.append("insulin amount")
+    if unlabeled and not missing and (carbs is None or units is None):
+        missing.append("unit")  # "log 45": carbs or units?
+    if carbs is None and units is None and not missing:
+        return ParseResult(error="no amount found")
+    if carbs is not None and not (0 < carbs <= MAX_CARBS_G):
+        return ParseResult(error=f"carbs out of range (1-{MAX_CARBS_G} g)")
+    if units is not None and not (0 < units <= MAX_UNITS):
+        return ParseResult(error=f"units out of range (0.5-{MAX_UNITS})")
     return ParseResult(carbs_g=carbs, insulin_units=units, missing=tuple(missing))
 
 
@@ -127,3 +167,7 @@ class VoiceLogger:
     def cancel(self, pending_id: str) -> dict:
         self._pending.pop(pending_id, None)
         return {"status": "cancelled"}
+
+    def reset(self) -> None:
+        """The mode switch moves the clock; nothing pending survives it."""
+        self._pending.clear()
