@@ -37,6 +37,8 @@ const state = {
   connected: false,
   downSince: Date.now(),
   piClock: null,       // ms, the Pi's clock.now() from /api/health
+  piDate: null,        // "YYYY-MM-DD" of the Pi's clock, to match a report's night_date
+  report: null,        // MorningReport (GET /api/reports/latest), fetched in morning mode
   alarm: { state: "idle", trigger_type: null },  // AlarmState
   ackMsg: "",
 };
@@ -172,10 +174,20 @@ async function pollDevice() {
     ]);
     const t = toMs(h.clock);
     if (!Number.isNaN(t)) state.piClock = t;
+    if (typeof h.clock === "string") state.piDate = h.clock.slice(0, 10);
     state.displayMode = MODES.includes(s.display_mode) ? s.display_mode : "detail";
     if (typeof s.clock_synced === "boolean") state.clockSynced = s.clock_synced;
+    if (screenMode() === "morning") await fetchReport();
   } catch { /* the disconnected banner covers a dead backend */ }
   render();
+}
+
+// The Morning numbers come from the morning report (step 11 on the backend),
+// only while the screen is in morning mode.
+async function fetchReport() {
+  const res = await fetch("/api/reports/latest", { cache: "no-store" });
+  if (res.status === 404) { state.report = null; return; }
+  if (res.ok) state.report = await res.json();
 }
 
 // Detail whenever the clock is not synced: no trusted clock, no night decision.
@@ -210,9 +222,7 @@ function render() {
   $("night-trend").textContent = $("morning-trend").textContent = arrow;
   const now = state.piClock ?? (r ? toMs(r.timestamp) : null);
   $("night-clock").textContent = now === null ? "--:--" : hhmm(now);
-  // The Morning numbers (overnight low/high with times, time below/above,
-  // TIR) are night metrics from the backend (nights.py); the snapshot has no
-  // field for them yet, so the screen shows "—" until it does (journal request).
+  if (mode === "morning") renderMorning();
 
   if (r) {
     $("glucose").textContent = Math.round(r.glucose_mgdl);
@@ -227,6 +237,53 @@ function render() {
   // request to Chris, see journal); the tiles stay "—" until they are.
   renderAlarm(num, arrow);
   if (mode === "detail") drawGraph();
+}
+
+// --- morning (step 2 numbers, from the step 11 report) ---
+
+const RING_C = 2 * Math.PI * 50; // the ring circles' r = 50
+
+// Only last night's report, and only one whose DEMO flag matches the current
+// source: a replayed night is never shown as live (invariant 1), and an old
+// night is never shown as last night.
+function morningReport() {
+  const rep = state.report;
+  if (!rep || !rep.stats || rep.night_date !== state.piDate) return null;
+  if (!!rep.is_demo !== (state.mode === "replay")) return null;
+  return rep.stats;
+}
+
+function setStat(id, value, sub) {
+  const el = $(id);
+  el.textContent = value == null ? "—" : String(value);
+  if (value != null && sub) {
+    const small = document.createElement("small");
+    small.textContent = sub;
+    el.appendChild(small);
+  }
+}
+
+function renderMorning() {
+  const s = morningReport();
+  const pct = (v) => (v == null ? null : `${Number(v.toFixed(1))}%`); // matches the report's narrative
+  $("tir-night").textContent = s ? (pct(s.tir_pct) ?? "—") : "—";
+  setStat("night-low", s ? s.low_mgdl : null, s && s.low_at ? `at ${s.low_at}` : "");
+  setStat("night-high", s ? s.high_mgdl : null, s && s.high_at ? `at ${s.high_at}` : "");
+  setStat("night-below", s ? pct(s.tbr_pct) : null, s && s.minutes_below_70 ? `${s.minutes_below_70} min` : "");
+  setStat("night-above", s ? pct(s.tar_pct) : null, "");
+  // ring: below (red) from the top, then in range (green), then above (amber)
+  let start = 0;
+  for (const [id, v] of [["ring-below", s?.tbr_pct], ["ring-in", s?.tir_pct], ["ring-above", s?.tar_pct]]) {
+    const len = s && v != null ? (v / 100) * RING_C : 0;
+    $(id).style.strokeDasharray = `${len} ${RING_C}`;
+    $(id).style.strokeDashoffset = String(-start);
+    start += len;
+  }
+  let note = "no report for last night yet";
+  if (s) note = s.coverage_pct != null && s.coverage_pct < 85
+    ? `sensor covered ${pct(s.coverage_pct)} of the night; some of it is missing`
+    : "";
+  $("morning-note").textContent = note;
 }
 
 // --- alarm (step 3) ---

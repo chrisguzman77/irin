@@ -88,7 +88,7 @@ body.mode-night.is-stale #night-glucose { text-decoration: line-through; }
 #morning-now { font-size: 3.2vh; color: var(--dim); text-align: right; }
 #morning-glucose { color: var(--fg); font-weight: 700; font-variant-numeric: tabular-nums; }
 body.mode-morning.is-stale #morning-glucose, body.mode-morning.is-disconnected #morning-glucose { color: var(--grey); }
-/* segments stay empty until the backend sends the overnight split */
+/* segments stay empty until last night's report arrives (display.js sets them) */
 .ring-in, .ring-below, .ring-above { stroke-dasharray: 0 315; }
 
 /* --- Alarm visuals (step 3). Two tiers, always distinct:
