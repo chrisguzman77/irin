@@ -17,6 +17,9 @@ const GAP_MIN = 15;            // don't join points across a gap this long (matc
 const DISCONNECT_BANNER_MS = 15000;
 const TARGET_LOW = 70;         // time-in-range band, consensus 70-180 mg/dL
 const TARGET_HIGH = 180;
+const LINE_IN = "#e8e8e8";     // graph line in range (70-180)
+const LINE_HIGH = "#ffd60a";   // graph line above range: yellow
+const LINE_LOW = "#ff3b30";    // graph line below range: red
 const POLL_MS = 5000;          // the Pi's clock and display mode, polled (at 60x replay: 5 clock-min)
 const MODES = ["detail", "night", "morning"];
 
@@ -885,28 +888,43 @@ function drawGraph() {
   ctx.beginPath(); ctx.moveTo(x(tNow), padT); ctx.lineTo(x(tNow), padT + plotH); ctx.stroke();
   ctx.setLineDash([]);
 
-  // history line, broken across gaps
-  const lineColor = dim ? "#777" : "#e8e8e8";
-  ctx.strokeStyle = lineColor;
+  // history line, broken across gaps, no point markers (George, stepping in for
+  // Justin): the line itself is colored by range, white in 70-180, YELLOW above,
+  // RED below, switching exactly where it crosses 70 or 180 (each segment is
+  // split at the crossing, so a colour never bleeds past the threshold). Stale
+  // or disconnected data stays all grey (invariant 1: never drawn as live).
   ctx.lineWidth = Math.max(2, fs * 0.18);
   ctx.lineJoin = "round";
-  ctx.beginPath();
+  ctx.lineCap = "round";
+  const rangeColor = (v) => (dim ? "#777" : v < TARGET_LOW ? LINE_LOW : v > TARGET_HIGH ? LINE_HIGH : LINE_IN);
+  const piece = (t0, v0, t1, v1) => {
+    ctx.strokeStyle = rangeColor((v0 + v1) / 2);
+    ctx.beginPath(); ctx.moveTo(x(t0), y(v0)); ctx.lineTo(x(t1), y(v1)); ctx.stroke();
+  };
   let prev = null;
   for (const p of pts) {
-    if (!prev || p.t - prev.t > GAP_MIN * 60000) ctx.moveTo(x(p.t), y(p.mgdl));
-    else ctx.lineTo(x(p.t), y(p.mgdl));
+    if (prev && p.t - prev.t <= GAP_MIN * 60000) {
+      // the times (in order) where this segment crosses 70 or 180
+      const cuts = [TARGET_LOW, TARGET_HIGH]
+        .filter((th) => (prev.mgdl - th) * (p.mgdl - th) < 0)
+        .map((th) => prev.t + ((th - prev.mgdl) / (p.mgdl - prev.mgdl)) * (p.t - prev.t))
+        .sort((a, b) => a - b);
+      let t0 = prev.t, v0 = prev.mgdl;
+      for (const tc of cuts) {
+        const vc = prev.mgdl + ((tc - prev.t) / (p.t - prev.t)) * (p.mgdl - prev.mgdl);
+        piece(t0, v0, tc, vc);
+        t0 = tc; v0 = vc;
+      }
+      piece(t0, v0, p.t, p.mgdl);
+    } else {
+      // the first reading of a run (after a gap, or the very first) gets a cap
+      // in its range colour, so a lone reading between two gaps still shows
+      ctx.strokeStyle = rangeColor(p.mgdl);
+      ctx.beginPath(); ctx.moveTo(x(p.t), y(p.mgdl)); ctx.lineTo(x(p.t) + 0.1, y(p.mgdl)); ctx.stroke();
+    }
     prev = p;
   }
-  ctx.stroke();
-
-  // points colored by range
-  const dot = Math.max(2.5, fs * 0.22);
-  for (const p of pts) {
-    ctx.fillStyle = dim ? "#777"
-      : p.mgdl < TARGET_LOW ? "#ff3b30"
-      : p.mgdl > TARGET_HIGH ? "#ffb000" : "#e8e8e8";
-    ctx.beginPath(); ctx.arc(x(p.t), y(p.mgdl), dot, 0, Math.PI * 2); ctx.fill();
-  }
+  ctx.lineCap = "butt";
 
   // DOTTED forecast: latest reading -> predicted value at +horizon
   if (fc) {
