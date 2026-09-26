@@ -273,11 +273,13 @@ def _evaluate_after_ledger(record: NightRecord) -> None:
         return
 
     async def both() -> None:
-        await runtime.standing.run(today=record.night_date)
+        # the watch first: its checks and gates fall due once, and the budget's one-program-a-day rule
+        # would otherwise let a same-morning Follow-up swallow them
         if runtime.step_watch is not None:
             await runtime.step_watch.run(today=record.night_date)
             if runtime.step_watch.checkin_due(record.night_date + timedelta(days=1)):
                 await hub.broadcast(WSMessage(type="symptom_check_due", payload=runtime.step_watch.checkin_status()))
+        await runtime.standing.run(today=record.night_date)
 
     _schedule(both())
 

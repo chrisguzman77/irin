@@ -161,7 +161,12 @@ def apply_hold(plan: TitrationPlan, hold_weeks: int, from_index: int | None = No
 
 def evaluate_window(plan: TitrationPlan, kind: str, step: TitrationStep, window_records, baseline_records,
                     symptom_checks, injections, recalls, low_events, alarm_events, *, window_readings, window_dates,
-                    expected_injections: int | None, alarm_source: str = "measured") -> StepEvaluation:
+                    expected_injections: int | None, alarm_source: str = "measured",
+                    told: set[str] | None = None) -> StepEvaluation:
+    """`told`: red event keys already sent (the budget's history). A red event
+    that is new pre-empts the check as a red safety card; one already told keeps
+    its flag but lets the check go on (at least amber), so a step check or a
+    gate is never swallowed by a red the doctor has already seen."""
     from ml.models.nights import standing_window, step_window_metrics
 
     values, confidence = step_window_metrics(
@@ -193,7 +198,7 @@ def evaluate_window(plan: TitrationPlan, kind: str, step: TitrationStep, window_
         red_keys += [f"level2:{d.isoformat()}" for d in level2_nights]
     if values["rearms"] > 0:
         flags.append("rearm")
-        red_keys += [a.event_id for a in alarm_events if (a.rearm_count or 0) > 0]
+        red_keys += [a.event_id for a in alarm_events if (a.rearm_count or 0) > 0 and a.tier in ("predicted_low", "actual_low")]
     if ketone >= 1 and cant_eat_days:
         flags.append("ketone_risk")
         red_keys += [f"ketone:{d.isoformat()}" for d in cant_eat_days]
@@ -204,7 +209,9 @@ def evaluate_window(plan: TitrationPlan, kind: str, step: TitrationStep, window_
                 for r in window_records], limited=(kind == "early_check"))
     period = (window_dates[0], window_dates[-1])
     label = f"Step {step.index + 1} ({step.dose_label})"
-    if flags:
+    red_flags = list(flags)
+    new_red = [k for k in red_keys if k not in (told or set())]
+    if flags and (new_red or told is None):
         parts = []
         if level2_nights:
             n = values["level2_lows"]
@@ -236,7 +243,7 @@ def evaluate_window(plan: TitrationPlan, kind: str, step: TitrationStep, window_
         flags.append("dose_mismatch")
     if (values["adherence"].get("missed") or 0) > 0:
         flags.append("missed_injection")
-    status = "amber" if any(f in flags for f in ("lows", "awareness", "tolerance", "highs")) else "green"
+    status = "amber" if red_flags or any(f in flags for f in ("lows", "awareness", "tolerance", "highs")) else "green"
     days = f"days {day_in_step(step, window_dates[0])} to {day_in_step(step, window_dates[-1])}"
     if kind == "early_check":
         days = f"days 1 to {len(window_dates)}, limited data"
@@ -254,8 +261,10 @@ def evaluate_window(plan: TitrationPlan, kind: str, step: TitrationStep, window_
         sentences.append(f"Rough stomach {rough_days} of {len(window_dates)} days.")
     if ketone:
         sentences.append(f"{ketone} ketone-risk episode{'s' if ketone > 1 else ''}.")
+    if red_flags:
+        sentences.append("Safety card already sent for this window.")
     return StepEvaluation(kind=kind, status=status, flags=flags, headline=" ".join(sentences),
-                          period_start=period[0], period_end=period[1], **common)
+                          period_start=period[0], period_end=period[1], red_event_key="+".join(red_keys) or None, **common)
 
 
 def graduated(green_weeks: int) -> bool:
@@ -264,6 +273,7 @@ def graduated(green_weeks: int) -> bool:
 
 # ---------------------------------------------------------------- the service (state, check-ins, the due cards)
 
+import asyncio as _asyncio
 import json as _json
 import logging as _logging
 from typing import Callable
@@ -291,6 +301,7 @@ class StepWatch:
     brain_only: Callable[[], bool] = lambda: False
     on_plan_state: Callable[[dict], None] | None = None  # plan_state broadcast
     on_checkin_due: Callable[[dict], None] | None = None  # symptom_check_due broadcast
+    _lock: _asyncio.Lock = field(default_factory=_asyncio.Lock, repr=False)  # one evaluation at a time: the red cap holds
 
     # --- the plan ---
 
@@ -351,8 +362,10 @@ class StepWatch:
             for old in _store.select_plans():  # one active watch per world: a new plan replaces the old one
                 if old.status == "active" and old.is_demo == demo and old.plan_id != plan.plan_id:
                     _store.upsert_plan(old.model_copy(update={"status": "ended"}))
+            fresh = not any(p.plan_id == plan.plan_id and p.status == "active" for p in _store.select_plans())
             _store.upsert_plan(plan)
-            _store.set_kv(greens_key(plan.plan_id), "[]")
+            if fresh:  # a doctor's edit of the running plan keeps its green run
+                _store.set_kv(greens_key(plan.plan_id), "[]")
             _log.info("step watch %s: %s", plan.plan_id, msg.kind)
         else:
             plan = self.active_plan()
@@ -360,9 +373,14 @@ class StepWatch:
                 _log.warning("%s without an active watch: nothing to apply", msg.kind)
                 return
             if msg.kind == "hold_step":
-                # the step the doctor decided on (the gate's), not the one running when the patient confirmed
-                step = current_step(plan, msg.created_at.date())
-                _store.upsert_plan(apply_hold(plan, int(msg.hold_weeks), from_index=step.index if step else None))
+                # the step the doctor decided on (the gate's), not the one running when the patient confirmed;
+                # the doctor's stamp is wall time, so on the replay clock it is never later than today
+                decided = min(msg.created_at.date(), _clock.now().date())
+                step = current_step(plan, decided)
+                if step is None or is_last(plan, step):
+                    _log.warning("hold_step decided %s: no step-up to hold; nothing applied", decided)
+                else:
+                    _store.upsert_plan(apply_hold(plan, int(msg.hold_weeks), from_index=step.index))
             elif msg.kind == "end_watch":
                 _store.upsert_plan(plan.model_copy(update={"status": "ended"}))
             # proceed: the gate stays as planned; nothing to change
@@ -418,13 +436,23 @@ class StepWatch:
             "expected_injections": (len(dates) + 7) // 7 if plan.drug_class in ("glp1", "gip_glp1") else None,
         }
 
-    def evaluate(self, plan: TitrationPlan, kind: str, step: TitrationStep, window: tuple[date, date]) -> StepEvaluation:
+    def evaluate(self, plan: TitrationPlan, kind: str, step: TitrationStep, window: tuple[date, date],
+                 told: set[str] | None = None) -> StepEvaluation:
         inp = self._inputs(plan, window)
         return evaluate_window(plan, kind, step, inp["window_records"], inp["baseline_records"], inp["symptom_checks"],
                                inp["injections"], inp["recalls"], inp["low_events"], inp["alarm_events"],
                                window_readings=inp["window_readings"], window_dates=inp["window_dates"],
                                expected_injections=inp["expected_injections"],
-                               alarm_source="inferred" if self.brain_only() else "measured")
+                               alarm_source="inferred" if self.brain_only() else "measured", told=told)
+
+    @staticmethod
+    def _told(history: list) -> set[str]:
+        """Every red event key the doctor has already been sent."""
+        keys: set[str] = set()
+        for s in history:
+            if s.kind == "safety" and s.event_key:
+                keys |= set(s.event_key.split("+"))
+        return keys
 
     async def _send(self, plan: TitrationPlan, ev: StepEvaluation, key: str, history: list) -> dict[str, Any]:
         verdict = _noise.allow(ev.kind, "step_watch", ev.status, _clock.now(), history, active_watch=True, event_key=key)
@@ -445,9 +473,15 @@ class StepWatch:
             history.append(_noise.Sent(ev.kind, "step_watch", ev.status, _clock.now(), key))
         return entry
 
-    async def safety(self, night: date, history: list | None = None) -> list[dict[str, Any]]:
+    async def safety(self, night: date) -> list[dict[str, Any]]:
         """The red rule over ONE night (the one that just closed, or the one in
-        progress when a low alarm re-arms): sent at once, keyed to its events."""
+        progress when a low alarm re-arms inside the night window): sent at once,
+        keyed to its events. A daytime re-arm belongs to no night and waits for
+        Hypo Response's own window."""
+        async with self._lock:
+            return await self._safety(night, _noise.history_from_store(_store.select_cards(limit=500)))
+
+    async def _safety(self, night: date, history: list) -> list[dict[str, Any]]:
         plan = self.active_plan()
         step = current_step(plan, night) if plan is not None else None
         if plan is None or step is None:
@@ -455,30 +489,40 @@ class StepWatch:
         ev = self.evaluate(plan, "safety", step, (night, night))
         if ev.status != "red":
             return []
-        history = history if history is not None else _noise.history_from_store(_store.select_cards(limit=500))
         return [await self._send(plan, ev, ev.red_event_key or f"{plan.plan_id}:{step.index}:red", history)]
 
     async def run(self, today: date | None = None) -> list[dict[str, Any]]:
         """The night that just closed (`today` is its evening date): the red rule
         over that night, then the due cards, then graduation once the last step
         has four green weeks. Re-running a morning sends nothing twice."""
+        async with self._lock:
+            return await self._run(today)
+
+    async def _run(self, today: date | None) -> list[dict[str, Any]]:
         plan = self.active_plan()
         if plan is None:
             return []
         today = today or _clock.now().date()
         history = _noise.history_from_store(_store.select_cards(limit=500))
-        out = await self.safety(today, history)
+        out = await self._safety(today, history)
+        told = self._told(history)
         for kind, step, window in due_kinds(plan, today):
-            ev = self.evaluate(plan, kind, step, window)
-            key = budget_key(plan, kind, step, today)
+            ev = self.evaluate(plan, kind, step, window, told)
+            key = ev.red_event_key if ev.status == "red" else budget_key(plan, kind, step, today)
             if kind == "step_check":
                 self._record_check(plan, key, ev.status)
             out.append(await self._send(plan, ev, key, history))
         step = current_step(plan, today)
         if step is not None and is_last(plan, step) and graduated(self.green_weeks(plan)) and plan.status == "active":
+            # the final card: the four maintenance weeks against baseline. A new red in them is a red,
+            # not a graduation; a window without data waits for one that has it
             window = (max(step.planned_start, today - timedelta(days=7 * GRADUATION_GREEN_WEEKS - 1)), today)
-            ev = self.evaluate(plan, "graduation", step, window)
-            out.append(await self._send(plan, ev, budget_key(plan, "graduation", step, today), history))
-            _store.upsert_plan(plan.model_copy(update={"status": "graduated"}))
-            self._changed()
+            ev = self.evaluate(plan, "graduation", step, window, self._told(history))
+            if ev.status == "red":
+                out.append(await self._send(plan, ev, ev.red_event_key, history))
+                _store.set_kv(greens_key(plan.plan_id), "[]")
+            elif ev.status != "insufficient":
+                out.append(await self._send(plan, ev, budget_key(plan, "graduation", step, today), history))
+                _store.upsert_plan(plan.model_copy(update={"status": "graduated"}))
+                self._changed()
         return out

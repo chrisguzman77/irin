@@ -48,7 +48,7 @@ def connect(path: str | Path | None = None) -> sqlite3.Connection:
 def init_db(path: str | Path | None = None) -> None:
     with connect(path) as conn:
         cols = [r["name"] for r in conn.execute("PRAGMA table_info(symptom_checks)").fetchall()]
-        if cols and "is_demo" not in cols:  # the R10 work-in-progress table was keyed by date alone
+        if cols and "is_demo" not in cols:  # the R10 work-in-progress table was keyed by date alone; it never left the branch
             conn.execute("DROP TABLE symptom_checks")
         conn.executescript(SCHEMA)
         # columns added after the first Pi database was created (ALTER is idempotent by try)

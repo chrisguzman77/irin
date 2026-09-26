@@ -221,6 +221,7 @@ class FakeSender:
         self.sent = []
 
     async def send(self, card, event_key=None):
+        await asyncio.sleep(0)  # a relay round trip: another evaluation could run here without the lock
         store.upsert_card(card, status="sent", recipients=["doc-1"], event_key=event_key)
         self.sent.append((card, event_key))
         return {"card_id": card.card_id, "kind": card.kind, "program": card.program, "status": "sent",
@@ -329,7 +330,7 @@ def test_four_green_maintenance_weeks_graduate_with_a_final_card(db):
     [(card, key)] = sender.sent
     assert key == "p1:graduation" and card.kind == "graduation" and (card.period_start, card.period_end) == (date(2020, 2, 12), date(2020, 3, 10))
     assert card.headline.startswith("Step 2 (5 mg), four green weeks at the maintenance dose, watch complete. Overnight low point")
-    assert card.metrics["baseline_nights"] == 14 and "proceed" not in card.allowed_actions or card.allowed_actions
+    assert card.metrics["baseline_nights"] == 14 and card.allowed_actions == ["message", "dismiss"]
     assert run(sw, date(2020, 3, 10)) == []  # graduated: nothing more
     assert allow("graduation", "step_watch", "green", clock.now(), [Sent("graduation", "step_watch", "green", clock.now(), "p1:graduation")],
                  active_watch=True, event_key="p1:graduation").reason == "per_plan"
@@ -552,3 +553,103 @@ def test_a_watch_suspends_basal_check_and_the_endpoints_are_gated(monkeypatch):
 def test_nothing_is_computed_here():
     src = inspect.getsource(mod)
     assert "numpy" not in src and "median" not in src and "< 70" not in src and "percentile" not in src
+
+
+def test_a_red_already_reported_never_swallows_the_gate_or_the_graduation(db):
+    """A level-2 low on night 1 of a step goes out as a safety card that morning. The
+    gate whose window holds that night is still produced (amber, flagged, with
+    proceed/hold), and four green maintenance weeks still graduate with a final
+    card that is not a second copy of the red."""
+    store.upsert_plan(plan(n_steps=2))
+    for d in BASE:
+        store.upsert_night_record(night(d))
+    days = [date(2020, 2, 3) + timedelta(days=i) for i in range(36)]  # 02-03 .. 03-09
+    for d in days:
+        store.upsert_night_record(night(d))
+    sender = FakeSender()
+    sw = watch(Sources(readings=readings(n=288 * 40, t0=datetime(2020, 2, 3))), sender)
+    store.upsert_night_record(night(date(2020, 2, 3), level2=1))  # night 1 of the gate window
+    clock.set(speed=60.0, start=datetime(2020, 2, 4, 7, 5))
+    assert [e["kind"] for e in run(sw, date(2020, 2, 3))] == ["safety"] and sender.sent[-1][1] == "level2:2020-02-03"
+    clock.set(speed=60.0, start=datetime(2020, 2, 10, 7, 5))
+    [gate] = run(sw, date(2020, 2, 9))  # the gate before 02-12: its window is 02-03..02-09
+    assert gate["kind"] == "step_gate" and gate["status"] == "amber" and gate["flags"][0] == "level2" and gate["budget"] == "sent"
+    assert gate["headline"].endswith("Safety card already sent for this window.") and sender.sent[-1][0].kind == "step_gate"
+    assert "proceed" in sender.sent[-1][0].allowed_actions and sender.sent[-1][1] == "p1:0:gate:2020-02-12"
+    # the maintenance step: a level-2 on ITS night 1, then four green weeks
+    store.upsert_night_record(night(date(2020, 2, 12), level2=1))
+    clock.set(speed=60.0, start=datetime(2020, 2, 13, 7, 5))
+    assert [e["kind"] for e in run(sw, date(2020, 2, 12))] == ["safety"]
+    n_sent = len(sender.sent)
+    for d in [date(2020, 2, 18), date(2020, 2, 25), date(2020, 3, 3)]:
+        clock.set(speed=60.0, start=datetime.combine(d + timedelta(days=1), datetime.min.time()).replace(hour=7, minute=5))
+        assert [(e["kind"], e["status"]) for e in run(sw, d)] == [("step_check", "green")]
+    clock.set(speed=60.0, start=datetime(2020, 3, 11, 7, 5))
+    out = run(sw, date(2020, 3, 10))
+    assert [(e["kind"], e["status"], e["budget"]) for e in out] == [("step_check", "green", "digest"), ("graduation", "amber", "sent")]
+    assert store.select_plans()[0].status == "graduated" and len(sender.sent) == n_sent + 1
+    final = sender.sent[-1][0]
+    assert final.kind == "graduation" and final.flags[0] == "level2" and "level 2" not in final.headline.split(".")[0]
+
+
+def test_a_new_red_inside_the_graduation_window_is_a_red_not_a_graduation(db):
+    store.upsert_plan(plan(n_steps=2))
+    for d in BASE + [date(2020, 2, 12) + timedelta(days=i) for i in range(28)]:
+        store.upsert_night_record(night(d))
+    sender = FakeSender()
+    sw = watch(Sources(readings=readings(n=288 * 30, t0=datetime(2020, 2, 12))), sender)
+    for d in [date(2020, 2, 18), date(2020, 2, 25), date(2020, 3, 3)]:
+        clock.set(speed=60.0, start=datetime.combine(d + timedelta(days=1), datetime.min.time()).replace(hour=7, minute=5))
+        run(sw, d)
+    store.upsert_night_record(night(date(2020, 2, 21), level2=1))  # a rebuilt night, red, nobody told
+    clock.set(speed=60.0, start=datetime(2020, 3, 11, 7, 5))
+    out = run(sw, date(2020, 3, 10))
+    assert [(e["kind"], e["status"], e["budget"]) for e in out] == [("step_check", "green", "digest"), ("safety", "red", "sent")]
+    assert sender.sent[-1][1] == "level2:2020-02-21" and store.select_plans()[0].status == "active"
+    assert store.get_kv("step_watch:green:p1") == "[]"
+
+
+def test_two_episodes_closing_together_send_one_red(db):
+    store.upsert_plan(plan())
+    sender = FakeSender()
+    sw = watch(Sources(readings=readings(n=288 * 12, t0=datetime(2020, 2, 19))), sender)
+    night_date = date(2020, 2, 21)
+    for i in range(2):
+        store.upsert_alarm_event(AlarmEvent(event_id=f"ae-{i}", tier="actual_low", started_at=datetime(2020, 2, 22, 1 + i, 0),
+                                            rearm_count=1, crossed_actual=True, is_demo=True))
+    clock.set(speed=60.0, start=datetime(2020, 2, 22, 2, 30))
+
+    async def both():
+        return await asyncio.gather(sw.safety(night_date), sw.safety(night_date))
+
+    a, b = asyncio.run(both())
+    assert [e["budget"] for e in a + b] == ["sent", "red_duplicate"] and len(sender.sent) == 1
+
+
+def test_a_hold_stamped_by_the_doctors_wall_clock_still_holds_the_running_step(db):
+    sw = watch(Sources())
+    store.upsert_plan(plan())
+    clock.set(speed=60.0, start=datetime(2020, 2, 9, 9, 0))  # replay: the gate day of step 1
+    sw.on_plan_message(DoctorMessage(message_id="m", kind="hold_step", hold_weeks=2, created_at=datetime(2026, 9, 27, 18, 0)))
+    assert sw.active_plan().steps[1].planned_start == date(2020, 2, 26)
+    clock.set(speed=60.0, start=datetime(2020, 1, 10, 9, 0))  # before the plan started: nothing to hold
+    sw.on_plan_message(DoctorMessage(message_id="m2", kind="hold_step", hold_weeks=2, created_at=datetime(2020, 1, 10, 9, 0)))
+    assert sw.active_plan().steps[0].planned_start == date(2020, 1, 15) and sw.active_plan().steps[1].planned_start == date(2020, 2, 26)
+    store.upsert_plan(plan(n_steps=2))  # on the maintenance step there is no step-up to hold
+    clock.set(speed=60.0, start=datetime(2020, 3, 1, 9, 0))
+    sw.on_plan_message(DoctorMessage(message_id="m3", kind="hold_step", hold_weeks=8, created_at=clock.now()))
+    assert [s_.planned_start for s_ in sw.active_plan().steps] == [date(2020, 1, 15), date(2020, 2, 12)]
+
+
+def test_a_plan_update_keeps_the_green_run_and_the_watch_runs_before_standing(db):
+    sw = watch(Sources())
+    clock.set(speed=60.0, start=datetime(2020, 2, 18, 7, 5))
+    store.upsert_plan(plan(n_steps=2))
+    store.set_kv("step_watch:green:p1", '["p1:1"]')
+    edited = plan(n_steps=2).model_copy(update={"drug_label": "tirzepatide (edited)"})
+    sw.on_plan_message(DoctorMessage(message_id="m", kind="plan_update", plan=edited, created_at=clock.now()))
+    assert sw.active_plan().drug_label == "tirzepatide (edited)" and sw.green_weeks(sw.active_plan()) == 1
+    from app import main
+
+    src = inspect.getsource(main._evaluate_after_ledger)
+    assert src.index("step_watch.run") < src.index("standing.run")
