@@ -16,14 +16,19 @@ detection; a device that cries wolf every other night gets unplugged.
 
 Scored by replaying every reading through the device's own warning rule.
 Every forecast in these numbers comes from a model trained only on data
-from before it. n = 1 person, retrospective.
+from before it; the model's settings were chosen on these same blocks, so
+treat 75% as an upper estimate. n = 1 person, retrospective.
 
 <!-- END HEADLINE -->
 
 ## Event definitions (ml/events.py; every number below uses these)
 
-The replay runs every reading through the backend's warning rule
-(backend/app/alarm.py, Idle -> Pending), not a proxy for it.
+The replay runs every reading through the WARNING half of the backend's
+alarm rule (alarm.py's written spec, Idle -> Pending, confirmed by Chris). It
+models when a warning starts and clears, which is what detection, lead, and
+false alarms depend on; it does not model what happens after (escalation of
+an unacknowledged warning after 5 min, acknowledgment, the actual-low alarm's
+own states).
 
 - **Forecast:** the predicted glucose 30 min ahead, made from the last 60 min
   as 13 five-minute slots (`features.slot_windows`, the same code the Pi runs
@@ -75,7 +80,8 @@ The replay runs every reading through the backend's warning rule
   or before t. No forecast in a stretch's first hour (0.53% of readings).
 - **Split by time, never at random:** train up to 2026-07-26 13:38, held
   out 2026-07-26 13:38 to 2026-09-20 (the final 56 days; 151,970 / 15,307
-  rows). Training rows stop 30 min before the split so no label crosses it;
+  rows). Training rows stop 35 min before the split (labels land 27.5-32.3
+  min after t, from slot rounding) so no label crosses it;
   early stopping uses the last 28 days of the TRAIN period only.
 - **Rolling folds:** 5 consecutive 56-day blocks, 2025-12-14 to 2026-09-20
   (the last one is the held-out period). Each block is forecast by a model
@@ -87,8 +93,9 @@ The replay runs every reading through the backend's warning rule
 
 - XGBoost 3.4.1, `reg:quantileerror` at quantile 0.2, on the 30-min DELTA
   (the current value is added back): eta 0.05, max_depth 6,
-  min_child_weight 10, subsample 0.8, colsample 0.8, hist, 657 rounds.
-  Saved as XGBoost JSON (4.1 MB), never a pickle.
+  min_child_weight 10, subsample 0.8, colsample 0.8, hist, 559 rounds.
+  Saved as XGBoost JSON (3.5 MB), never a pickle; predict.py loads it at
+  import, so a missing or broken model fails at boot.
 - **16 features, glucose only** (ml/models/features.py, the one function
   training and the Pi share): current value; lags at 5/10/15/30/60 min;
   rate of change over 5/15/30 min; acceleration; rolling mean/std/min of
@@ -96,7 +103,10 @@ The replay runs every reading through the backend's warning rule
   inputs, so the forecaster runs on any CGM feed. A dropped reading is a
   missing value, never filled in.
 - **Pi check:** forecast_v1_check.json holds a SYNTHETIC window and the value
-  `predict()` must return for it (75.873); the Pi reproduces it within 1e-3.
+  `predict()` must return for it (75.953); the Pi reproduces it within 1e-3
+  (ml/tests/test_train.py checks the same on the laptop). The Pi passes
+  `features.latest_window` at least the last 100 min of readings
+  (HISTORY_MIN); with that, it builds exactly the training window (tested).
 
 ### Chosen operating point (checkpoints 3 and 4, George and Chris, 2026-09-26)
 
@@ -123,7 +133,7 @@ Overnight (22:00-07:00), the bedside use case:
 | Rolling folds | B 15-min trend | 80 | 79% (19) | 25 min | 0.47 | 0.42 |
 | Rolling folds | B 15-min trend | 70 | 58% (14) | 25 min | 0.35 | 0.30 |
 | Rolling folds | C weighted rate | 80 | 79% (19) | 25 min | 0.48 | 0.42 |
-| Held-out 8 wk (5 lows) | **Model q0.2** | **85** | **100% (5)** | 25 min | 0.24 | 0.16 |
+| Held-out 8 wk (5 lows) | **Model q0.2** | **85** | **100% (5)** | 25 min | 0.22 | 0.15 |
 | Held-out 8 wk | B 15-min trend | 80 | 100% (5) | 25 min | 0.35 | 0.27 |
 | Full history (65 lows) | B 15-min trend | 80 | 60% (39) | 30 min | 0.51 | 0.44 |
 
@@ -134,25 +144,36 @@ Overnight (22:00-07:00), the bedside use case:
   scored on data it trained on.
 - **Point error** on held-out rows (mg/dL at t+30, MAE overall / where the
   truth is under 100): persistence 18.96 / 19.07, B 21.12 / 20.64, model
-  20.34 / 9.61. The model is a low quantile, so it is biased low by design
+  20.36 / 9.64. The model is a low quantile, so it is biased low by design
   overall and most accurate exactly where lows happen.
 
 ### Excluded events (step 3.6)
 
 All 6 held-out lows were plotted for review by the sensor wearer
-(ml/review_lows.py). **None were excluded: all 6 are counted**, including 2
+(ml/review_lows.py). Chris did not flag any before this sheet was written,
+so **none were excluded: all 6 are counted**, including 2
 with the fast-recovery shape typical of sensor artifacts (a rise of more
 than 4 mg/dL/min after the lowest reading). The model warned 10-60 min ahead
-of all 6, so an exclusion could not have raised its detection. Training data
-is never filtered by this review.
+of all 6, so an exclusion could not have raised its detection. Any later
+flag in ml/data/review_flags.csv drops that low from the held-out AND the
+rolling-fold counts on the next `python -m ml.evaluate`. Training data is
+never filtered by this review.
 
 ### Limitations (say these before anyone asks)
 
 - **n = 1, retrospective.** One person's history, replayed; not a trial.
 - **24 overnight lows** in the rolling folds: one low is about 4 percentage
   points, so the detection gap to B (18 vs 19 of 24) is within noise. The
-  false-alarm gap (55 vs 131 warnings) is not.
-- **Daytime is weaker.** Over the whole day (53 lows) the model catches 64%
+  false-alarm gap (54 vs 131 warnings) is not.
+- **The settings were chosen on the blocks they are scored on.** The quantile
+  objective, quantile 0.2, and threshold 85 were picked after seeing the
+  rolling-fold and held-out results (85 also lies above the planned 70/75/80
+  sweep). The model itself never trained on a block it is scored on, but the
+  choice of settings did see them, so 75% is optimistic; a fresh period of
+  data is the honest test. The false-alarm advantage over B holds at every
+  nearby setting (0.13-0.29 per night against B's 0.35-0.56), so the
+  conclusion does not hinge on the pick.
+- **Daytime is weaker.** Over the whole day (53 lows) the model catches 62%
   at 0.50 false alarms per day, against B's 74% at 1.16 per day. The
   operating point was chosen for the bedside night; daytime lows are
   mostly caught by the person, awake.
@@ -167,7 +188,11 @@ is never filtered by this review.
 - The warning rule is replayed from alarm.py's written spec, confirmed by
   Chris: a missing forecast resets the consecutive count, and a warning
   that is on stays on until 2 forecasts at or above the threshold, or an
-  actual low takes over.
+  actual low takes over. Only the warning half is replayed (see Event
+  definitions); alarm.py itself is not written yet.
+- A reading is dropped (training and replay) when the next one arrives
+  within 2.5 min; the Pi has already forecast from it by then. Rare
+  (26 of 169,188 readings) and tiny.
 
 Reproduce: `python -m ml.clean_clarity && python -m ml.build_dataset &&
 python -m ml.train && python -m ml.evaluate` (the raw exports stay off-repo).
