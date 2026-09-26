@@ -65,17 +65,22 @@ class StandingEngine:
                                    self.thresholds, alarm_source=alarm_source),
         ]
         change = self.therapy_change_date()
-        if change is not None and today >= change + timedelta(days=7):  # Follow-up (verify): from day 7 after a confirmed change
-            w = self.thresholds.window_nights
-            before = store.select_night_records(change - timedelta(days=w), change - timedelta(days=1))
-            after_7 = store.select_night_records(change, change + timedelta(days=6))
-            after_14 = store.select_night_records(change, min(today, change + timedelta(days=w - 1)))
+        w = self.thresholds.window_nights
+        # Follow-up (verify): once the first 7 nights after the change are in, until the 14th; then it rests
+        if change is not None and change + timedelta(days=6) <= today <= change + timedelta(days=w - 1):
+            demo = self.is_demo()
+            def nights(a, b):
+                return [r for r in store.select_night_records(a, b) if r.is_demo == demo]
+            before = nights(change - timedelta(days=w), change - timedelta(days=1))
+            after_7 = nights(change, change + timedelta(days=6))
+            after_14 = nights(change, min(today, change + timedelta(days=w - 1)))
             out.append(evaluate_follow_up(before, after_7, after_14, self.thresholds, alarm_source=alarm_source))
         return out
 
-    @staticmethod
-    def therapy_change_date() -> date | None:
-        raw = store.get_kv("therapy_change_date")
+    def therapy_change_date(self) -> date | None:
+        from .messages import therapy_change_key
+
+        raw = store.get_kv(therapy_change_key(self.is_demo()))
         return date.fromisoformat(raw) if raw else None
 
     @staticmethod

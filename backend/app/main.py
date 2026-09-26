@@ -303,9 +303,15 @@ def _broadcast_card_sent(payload: dict) -> None:
 
 
 async def _relay_tick() -> None:
-    """Every relay poll: retry undelivered cards, expire unanswered doctor messages."""
-    await runtime.cards.flush()
-    await runtime.messages.expire()
+    """Every relay poll: retry undelivered cards, expire unanswered doctor messages, retry receipts."""
+    try:
+        await runtime.cards.flush()
+    except Exception:
+        logging.getLogger("irin.main").exception("card flush failed")
+    try:
+        await runtime.messages.expire()
+    except Exception:
+        logging.getLogger("irin.main").exception("message expiry failed")
 
 
 def _make_relay_client() -> RelayClient:
@@ -700,7 +706,7 @@ def _message_error(e: MessageError) -> HTTPException:
     return HTTPException(status_code=e.status, detail=e.detail)
 
 
-@app.get("/api/rounds/messages")
+@app.get("/api/rounds/messages", dependencies=[Depends(require_pin)])
 async def rounds_messages(pending_only: bool = True) -> list[dict]:
     """Doctor messages for the confirm takeover: pending by default, all with pending_only=false."""
     docs = runtime.messages.pending() if pending_only else store.select_doctor_messages()

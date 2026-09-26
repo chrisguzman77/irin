@@ -17,7 +17,9 @@ from app import store
 from app.clock import clock
 from app.contracts import DoctorMessage, Pairing, Settings
 from app.rounds import crypto
-from app.rounds.messages import THERAPY_CHANGE_KEY, DoctorMessages, MessageError
+from app.rounds.messages import DoctorMessages, MessageError, therapy_change_key
+
+THERAPY_CHANGE_KEY = therapy_change_key(True)
 
 T0 = datetime(2020, 1, 15, 8, 0)
 
@@ -77,7 +79,7 @@ def test_confirm_applies_once_and_posts_the_resolution(rig):
     assert doc["message"]["status"] == "confirmed" and settings.basal_units == 24.0
     [t] = therapy_changes()
     assert t.insulin_units == 24.0 and t.confirmed and "basal 24 u from 2020-01-16" in t.dose_label
-    assert store.get_kv(THERAPY_CHANGE_KEY) == "2020-01-16"
+    assert store.get_kv(THERAPY_CHANGE_KEY) == "2020-01-16" and store.get_kv(therapy_change_key(False)) is None
     assert resolutions == [("m1", "confirmed")] and resolved[0]["status"] == "confirmed"
     with pytest.raises(MessageError) as e:
         asyncio.run(svc.confirm("m1"))
@@ -155,7 +157,8 @@ def test_endpoints_are_fresh_pin_and_the_snapshot_lists_pending(monkeypatch, tmp
             msg.model_dump_json().encode(), nonce).ciphertext
         main.runtime.messages.receive([{"message_id": "e1", "sender_id": "doc-7", "nonce": crypto.b64(nonce),
                                         "ciphertext": crypto.b64(ct), "kind": "insulin_change", "is_demo": True}])
-        assert [m["message"]["message_id"] for m in c.get("/api/rounds/messages").json()] == ["e1"]
+        assert c.get("/api/rounds/messages").status_code == 401  # plaintext doctor content: PIN
+        assert [m["message"]["message_id"] for m in c.get("/api/rounds/messages", headers={"X-PIN": "1234"}).json()] == ["e1"]
         with c.websocket_connect("/ws") as ws:
             snap = json.loads(ws.receive_text())["payload"]
             assert snap["pending_doctor_messages"][0]["message_id"] == "e1"
@@ -163,7 +166,68 @@ def test_endpoints_are_fresh_pin_and_the_snapshot_lists_pending(monkeypatch, tmp
         r = c.post("/api/rounds/messages/e1/confirm", headers={"X-PIN": "1234"})
         assert r.status_code == 200 and r.json()["message"]["status"] == "confirmed"
         assert c.get("/api/settings").json()["basal_units"] == 24.0
-        assert c.get("/api/rounds/messages").json() == []
+        assert c.get("/api/rounds/messages", headers={"X-PIN": "1234"}).json() == []
         assert c.post("/api/rounds/messages/e1/decline", headers={"X-PIN": "1234"}).status_code == 409
         main.runtime.pairing.pairings.pop("doc-7")
         main.runtime.settings.basal_units = None
+
+
+def test_malformed_or_unbounded_messages_are_refused_at_receive(rig):
+    svc, seal, settings, *_ = rig
+    bad = [DoctorMessage(message_id="b1", kind="insulin_change", insulin="basal", new_units=-5.0, created_at=T0),
+           DoctorMessage(message_id="b2", kind="insulin_change", insulin="basal", new_units=500.0, created_at=T0),
+           DoctorMessage(message_id="b3", kind="insulin_change", insulin="basal", new_units=float("nan"), created_at=T0),
+           DoctorMessage(message_id="b4", kind="insulin_change", created_at=T0),
+           DoctorMessage(message_id="b5", kind="hold_step", hold_weeks=3, plan_id="p1", created_at=T0)]
+    assert svc.receive([seal(m) for m in bad]) == [] and svc.pending() == []
+
+
+def test_the_other_worlds_message_waits_and_cannot_be_answered_here(rig):
+    svc, seal, settings, pairings, *_ = rig
+    pairings["doc-2"] = Pairing(device_id="irin-test", doctor_id="doc-2", doctor_display_name="Dr. Real",
+                                doctor_pk=pairings["doc-1"].doctor_pk, status="paired", is_demo=False)
+    assert svc.receive([seal(basal_change("r1"), is_demo=False, sender="doc-2")]) == []  # device is in demo: left on the relay
+    svc.receive([seal(basal_change("d1"))])
+    svc.is_demo = lambda: False  # the mode switch
+    with pytest.raises(MessageError) as e:
+        asyncio.run(svc.confirm("d1"))
+    assert e.value.status == 409 and settings.basal_units == 22.0
+    clock.advance(6 * 3600)
+    assert asyncio.run(svc.expire()) == 0  # the demo message does not expire under the live clock either
+    svc.is_demo = lambda: True
+    assert asyncio.run(svc.confirm("d1"))["message"]["status"] == "confirmed"
+
+
+def test_a_revoked_doctors_pending_message_never_applies(rig):
+    svc, seal, settings, pairings, resolutions, *_ = rig
+    svc.receive([seal(basal_change())])
+    pairings["doc-1"] = pairings["doc-1"].model_copy(update={"status": "revoked", "doctor_pk": ""})
+    with pytest.raises(MessageError) as e:
+        asyncio.run(svc.confirm("m1"))
+    assert e.value.status == 410 and settings.basal_units == 22.0 and therapy_changes() == []
+    assert svc.pending() == []
+
+
+def test_a_lost_receipt_is_retried_on_the_next_tick(rig):
+    svc, seal, settings, pairings, resolutions, *_ = rig
+    calls = {"n": 0}
+
+    async def flaky(mid, status):
+        calls["n"] += 1
+        return calls["n"] > 1  # the relay is down the first time
+
+    svc.post_resolution = flaky
+    svc.receive([seal(basal_change())])
+    doc = asyncio.run(svc.confirm("m1"))
+    assert doc["resolution_posted"] is False and settings.basal_units == 24.0
+    asyncio.run(svc.expire())
+    assert store.select_doctor_message("m1")["resolution_posted"] is True and calls["n"] == 2
+
+
+def test_a_past_start_date_is_clamped_to_the_confirm_day(rig):
+    svc, seal, settings, *_ = rig
+    old = DoctorMessage(message_id="o1", kind="insulin_change", insulin="basal", new_units=20.0,
+                        start_date=date(2019, 12, 1), created_at=T0)
+    svc.receive([seal(old)])
+    asyncio.run(svc.confirm("o1"))
+    assert store.get_kv(THERAPY_CHANGE_KEY) == T0.date().isoformat()
