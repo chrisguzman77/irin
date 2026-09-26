@@ -5,7 +5,8 @@ forecasting, logging, and the phone path never read this (invariant 6).
 
 Rules:
 - Home on any detection, instantly.
-- Away only on AWAY_AFTER_MIN (15) of sustained absence, timed on clock.py,
+- Away only on away_after_min (AWAY_AFTER_MIN = 15 by default; config
+  AWAY_AFTER_MIN may shorten it for testing) of sustained absence, timed on clock.py,
   AND outside the night window: radar absence alone NEVER sets Away at night.
 - The manual toggle (Settings.presence_override: home | away) always wins
   over every automatic input; "auto" hands control back to the radar.
@@ -40,8 +41,9 @@ PresenceObserver = Callable[[PresenceState], None]
 
 
 class PresenceMachine:
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, away_after_min: float = AWAY_AFTER_MIN) -> None:
         self.settings = settings
+        self.away_after_min = away_after_min
         self.state = PresenceState(mode="home", source="radar", since=clock.now())
         self._absent_since: datetime | None = None
         self._absent_at_night = False  # the running absence began (or continued) inside the night window
@@ -95,7 +97,7 @@ class PresenceMachine:
             elif self._absent_since is None or self._absent_at_night:
                 self._absent_since = now  # a fresh daytime timer (also the restart at window end)
                 self._absent_at_night = False
-            elif now - self._absent_since >= timedelta(minutes=AWAY_AFTER_MIN):
+            elif now - self._absent_since >= timedelta(minutes=self.away_after_min):
                 self._set("away", "radar")
         # raw is None: no evidence, nothing changes
         return self.state
