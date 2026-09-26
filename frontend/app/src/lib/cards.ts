@@ -35,12 +35,6 @@ export async function listCards(base: string): Promise<CardRecord[]> {
   return rows.map(asRecord).filter((r): r is CardRecord => r !== null);
 }
 
-export async function listPairings(base: string): Promise<Pairing[]> {
-  const res = await fetch(`${base}/api/pairings`, { cache: "no-store" });
-  if (!res.ok) return [];
-  return (await res.json()) as Pairing[];
-}
-
 export type SampleFixture = "signal_card_standing" | "signal_card_step";
 
 /** Demo panel: seal a sample card to every paired demo doctor (PIN, demo only). */

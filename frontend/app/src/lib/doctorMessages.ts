@@ -7,6 +7,8 @@ import type { components } from "../types/contracts";
 // fresh-PIN verbs (lib/freshPin.ts postFresh).
 export type DoctorMessage = components["schemas"]["DoctorMessage"];
 
+/** The one paired doctor's name, else null ("Your doctor"). */
+export const pairedDoctorName = (pairingState: unknown) => globalThis.irinDoctorName(pairingState);
 export const echoDoctorMessage = (m: DoctorMessage, doctorName: string | null) => globalThis.irinDoctorEcho(m, doctorName);
 
 export const messagePath = (id: string, verb: "confirm" | "decline") =>
