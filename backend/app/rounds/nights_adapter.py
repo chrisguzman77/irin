@@ -16,13 +16,28 @@ from datetime import date, datetime, time, timedelta
 from typing import Any, Callable
 
 from ..contracts import AlarmEvent, PresenceState, Reading, Settings, Treatment
-from ..reports import night_bounds
+from ..windows import parse_hhmm
 
 CONTEXT_BEFORE = timedelta(hours=3)  # late meals and corrections before the night
 EXERCISE_FROM = time(17, 0)  # nights.py: exercise logged after 17:00 counts; treatments are read from there
 CONTEXT_AFTER = timedelta(hours=2)  # recovery slopes and rebounds after the window end
 
 Rows = Callable[[datetime, datetime], list[Any]]
+
+
+def night_window(night_date: date, night_start: str, night_end: str) -> tuple[datetime, datetime]:
+    """Rounds keys a night by the EVENING it starts on (nights.py and the
+    fixtures agree: night_date = window_start.date()); the morning report keys
+    by the morning it ends on. This is the one place that converts."""
+    a, b = parse_hhmm(night_start), parse_hhmm(night_end)
+    start = datetime.combine(night_date, a)
+    end = datetime.combine(night_date + timedelta(days=1) if b <= a else night_date, b)
+    return start, end
+
+
+def night_ended_on(morning: date, night_start: str, night_end: str) -> date:
+    """The night_date of the night that ended this morning (the scheduler fires with the morning)."""
+    return morning - timedelta(days=1) if parse_hhmm(night_end) <= parse_hhmm(night_start) else morning
 
 
 @dataclass
@@ -47,7 +62,7 @@ class NightsAdapter:
     brain_only: Callable[[], bool] = lambda: False
 
     def night_inputs(self, night_date: date) -> NightInputs:
-        start, end = night_bounds(night_date, self.settings.night_window_start, self.settings.night_window_end)
+        start, end = night_window(night_date, self.settings.night_window_start, self.settings.night_window_end)
         brain = self.brain_only()
         readings = [r for r in self.readings_for(start - CONTEXT_BEFORE, end + CONTEXT_AFTER) if not r.is_stale]
         treatments_from = min(start - CONTEXT_BEFORE, datetime.combine(start.date(), EXERCISE_FROM))

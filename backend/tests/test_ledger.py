@@ -17,7 +17,7 @@ from app.rounds.ledger import Ledger
 from app.rounds.nights_adapter import NightsAdapter
 from app.scheduler import Scheduler
 
-NIGHT = date(2020, 1, 2)  # the morning the night ends on
+NIGHT = date(2020, 1, 1)  # Rounds keys a night by the EVENING it starts on (nights.py, the fixtures)
 START = datetime(2020, 1, 1, 22, 0)
 END = datetime(2020, 1, 2, 7, 0)
 
@@ -150,7 +150,7 @@ def test_record_appears_at_window_end_under_replay(db):
     clock.set(speed=60.0, start=datetime(2020, 1, 2, 6, 59))
     try:
         s = Scheduler(Settings())
-        s.register("ledger", "07:00", lambda d: built.append(led.build_night(d)))
+        s.register("ledger", "07:00", lambda d: built.append(led.build_night(led.night_ended_on(d))))
         assert s.tick() == []
         clock.advance(2 * 60)  # 07:01
         assert s.tick() == ["ledger"] and built[0].night_date == NIGHT
@@ -174,7 +174,8 @@ def test_app_serves_nights_and_builds_on_demand(monkeypatch, tmp_path):
     monkeypatch.setattr(auth.config, "PIN", "1234")
     with TestClient(main.app) as c:
         assert c.get("/api/nights").json() == []
-        night = main.runtime.datasource.rows[-1][0].date().isoformat()
+        first = main.runtime.datasource.rows[0][0]  # the scenario's night starts the evening before its first row
+        night = (first.date() - timedelta(days=1) if first.hour < 7 else first.date()).isoformat()
         assert c.post("/api/nights/build", json={"night_date": night}).status_code == 401
         r = c.post("/api/nights/build", json={"night_date": night}, headers={"X-PIN": "1234"})
         assert r.status_code == 200 and r.json()["is_demo"] is True and r.json()["night_date"] == night

@@ -75,7 +75,7 @@ def test_the_save_shaped_episode_is_one_event_escalated_and_crossed(rig):
     assert e.ack_source == "app" and e.acknowledged_at is not None and e.rearm_count == 1
     assert e.presence_during == "home" and e.is_demo is True and abs((e.started_at - T0).total_seconds()) < 1
     assert store.select_alarm_events(T0 - timedelta(hours=1))[0] == e
-    assert e.event_id.startswith("ae-20200101T020000-actual_low")
+    assert e.event_id.startswith("ae-20200101T020000") and e.event_id.endswith("-actual_low")
 
 
 def test_warning_only_run_is_a_near_miss(rig):
@@ -178,3 +178,38 @@ def test_app_serves_alarm_events():
 
     with TestClient(app) as c:
         assert c.get("/api/alarm_events").json() == []
+
+
+def test_a_low_replacing_an_indicator_starts_a_fresh_episode(rig):
+    """A high that has been on for hours, then a warning with the sleeper present:
+    the low's started_at, start window, and id are the warning's, not the high's."""
+    eng, hal, rec = rig
+    eng.process_reading(reading(260))  # high, room empty
+    advance(eng, rec, 180, present=False)
+    warn_at = clock.now()
+    eng.process_forecast(forecast(78))
+    eng.process_forecast(forecast(74))  # pending predicted_low replaces the high
+    advance(eng, rec, 3, present=True)
+    eng.acknowledge("app")
+    assert [e.tier for e in rec.events] == ["high", "predicted_low"]
+    low = rec.events[-1]
+    assert abs((low.started_at - warn_at).total_seconds()) < 1 and low.presence_during == "home"
+    assert rec.events[0].presence_during == "away" and rec.events[0].started_at < low.started_at
+
+
+def test_two_episodes_in_one_second_keep_two_rows(rig):
+    eng, hal, rec = rig
+    eng.process_reading(reading(260))
+    eng.process_reading(reading(240))
+    eng.process_reading(reading(261))
+    eng.process_reading(reading(240))
+    assert len(rec.events) == 2 and len(store.select_alarm_events(T0 - timedelta(days=1))) == 2
+
+
+def test_an_observer_error_never_reaches_the_engine(rig):
+    eng, hal, rec = rig
+    rec.brain_only = lambda: 1 / 0
+    eng.process_reading(reading(58))
+    eng.process_reading(reading(85))
+    eng.process_reading(reading(119))  # closes the episode: the verdict raises, the engine still goes idle quietly
+    assert eng.state.state == "idle" and hal.calls[-1][0] in ("set_leds", "stop_sound")

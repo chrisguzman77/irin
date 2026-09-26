@@ -16,7 +16,7 @@ from typing import Callable
 
 from .. import store
 from ..contracts import NightRecord
-from .nights_adapter import NightInputs, NightsAdapter
+from .nights_adapter import NightInputs, NightsAdapter, night_ended_on
 
 log = logging.getLogger("irin.rounds.ledger")
 
@@ -39,9 +39,14 @@ class Ledger:
     is_demo: Callable[[], bool] = lambda: False
     on_record: Callable[[NightRecord], None] | None = None  # R8's evaluation hangs here later
 
+    def night_ended_on(self, morning: date) -> date:
+        s = self.adapter.settings
+        return night_ended_on(morning, s.night_window_start, s.night_window_end)
+
     def build_night(self, night_date: date) -> NightRecord:
-        """Build (or rebuild) one night and store it. Raises when the inputs cannot
-        be read; the scheduler job logs and the night is rebuilt by hand."""
+        """Build (or rebuild) one night (night_date = the evening it starts on) and
+        store it. Raises when the inputs cannot be read; the scheduler job logs
+        and the night is rebuilt by hand."""
         inp = self.adapter.night_inputs(night_date)
         codes, source = self.adapter.classify(inp)
         record = record_from(inp, codes, source, self.adapter.metrics(inp), self.is_demo())

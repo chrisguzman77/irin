@@ -29,8 +29,8 @@ from .alarm import AlarmEngine, Transition
 from .auth import require_pin
 from .clock import clock
 from .config import REPO_ROOT, config
-from .contracts import (FRESH_PIN_ENDPOINTS, AlarmEvent, AlarmState, FamilyRecipient, FamilyStory, MorningReport,
-                        NightRecord, Reading, Settings, Treatment, WSMessage)
+from .contracts import (FRESH_PIN_ENDPOINTS, AlarmEvent, AlarmState, FamilyRecipient, FamilyStory, LowEvent,
+                        MorningReport, NightRecord, Reading, Settings, Treatment, WSMessage)
 from .datasource.base import DataSource
 from .datasource.nightscout import NightscoutDataSource
 from .datasource.replay import ReplayDataSource
@@ -43,6 +43,7 @@ from .presence import PresenceMachine, PresenceState
 from .reports import ReportBuilder, SmtpMailer
 from .rounds.alarm_events import AlarmEventRecorder
 from .rounds.ledger import Ledger
+from .rounds.low_events import LowEventDetector
 from .rounds.nights_adapter import NightsAdapter
 from .scheduler import Scheduler, basal_logged_on, timedatectl_synced
 from . import voice_out
@@ -80,6 +81,7 @@ class Runtime:
     family: "FamilyStoryService | None" = None
     alarm_events: "AlarmEventRecorder | None" = None
     ledger: "Ledger | None" = None
+    low_events: "LowEventDetector | None" = None
 
 
 runtime = Runtime(mode="nightscout" if config.DATASOURCE == "nightscout" else "replay",
@@ -219,18 +221,29 @@ runtime.ledger = Ledger(
     is_demo=lambda: runtime.mode == "replay")
 
 
-def _ledger_job(night_date: date) -> None:
-    task = asyncio.get_running_loop().create_task(asyncio.to_thread(_build_night_record, night_date))
+runtime.low_events = LowEventDetector(adapter=runtime.ledger.adapter, is_demo=lambda: runtime.mode == "replay")
+
+
+def _ledger_job(morning: date) -> None:
+    """At night-window end: the night that just ended (keyed by its evening date)."""
+    task = asyncio.get_running_loop().create_task(
+        asyncio.to_thread(_build_night_record, runtime.ledger.night_ended_on(morning)))
     _broadcast_tasks.add(task)
     task.add_done_callback(_broadcast_tasks.discard)
 
 
 def _build_night_record(night_date: date) -> NightRecord | None:
+    """The ledger row, then the night's low events (R4) from the same inputs."""
     try:
-        return runtime.ledger.build_night(night_date)
+        record = runtime.ledger.build_night(night_date)
     except Exception:
         logging.getLogger("irin.main").exception("night ledger failed for %s", night_date)
         return None
+    try:
+        runtime.low_events.detect(night_date)
+    except Exception:
+        logging.getLogger("irin.main").exception("low events failed for %s; the ledger row stands", night_date)
+    return record
 
 
 runtime.scheduler.register("ledger", lambda: runtime.settings.night_window_end, _ledger_job)
@@ -528,11 +541,20 @@ class BuildNightRequest(BaseModel):
 
 @app.post("/api/nights/build", dependencies=[Depends(require_pin)], response_model=NightRecord)
 async def build_night(req: BuildNightRequest) -> NightRecord:
-    """Build or rebuild one night now (the demo panel, the seek's catch-up)."""
-    record = await asyncio.to_thread(_build_night_record, req.night_date or clock.now().date())
+    """Build or rebuild one night now (the demo panel, the seek's catch-up).
+    night_date is the EVENING the night starts on; default: the night that ended this morning."""
+    record = await asyncio.to_thread(_build_night_record,
+                                     req.night_date or runtime.ledger.night_ended_on(clock.now().date()))
     if record is None:
         raise HTTPException(status_code=500, detail="night ledger failed; see the log")
     return record
+
+
+@app.get("/api/low_events", response_model=list[LowEvent])
+async def low_events(days: int = 14) -> list[LowEvent]:
+    """Nocturnal lows (R4), oldest first."""
+    days = max(1, min(days, 365))
+    return store.select_low_events(clock.now().date() - timedelta(days=days))
 
 
 @app.get("/api/alarm_events", response_model=list[AlarmEvent])

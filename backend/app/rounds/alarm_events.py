@@ -37,6 +37,7 @@ from ..contracts import AlarmEvent
 log = logging.getLogger("irin.rounds.alarm_events")
 
 TIER_RANK = {"high": 1, "stale": 2, "predicted_low": 3, "actual_low": 4}
+LOW_TIERS = ("predicted_low", "actual_low")
 START_WINDOW = timedelta(minutes=2)  # any detection this close to the alarm start = home
 PRE_START_BUFFER = timedelta(minutes=2)  # samples kept from before an episode opens
 BLIP_MAX = 1  # detections tolerated in an otherwise empty room (a radar blip)
@@ -77,12 +78,26 @@ class AlarmEventRecorder:
     # --- the observer ---
 
     def __call__(self, t: Transition) -> None:
+        try:
+            self._observe(t)
+        except Exception:  # alarm.py calls observers bare: nothing here may ever reach the engine
+            log.exception("alarm event recorder failed on %s -> %s", t.old_state, t.new_state)
+
+    def _open(self, t: Transition) -> None:
+        self.open = _Episode(started_at=t.at, tier=t.trigger_type or "high")
+        self.open.samples = [s for s in self.recent if s[0] >= t.at - PRE_START_BUFFER]
+        self.recent = []
+
+    def _observe(self, t: Transition) -> None:
         if t.old_state == "idle" and t.new_state != "idle":
             if self.open is not None:  # cannot happen through the hook; never lose an episode
                 self._close(t.at)
-            self.open = _Episode(started_at=t.at, tier=t.trigger_type or "high")
-            self.open.samples = [s for s in self.recent if s[0] >= t.at - PRE_START_BUFFER]
-            self.recent = []
+            self._open(t)
+        elif (self.open is not None and t.trigger_type in LOW_TIERS and self.open.tier not in LOW_TIERS
+              and t.new_state != "idle"):
+            # a low replaces a high or stale indicator: alarm.py starts a fresh episode there, so do we
+            self._close(t.at)
+            self._open(t)
         ep = self.open
         if ep is None:
             return
@@ -109,6 +124,9 @@ class AlarmEventRecorder:
     # --- the verdict and the write ---
 
     def _presence_during(self, ep: _Episode) -> str:
+        """B7 as coded: a detection within 2 min of the start, or detections in
+        at least half the known samples (a tie reads home), = home; no
+        detection, or a single blip among 4+ samples, = away; else unknown."""
         if self.brain_only():
             return "unknown"
         known = [(at, v) for at, v in ep.samples if v is not None]
@@ -129,7 +147,7 @@ class AlarmEventRecorder:
         ep, self.open = self.open, None
         if ep is None:
             return
-        event = AlarmEvent(event_id=f"ae-{ep.started_at.strftime('%Y%m%dT%H%M%S')}-{ep.tier}", tier=ep.tier,
+        event = AlarmEvent(event_id=f"ae-{ep.started_at.strftime('%Y%m%dT%H%M%S%f')}-{ep.tier}", tier=ep.tier,
                            started_at=ep.started_at, acknowledged_at=ep.acknowledged_at, ack_source=ep.ack_source,
                            escalated=ep.escalated, rearm_count=ep.rearm_count, crossed_actual=ep.crossed_actual,
                            presence_during=self._presence_during(ep), is_demo=self.is_demo())

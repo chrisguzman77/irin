@@ -10,7 +10,7 @@ from datetime import date, datetime
 from pathlib import Path
 
 from .config import config
-from .contracts import AlarmEvent, FamilyStory, MorningReport, NightRecord, PresenceState, Reading, Treatment
+from .contracts import AlarmEvent, FamilyStory, LowEvent, MorningReport, NightRecord, PresenceState, Reading, Treatment
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS readings (
@@ -326,3 +326,28 @@ def select_night_records(since: date, until: date | None = None,
     if own:
         conn.close()
     return [NightRecord.model_validate_json(r["json"]) for r in rows]
+
+
+# --- low events (R4): one per nocturnal low, replaced on rebuild ---
+
+
+def upsert_low_event(event: LowEvent, conn: sqlite3.Connection | None = None) -> None:
+    own = conn is None
+    conn = conn or connect()
+    with conn:
+        conn.execute("INSERT OR REPLACE INTO low_events VALUES (?, ?)", (event.low_event_id, event.model_dump_json()))
+    if own:
+        conn.close()
+
+
+def select_low_events(since: date, until: date | None = None, conn: sqlite3.Connection | None = None) -> list[LowEvent]:
+    """By night_date in [since, until], oldest first."""
+    own = conn is None
+    conn = conn or connect()
+    rows = conn.execute("SELECT json FROM low_events").fetchall()
+    if own:
+        conn.close()
+    events = [LowEvent.model_validate_json(r["json"]) for r in rows]
+    events = [e for e in events if since <= e.night_date <= (until or date.max)]
+    events.sort(key=lambda e: e.started_at)
+    return events
