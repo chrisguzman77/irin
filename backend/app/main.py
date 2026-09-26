@@ -30,7 +30,7 @@ from .auth import require_pin
 from .clock import clock
 from .config import REPO_ROOT, config
 from .contracts import (FRESH_PIN_ENDPOINTS, AlarmEvent, AlarmState, FamilyRecipient, FamilyStory, MorningReport,
-                        Reading, Settings, Treatment, WSMessage)
+                        NightRecord, Reading, Settings, Treatment, WSMessage)
 from .datasource.base import DataSource
 from .datasource.nightscout import NightscoutDataSource
 from .datasource.replay import ReplayDataSource
@@ -42,6 +42,8 @@ from .outputs import GatedOutputs
 from .presence import PresenceMachine, PresenceState
 from .reports import ReportBuilder, SmtpMailer
 from .rounds.alarm_events import AlarmEventRecorder
+from .rounds.ledger import Ledger
+from .rounds.nights_adapter import NightsAdapter
 from .scheduler import Scheduler, basal_logged_on, timedatectl_synced
 from . import voice_out
 from .voice import MAX_CARBS_G, MAX_UNITS, VoiceLogger
@@ -77,6 +79,7 @@ class Runtime:
     forwarder: "Forwarder | None" = None
     family: "FamilyStoryService | None" = None
     alarm_events: "AlarmEventRecorder | None" = None
+    ledger: "Ledger | None" = None
 
 
 runtime = Runtime(mode="nightscout" if config.DATASOURCE == "nightscout" else "replay",
@@ -205,6 +208,33 @@ def _replay_rows(cursor: datetime | None) -> tuple[object, list[dict]]:
 
 runtime.forwarder = forwarder_from_config(_replay_rows)
 
+
+# --- the night ledger (R3): George's nights.py over the device's own stores, at night-window end ---
+
+runtime.ledger = Ledger(
+    adapter=NightsAdapter(settings=runtime.settings, readings_for=_readings_between,
+                          treatments_for=_treatments_between, alarm_events_for=store.select_alarm_events,
+                          presence_for=store.select_presence_transitions,
+                          brain_only=lambda: config.IRIN_BRAIN_ONLY),
+    is_demo=lambda: runtime.mode == "replay")
+
+
+def _ledger_job(night_date: date) -> None:
+    task = asyncio.get_running_loop().create_task(asyncio.to_thread(_build_night_record, night_date))
+    _broadcast_tasks.add(task)
+    task.add_done_callback(_broadcast_tasks.discard)
+
+
+def _build_night_record(night_date: date) -> NightRecord | None:
+    try:
+        return runtime.ledger.build_night(night_date)
+    except Exception:
+        logging.getLogger("irin.main").exception("night ledger failed for %s", night_date)
+        return None
+
+
+runtime.scheduler.register("ledger", lambda: runtime.settings.night_window_end, _ledger_job)
+
 ALARM_TICK_CLOCK_SECONDS = 30.0
 _broadcast_tasks: set[asyncio.Task] = set()  # references held so a broadcast is never GC'd mid-flight
 
@@ -228,6 +258,10 @@ runtime.alarm.on_transition(runtime.alarm_events)  # R2 observes; it never calls
 
 
 def _broadcast_presence(state: PresenceState) -> None:
+    try:
+        store.insert_presence_transition(state)  # the toggle history the night ledger reads (R3)
+    except Exception:
+        logging.getLogger("irin.main").exception("presence transition not stored")
     try:
         task = asyncio.get_running_loop().create_task(
             hub.broadcast(WSMessage(type="presence_change", payload=state.model_dump(mode="json"))))
@@ -479,6 +513,26 @@ async def scheduler_state() -> dict:
 @app.get("/api/alarm", response_model=AlarmState)
 async def alarm_state() -> AlarmState:
     return runtime.alarm.state
+
+
+@app.get("/api/nights", response_model=list[NightRecord])
+async def nights(days: int = 14) -> list[NightRecord]:
+    """The night ledger (R3), oldest first."""
+    days = max(1, min(days, 365))
+    return store.select_night_records(clock.now().date() - timedelta(days=days))
+
+
+class BuildNightRequest(BaseModel):
+    night_date: date | None = None
+
+
+@app.post("/api/nights/build", dependencies=[Depends(require_pin)], response_model=NightRecord)
+async def build_night(req: BuildNightRequest) -> NightRecord:
+    """Build or rebuild one night now (the demo panel, the seek's catch-up)."""
+    record = await asyncio.to_thread(_build_night_record, req.night_date or clock.now().date())
+    if record is None:
+        raise HTTPException(status_code=500, detail="night ledger failed; see the log")
+    return record
 
 
 @app.get("/api/alarm_events", response_model=list[AlarmEvent])

@@ -10,7 +10,7 @@ from datetime import date, datetime
 from pathlib import Path
 
 from .config import config
-from .contracts import AlarmEvent, FamilyStory, MorningReport, Reading, Treatment
+from .contracts import AlarmEvent, FamilyStory, MorningReport, NightRecord, PresenceState, Reading, Treatment
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS readings (
@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS doctor_messages (message_id TEXT PRIMARY KEY, json TE
 CREATE TABLE IF NOT EXISTS family_stories (story_id TEXT PRIMARY KEY, json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS reports (night_date TEXT PRIMARY KEY, json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS presence_transitions (since TEXT PRIMARY KEY, json TEXT NOT NULL);
 """
 
 
@@ -264,3 +265,64 @@ def select_alarm_events(since: datetime, until: datetime | None = None,
     events = [e for e in events if e.started_at >= since and (until is None or e.started_at <= until)]
     events.sort(key=lambda e: e.started_at)
     return events
+
+
+# --- the presence TOGGLE history (R3's "away" reason code reads it; the radar never lands here) ---
+
+
+def insert_presence_transition(state: PresenceState, conn: sqlite3.Connection | None = None) -> None:
+    own = conn is None
+    conn = conn or connect()
+    with conn:
+        conn.execute("INSERT OR REPLACE INTO presence_transitions VALUES (?, ?)",
+                     (state.since.isoformat(), state.model_dump_json()))
+    if own:
+        conn.close()
+
+
+def select_presence_transitions(start: datetime, end: datetime,
+                                conn: sqlite3.Connection | None = None) -> list[PresenceState]:
+    """The transitions in [start, end] plus the last one before start (the state in force)."""
+    own = conn is None
+    conn = conn or connect()
+    rows = conn.execute("SELECT json FROM presence_transitions WHERE since <= ? ORDER BY since",
+                        (end.isoformat(),)).fetchall()
+    if own:
+        conn.close()
+    states = [PresenceState.model_validate_json(r["json"]) for r in rows]
+    before = [s for s in states if s.since < start]
+    return (before[-1:] if before else []) + [s for s in states if s.since >= start]
+
+
+# --- night records (R3): one per night_date, replaced on rebuild ---
+
+
+def upsert_night_record(record: NightRecord, conn: sqlite3.Connection | None = None) -> None:
+    own = conn is None
+    conn = conn or connect()
+    with conn:
+        conn.execute("INSERT OR REPLACE INTO night_records VALUES (?, ?)",
+                     (record.night_date.isoformat(), record.model_dump_json()))
+    if own:
+        conn.close()
+
+
+def select_night_record(night_date: date, conn: sqlite3.Connection | None = None) -> NightRecord | None:
+    own = conn is None
+    conn = conn or connect()
+    r = conn.execute("SELECT json FROM night_records WHERE night_date = ?", (night_date.isoformat(),)).fetchone()
+    if own:
+        conn.close()
+    return NightRecord.model_validate_json(r["json"]) if r else None
+
+
+def select_night_records(since: date, until: date | None = None,
+                         conn: sqlite3.Connection | None = None) -> list[NightRecord]:
+    """Oldest first, by night_date in [since, until]."""
+    own = conn is None
+    conn = conn or connect()
+    rows = conn.execute("SELECT json FROM night_records WHERE night_date >= ? AND night_date <= ? ORDER BY night_date",
+                        (since.isoformat(), (until or date.max).isoformat())).fetchall()
+    if own:
+        conn.close()
+    return [NightRecord.model_validate_json(r["json"]) for r in rows]

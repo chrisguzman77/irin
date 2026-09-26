@@ -1,11 +1,81 @@
-"""R3: the adapter between store.py and ml/models/nights.py: gathers the
-readings, treatments, alarm events, and raw presence for one night and calls
-classify_night / night_metrics. Under IRIN_BRAIN_ONLY it ignores presence,
-alarm hardware events, and logged context; rows change confidence label
-(reported / inferred) and are never blanked (R14c)."""
+"""R3: the adapter between the device's stores and ml/models/nights.py. It
+gathers one night's inputs (readings with 3 h before and 2 h after the
+window as context, treatments, alarm events, the presence toggle history)
+and hands them to George's classify_night / night_metrics / low_events;
+it never re-implements a metric or a reason code.
+
+Under IRIN_BRAIN_ONLY (or the demo panel's toggle) the adapter passes
+treatments=None (glucose-only inference, code_source "inferred"), no alarm
+hardware events, and no presence, so basal_late, exercise, and away are
+unavailable: rows change confidence label, they are never blanked (R14c)."""
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from datetime import date, datetime, time, timedelta
+from typing import Any, Callable
 
-def night_inputs(night_date, brain_only: bool = False) -> dict:
-    raise NotImplementedError("R3: nights adapter")
+from ..contracts import AlarmEvent, PresenceState, Reading, Settings, Treatment
+from ..reports import night_bounds
+
+CONTEXT_BEFORE = timedelta(hours=3)  # late meals and corrections before the night
+EXERCISE_FROM = time(17, 0)  # nights.py: exercise logged after 17:00 counts; treatments are read from there
+CONTEXT_AFTER = timedelta(hours=2)  # recovery slopes and rebounds after the window end
+
+Rows = Callable[[datetime, datetime], list[Any]]
+
+
+@dataclass
+class NightInputs:
+    night_date: date
+    window: tuple[datetime, datetime]
+    readings: list[Reading]
+    treatments: list[Treatment] | None
+    alarm_events: list[AlarmEvent]
+    presence: list[PresenceState]
+    usual_basal_time: str | None
+    brain_only: bool
+
+
+@dataclass
+class NightsAdapter:
+    settings: Settings
+    readings_for: Rows  # (start, end) -> readings, non-stale rows only matter downstream
+    treatments_for: Rows
+    alarm_events_for: Rows
+    presence_for: Rows  # the toggle history (PresenceState transitions) overlapping [start, end]
+    brain_only: Callable[[], bool] = lambda: False
+
+    def night_inputs(self, night_date: date) -> NightInputs:
+        start, end = night_bounds(night_date, self.settings.night_window_start, self.settings.night_window_end)
+        brain = self.brain_only()
+        readings = [r for r in self.readings_for(start - CONTEXT_BEFORE, end + CONTEXT_AFTER) if not r.is_stale]
+        treatments_from = min(start - CONTEXT_BEFORE, datetime.combine(start.date(), EXERCISE_FROM))
+        return NightInputs(
+            night_date=night_date, window=(start, end), readings=readings,
+            treatments=None if brain else list(self.treatments_for(treatments_from, end)),
+            alarm_events=[] if brain else list(self.alarm_events_for(start - CONTEXT_BEFORE, end)),
+            presence=[] if brain else list(self.presence_for(start, end)),
+            usual_basal_time=None if brain else self.settings.basal_time, brain_only=brain,
+        )
+
+    # --- George's functions, called with the contract objects (nights.py is duck-typed) ---
+
+    @staticmethod
+    def classify(inp: NightInputs) -> tuple[list[str], str]:
+        from ml.models.nights import classify_night
+
+        return classify_night(inp.readings, inp.treatments, inp.alarm_events if inp.treatments is not None else None,
+                              inp.presence or None, inp.window, usual_basal_time=inp.usual_basal_time)
+
+    @staticmethod
+    def metrics(inp: NightInputs) -> dict:
+        from ml.models.nights import night_metrics
+
+        return night_metrics(inp.readings, inp.alarm_events, inp.window)
+
+    @staticmethod
+    def lows(inp: NightInputs) -> list[dict]:
+        from ml.models.nights import low_events
+
+        return low_events(inp.readings, inp.treatments, inp.alarm_events, inp.window)
