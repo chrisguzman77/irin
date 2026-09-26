@@ -48,9 +48,15 @@ class Hub:
                                      if getattr(self.runtime, "messages", None) else []),
             active_plan=self.runtime.step_watch.active_plan() if getattr(self.runtime, "step_watch", None) else None,
             plan_state=self.runtime.step_watch.plan_state() if getattr(self.runtime, "step_watch", None) else {},
-            todays_checkin_status=(self.runtime.step_watch.checkin_status()
-                                   if getattr(self.runtime, "step_watch", None) else {}),
+            todays_checkin_status=self._checkin_status(),
         )
+
+    def _checkin_status(self) -> dict:
+        """The stomach check-in (R10) and the open morning questions (R11)."""
+        out = self.runtime.step_watch.checkin_status() if getattr(self.runtime, "step_watch", None) else {}
+        if getattr(self.runtime, "recall", None):
+            out.update(self.runtime.recall.status())
+        return out
 
     def _family_status(self) -> list[dict]:
         """Today's stories for the morning chip ("Sent to Mom"): the latest night's."""

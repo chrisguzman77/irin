@@ -145,9 +145,12 @@ def evaluate_hypo_response(night_records, low_events, recalls, alarm_events, set
         return Evaluation(status="red", flags=flags, headline="; ".join(parts) + f" in {values['nights']} nights.", **common)
     answered, unanswered = values["answered"], values["no_answer"]
     ack_text = f"median acknowledgement {ack:.0f} min" if ack is not None else "no acknowledgement time measured"
+    rate = values["unfelt_low_rate"]
+    unfelt = f"{values['unfelt_lows']} unfelt ({rate:.0%})" if rate is not None else "no answers to rate"
+    # the plan's wording: the rate divides by answered, and "no answer" stands beside it, never inside it
     return Evaluation(status="green", flags=flags,
-                      headline=(f"{values['nocturnal_lows']} nocturnal lows in {values['nights']} nights; {answered} morning "
-                                f"answers, {unanswered} unanswered; {ack_text}."), **common)
+                      headline=(f"{values['nocturnal_lows']} nocturnal lows in {values['nights']} nights, {answered} answered, "
+                                f"{unfelt}, {unanswered} no answer; {ack_text}."), **common)
 
 
 def evaluate_follow_up(before, after_7, after_14, thresholds: Thresholds = Thresholds(), *, alarm_source: str = "measured") -> Evaluation:

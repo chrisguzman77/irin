@@ -433,6 +433,15 @@ def upsert_recall(recall: LowEventRecall, conn: sqlite3.Connection | None = None
         conn.close()
 
 
+def select_recall(low_event_id: str, conn: sqlite3.Connection | None = None) -> LowEventRecall | None:
+    own = conn is None
+    conn = conn or connect()
+    r = conn.execute("SELECT json FROM low_event_recalls WHERE low_event_id = ?", (low_event_id,)).fetchone()
+    if own:
+        conn.close()
+    return LowEventRecall.model_validate_json(r["json"]) if r else None
+
+
 def select_recalls(since: date, conn: sqlite3.Connection | None = None) -> list[LowEventRecall]:
     own = conn is None
     conn = conn or connect()
