@@ -62,9 +62,12 @@ def timedatectl_synced() -> bool:
 @dataclass
 class Job:
     name: str
-    at: str  # "HH:MM" wall-clock time, daily
+    at: "str | Callable[[], str]"  # "HH:MM" wall-clock time, daily; a callable is read on every tick
     fn: JobFn
     last_fired: date | None = None
+
+    def at_hhmm(self) -> str:
+        return self.at() if callable(self.at) else self.at
 
 
 @dataclass
@@ -92,9 +95,10 @@ class Scheduler:
 
     # --- registration ---
 
-    def register(self, name: str, at: str, fn: JobFn) -> None:
-        """A daily wall-clock job at "HH:MM"; fires once per date, only while synced."""
-        parse_hhmm(at)
+    def register(self, name: str, at: "str | Callable[[], str]", fn: JobFn) -> None:
+        """A daily wall-clock job at "HH:MM" (or a callable returning it, so a
+        settings change moves the job); fires once per date, only while synced."""
+        parse_hhmm(at() if callable(at) else at)
         self.jobs.append(Job(name, at, fn))
 
     # --- state the frontends read ---
@@ -132,8 +136,8 @@ class Scheduler:
             return []
         now = clock.now()
         fired: list[str] = []
-        for job in sorted(self.jobs, key=lambda j: parse_hhmm(j.at)):
-            t = parse_hhmm(job.at)
+        for job in sorted(self.jobs, key=lambda j: parse_hhmm(j.at_hhmm())):
+            t = parse_hhmm(job.at_hhmm())
             due = now.replace(hour=t.hour, minute=t.minute, second=0, microsecond=0)
             if due <= now < due + timedelta(hours=CATCHUP_HOURS) and job.last_fired != now.date():
                 job.last_fired = now.date()
