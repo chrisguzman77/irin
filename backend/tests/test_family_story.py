@@ -217,8 +217,10 @@ def test_recipient_endpoints_and_the_demo_morning(client):
 def test_spelled_out_numbers_and_quiet_no_data_nights_are_rejected(stats):
     assert not validate_family_text("They dipped into the fifties around 3:00 AM but treated it.", "story_only", stats)
     assert not validate_family_text("About twenty minutes were low near 3:00 AM.", "story_only", stats)
-    assert not validate_family_text("Half the night was a bit low, all handled.", "story_only", stats)
+    assert not validate_family_text("A dozen minutes low, all handled.", "story_only", stats)
     assert validate_family_text("A low came around 3:00 AM; they caught it. How was the garden?", "story_only", stats)
+    assert validate_family_text("One of those nights: a low around 3:00 AM, handled. No one needed to step in.", "story_only", stats)
+    assert validate_family_text("Irin didn't have data last night; hope you're well.", "story_only", NO_DATA)
     for text in ("All quiet last night, nothing to report. How was the weekend?", "Last night went well.",
                  "Irin didn't have data last night, but it was probably fine."):
         assert not validate_family_text(text, "story_only", NO_DATA), text

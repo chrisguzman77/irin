@@ -39,11 +39,12 @@ log = logging.getLogger("irin.family_story")
 _CLOCK_TIME = re.compile(r"^\d{1,2}:\d{2}$")
 _MGDL = re.compile(r"mg\s*/\s*dl|mmol", re.IGNORECASE)
 _NUMBER_WORDS = re.compile(
-    r"\b(zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|"
+    r"\b(zero|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|"
     r"sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|"
-    r"twenties|thirties|forties|fifties|sixties|seventies|eighties|nineties|hundreds|dozen|half|quarter)\b",
-    re.IGNORECASE)
+    r"twenties|thirties|forties|fifties|sixties|seventies|eighties|nineties|hundreds|dozen)\b",
+    re.IGNORECASE)  # "one of those nights", "half asleep", "a quarter past" stay allowed: no value hides there
 _NO_DATA_PHRASE = re.compile(r"didn.t have data|no data|did not have data", re.IGNORECASE)
+_NO_DATA_BANNED = re.compile(r"\b(fine|quiet|smooth|smoothly|uneventful)\b|went well|slept well", re.IGNORECASE)
 
 
 def _clock_words(hhmm: str | None) -> str:
@@ -93,7 +94,7 @@ def validate_family_text(text: str, level: str, stats: dict) -> bool:
     story_and_view: the ordinary no-invented-numbers rule. Both: a no-data
     night must say Irin had no data and is never told as fine or quiet."""
     if not stats.get("readings"):
-        if not _NO_DATA_PHRASE.search(text) or re.search(r"\b(fine|well|quiet|smooth)", text, re.IGNORECASE):
+        if not _NO_DATA_PHRASE.search(text) or _NO_DATA_BANNED.search(text):
             return False
     if level == "story_only":
         if _MGDL.search(text) or _NUMBER_WORDS.search(text):
@@ -115,7 +116,8 @@ FAMILY_SYSTEM_PROMPT = (
 
 def family_prompt(stats: dict, level: str) -> str:
     if level == "story_only":
-        rule = "STORY ONLY: do not state any glucose value or unit; no numbers at all except clock times."
+        rule = ("STORY ONLY: do not state any glucose value or unit; no numbers at all except clock times, "
+                "not even spelled out (no 'the fifties', no 'twenty minutes').")
     else:
         rule = "Use ONLY the numbers given; never invent or round differently."
     return f"{rule} Last night's data: {stats}"

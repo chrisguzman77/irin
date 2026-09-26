@@ -33,7 +33,7 @@ from .contracts import (FRESH_PIN_ENDPOINTS, AlarmState, FamilyRecipient, Family
 from .datasource.base import DataSource
 from .datasource.nightscout import NightscoutDataSource
 from .datasource.replay import ReplayDataSource
-from .demo import bind as bind_demo, restore_live_settings, router as demo_router
+from .demo import bind as bind_demo, live_basal_time, restore_live_settings, router as demo_router
 from .family_story import FamilyStoryService
 from .forecast import Forecaster
 from .forward import Forwarder, from_config as forwarder_from_config
@@ -341,7 +341,7 @@ async def set_mode(req: ModeRequest) -> dict:
     runtime.voice.reset()
     hub._last = None
     if req.mode == "nightscout" and restore_live_settings():  # the demo basal-time button never reaches live
-        await hub.broadcast(WSMessage(type="settings_change", payload=runtime.settings.model_dump(mode="json")))
+        await _settings_changed()
     await hub.broadcast(WSMessage(type="mode_change", payload={"mode": runtime.mode}))
     return {"mode": runtime.mode, "changed": True}
 
@@ -623,23 +623,35 @@ def _recipient_or_404(recipient_id: str) -> FamilyRecipient:
 SETTINGS_KEY = "settings"
 
 
+NOT_PERSISTED = ("presence_override",)  # a reboot starts in auto: a power blip at night never leaves the room Away
+
+
 def _persist_settings() -> None:
-    store.set_kv(SETTINGS_KEY, runtime.settings.model_dump_json())
+    data = runtime.settings.model_dump(mode="json")
+    stash = live_basal_time()
+    if stash is not None:
+        data["basal_time"] = stash[0]  # the demo button's value never reaches the saved live settings
+    for name in NOT_PERSISTED:
+        data[name] = getattr(Settings(), name)
+    store.set_kv(SETTINGS_KEY, Settings.model_validate(data).model_dump_json())
 
 
 def _load_settings() -> None:
     """At boot: the last saved Settings (thresholds, windows, family consent) come
-    back from the store; a fresh Pi starts with the defaults."""
+    back from the store; a fresh Pi starts with the defaults. An unreadable blob
+    is kept aside as settings.unreadable, never silently overwritten."""
     raw = store.get_kv(SETTINGS_KEY)
     if not raw:
         return
     try:
         saved = Settings.model_validate_json(raw)
     except Exception:
-        logging.getLogger("irin.main").exception("saved settings unreadable; defaults kept")
+        logging.getLogger("irin.main").exception("saved settings unreadable; defaults kept, blob saved aside")
+        store.set_kv(SETTINGS_KEY + ".unreadable", raw)
         return
     for name in Settings.model_fields:
-        setattr(runtime.settings, name, getattr(saved, name))
+        if name not in NOT_PERSISTED:
+            setattr(runtime.settings, name, getattr(saved, name))
 
 
 async def _settings_changed() -> None:
@@ -732,7 +744,7 @@ async def approve_story(story_id: str) -> FamilyStory:
 
 @app.post("/api/family/stories/{story_id}/skip", dependencies=[Depends(require_pin)], response_model=FamilyStory)
 async def skip_story(story_id: str) -> FamilyStory:
-    story = runtime.family.skip(story_id)
+    story = await asyncio.to_thread(runtime.family.skip, story_id)  # the lock may be held by a send in a worker
     if story is None:
         raise HTTPException(status_code=404, detail="no such story")
     return story
