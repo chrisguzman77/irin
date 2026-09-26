@@ -315,3 +315,37 @@ def test_step_window_boundaries():
                                  expected_injections=1, expected_dose_label="5 mg")
     assert v["adherence"]["dose_mismatch"] and v["tolerance"]["missing"] == 2
     assert v["low_point_shift"] is None and v["coverage_pct"] is None   # None, never zero
+
+
+# ------------------------------------------------------------ Chris's three flags (2026-09-26)
+
+def test_low_starting_before_the_window_and_running_into_it_is_this_nights_event():
+    # under 70 from 21:40 to 22:20: no other night can own it
+    rows = series(lambda k: 60 if -20 <= k - 30 <= 20 else 110, start=START - timedelta(minutes=30), minutes=9 * 60 + 90)
+    ev = N.low_events(rows, [], [], WIN)
+    assert len(ev) == 1
+    assert ev[0]["started_at"] == START - timedelta(minutes=20)       # its true start, before 22:00
+    assert ev[0]["night_date"] == date(2020, 1, 1)
+    # one that ENDS before the window opens is not this night's
+    early = series(lambda k: 60 if -40 <= k - 60 <= -20 else 110, start=START - timedelta(minutes=60), minutes=9 * 60 + 90)
+    assert N.low_events(early, [], [], WIN) == []
+
+
+def test_carbs_count_from_the_low_start_to_nadir_plus_30():
+    nadir = at(2, 0, 2)                                               # unfelt_curve's nadir
+    at20 = N.low_events(unfelt_curve(0.5), [carbs(nadir + timedelta(minutes=20))], [], WIN)[0]
+    assert at20["carbs_logged_within_30min"] and not at20["inferred_unfelt"]   # chris.md R4: treated
+    at30 = N.low_events(unfelt_curve(0.5), [carbs(nadir + timedelta(minutes=30))], [], WIN)[0]
+    assert at30["carbs_logged_within_30min"]
+    at31 = N.low_events(unfelt_curve(0.5), [carbs(nadir + timedelta(minutes=31))], [], WIN)[0]
+    assert not at31["carbs_logged_within_30min"] and at31["inferred_unfelt"]
+    before = N.low_events(unfelt_curve(0.5), [carbs(at(1, 39, 2))], [], WIN)[0]   # a minute before the low began
+    assert not before["carbs_logged_within_30min"]
+
+
+def test_logging_patient_treated_low_without_an_alarm_record():
+    # the recorder wrote nothing (restart mid-episode): the glucose rebound still marks it treated
+    assert "treated_low" in N.classify_night(treated_curve(65), [], [], None, WIN)[0]
+    assert "treated_low" not in N.classify_night(treated_curve(55), [], [], None, WIN)[0]
+    codes, src = N.classify_night(treated_curve(65), [], [], None, WIN)
+    assert src == "logged"

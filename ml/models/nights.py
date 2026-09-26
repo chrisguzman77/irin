@@ -276,11 +276,13 @@ def classify_night(readings, treatments, alarm_events, presence, night_window, *
         ex_from = _sec(datetime.combine(start.date(), EXERCISE_AFTER, tzinfo=start.tzinfo))
         if any(_is_exercise(tr) and _in(tr, ex_from, s1) for tr in trs):
             codes.append("exercise")
-        if alarm_events is not None:
-            treated = any(s0 <= _sec(_get(a, "started_at")) < s1 and _rebound(t_all, x_all, _sec(_get(a, "started_at")))
-                          for a in _low_alarms(alarm_events))
-        else:
-            treated = any(_rebound(t_all, x_all, t[i]) for i in np.flatnonzero(x < LOW))
+        # A low alarm followed by a rebound, OR (the same rule the history uses)
+        # any reading under 70 followed by one: a low the AlarmEvent recorder
+        # never wrote (a restart mid-episode, a scenario switch) still counts.
+        by_alarm = alarm_events is not None and any(
+            s0 <= _sec(_get(a, "started_at")) < s1 and _rebound(t_all, x_all, _sec(_get(a, "started_at")))
+            for a in _low_alarms(alarm_events))
+        treated = by_alarm or any(_rebound(t_all, x_all, t[i]) for i in np.flatnonzero(x < LOW))
         if treated:
             codes.append("treated_low")
         source = "logged"
@@ -341,24 +343,29 @@ def _away(presence, s0: float, s1: float) -> bool:
 
 def low_events(readings, treatments, alarm_events, night_window) -> list[dict]:
     """One LowEvent (as a dict of its contract fields) per nocturnal low: under
-    70 confirmed by 2 consecutive readings, starting inside the window; a new
-    event needs 2 readings back at or above 70. inferred_unfelt = at least 20
-    min under 70, recovery slope under 1.0 mg/dL/min over the 30 min after the
-    nadir, no carbs within 30 min, and never on a treated low."""
+    70 confirmed by 2 consecutive readings, starting inside the window OR
+    starting before it and still under 70 inside it (no other night can own
+    such a low; started_at stays its true start); a new event needs 2 readings
+    back at or above 70. carbs_logged_within_30min = carbs logged from the
+    low's start to 30 min after its nadir (chris.md R4: carbs at nadir + 20
+    min mark a treated low). inferred_unfelt = at least 20 min under 70,
+    recovery slope under 1.0 mg/dL/min over the 30 min after the nadir, no
+    such carbs, and never on a treated low."""
     start, end, s0, s1 = _window(night_window)
     t, x = _series(readings)
     trs = list(treatments or [])
     tz = start.tzinfo
     out = []
     for i, last in _episodes(t, x, LOW):
-        if not (s0 <= t[i] < s1):
+        runs_into = t[i] < s0 and t[last] >= s0
+        if not (s0 <= t[i] < s1 or runs_into):
             continue
         seg = slice(i, last + 1)
         under = x[seg] < LOW
         k = i + int(np.argmin(x[seg]))
         nadir, t_nadir = float(x[k]), t[k]
         slope = _recovery_slope(t, x, k)
-        carbs = any(_is_carbs(tr) and _in(tr, t[i], t[i] + CARBS_WITHIN_MIN * 60) for tr in trs)
+        carbs = any(_is_carbs(tr) and _in(tr, t[i], t_nadir + CARBS_WITHIN_MIN * 60 + 1) for tr in trs)
         treated = carbs or _rebound(t, x, t[i])
         minutes = int(under.sum() * READING_MIN)
         unfelt = (not treated and minutes >= UNFELT_MIN and slope is not None and slope < UNFELT_SLOPE)

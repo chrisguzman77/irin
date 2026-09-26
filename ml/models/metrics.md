@@ -256,7 +256,7 @@ every listed change; 28 fortnights, 76 evaluable 5-day windows):
 | Basal Check, rising (> +30, >= 70%) | 14% | |
 | Basal Check, falling (< -30, >= 70%) | 21% | |
 | Basal Check, "possibly too high" (>= 5 near-misses in 14 nights) | 14% (out-of-sample 0 of 3) | moved from 3 at checkpoint 6 |
-| Hypo Response, glucose-side proxy (>= 1 inferred-unfelt low) | 0% | escalations, re-arms, ack times, and reported unfelt lows are not in the data |
+| Hypo Response, glucose-side proxy (>= 1 inferred-unfelt low) | 4% (1 of 28) | escalations, re-arms, ack times, and reported unfelt lows are not in the data |
 | Step Watch, low-point shift <= -15 | 42% | kept; see below |
 | Step Watch, TBR > 4.0% | 1% | |
 | Step Watch, near-misses >= 2 in 5 days | 21% (out-of-sample 27%) | |
