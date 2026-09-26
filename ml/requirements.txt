@@ -1,0 +1,6 @@
+# ML lane (George's laptop only; never installed on the Pi).
+pandas
+scikit-learn
+xgboost==3.4.1        # same pin as backend/requirements.txt
+matplotlib
+jupyter

@@ -1,0 +1,90 @@
+# Everything Irin owns in the cloud, on one Vultr VPS; the same file is the laptop fallback
+# (docs/plans/chris.md R6). The relay and cloud read ATLAS_URI and TIGER_URI from the env and
+# default to the two local containers standing in for Atlas and Tiger Cloud.
+services:
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN:-localhost}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ../frontend/app/dist:/srv/app:ro
+      - ../frontend/clinician:/srv/clinician:ro
+      - ../frontend/watch:/srv/watch:ro
+      - ../frontend/family:/srv/family:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - relay
+      - cloud
+
+  relay:
+    build:
+      context: ../relay
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      ATLAS_URI: ${ATLAS_URI:-mongodb://mongo:27017}
+      RELAY_SOURCE_KEYS: ${RELAY_SOURCE_KEYS:-}
+      RELAY_ADMIN_KEY: ${RELAY_ADMIN_KEY:-}
+      RELAY_KEY: ${RELAY_KEY:-}
+      NARRATIVE_BACKEND: ${NARRATIVE_BACKEND:-template}
+      NARRATIVE_ROUTING: ${NARRATIVE_ROUTING:-}
+      BACKBOARD_API_KEY: ${BACKBOARD_API_KEY:-}
+      META_MODEL_API_KEY: ${META_MODEL_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      WHATSAPP_TOKEN: ${WHATSAPP_TOKEN:-}
+      WHATSAPP_PHONE_NUMBER_ID: ${WHATSAPP_PHONE_NUMBER_ID:-}
+      CLOUD_URL: http://cloud:8200
+      DOMAIN: ${DOMAIN:-localhost}
+    depends_on:
+      - mongo
+
+  cloud:
+    build:
+      context: ../cloud
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      TIGER_URI: ${TIGER_URI:-postgresql://postgres:postgres@timescaledb:5432/irin}
+      DEVICE_ID: ${DEVICE_ID:-}
+      DEVICE_TOKEN: ${DEVICE_TOKEN:-}
+      RELAY_KEY: ${RELAY_KEY:-}
+      VOICE_BACKEND: ${VOICE_BACKEND:-none}
+      ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-}
+      ELEVENLABS_VOICE_ALERT: ${ELEVENLABS_VOICE_ALERT:-}
+      DOMAIN: ${DOMAIN:-localhost}
+    volumes:
+      - audio_cache:/app/audio_cache
+    depends_on:
+      - timescaledb
+
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    volumes:
+      - mongo_data:/data/db
+    ports:
+      - "27017:27017"
+
+  timescaledb:
+    image: timescale/timescaledb-ha:pg17
+    restart: unless-stopped
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: irin
+    volumes:
+      - tiger_data:/home/postgres/pgdata/data
+    ports:
+      - "5432:5432"
+
+volumes:
+  caddy_data:
+  caddy_config:
+  mongo_data:
+  tiger_data:
+  audio_cache:

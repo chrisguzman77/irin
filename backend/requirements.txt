@@ -1,0 +1,19 @@
+# Irin backend (runs on the Pi, aarch64, and on every laptop).
+# Python 3.14 everywhere (the Pi through uv); code is kept 3.13-compatible.
+# Every entry has a prebuilt aarch64 wheel (cp314 or abi3) or builds from sdist.
+# No pandas, no scikit-learn, no pickles on the Pi. Nothing hardware (see hardware/requirements.txt).
+fastapi
+uvicorn[standard]
+pydantic
+pytest
+httpx                 # test client, the forwarder, the relay client
+python-multipart
+xgboost==3.4.1        # same pin as ml/requirements.txt so forecast_v1.json loads identically
+numpy
+anthropic             # morning report: the direct Claude call
+matplotlib            # morning report: the graph PNG
+pynacl                # Rounds: crypto_box sealing
+qrcode[pil]           # Rounds: pairing QR
+backboard-sdk         # narrative chain, first link (harmless without a key)
+openai                # the Meta Model API client (OpenAI-SDK compatible, base_url)
+elevenlabs            # voice_out.py, behind VOICE_BACKEND

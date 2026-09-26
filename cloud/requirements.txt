@@ -1,0 +1,8 @@
+# Irin Cloud (ingest, dashboards, family rollup, audio). Runs on Vultr (docker) or a laptop. Python 3.14.
+fastapi
+uvicorn[standard]
+pydantic
+pytest
+httpx
+psycopg[binary]
+elevenlabs

@@ -1,0 +1,9 @@
+# Irin relay (the blind courier). Runs on Vultr (docker) or a laptop. Python 3.14.
+fastapi
+uvicorn[standard]
+pydantic
+pytest
+httpx
+pymongo
+pynacl
+openai                # the Meta Model API for the buddy narratives

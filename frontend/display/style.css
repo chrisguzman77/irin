@@ -1,0 +1,10 @@
+html, body { margin: 0; height: 100%; background: #000; color: #eee; font-family: system-ui, sans-serif; }
+main { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 90vh; }
+#glucose { font-size: 28vw; font-weight: 700; line-height: 1; }
+#glucose.stale { color: #777; }
+#trend { font-size: 6vw; color: #aaa; }
+#meta { margin-top: 1rem; color: #666; }
+footer { text-align: center; color: #444; font-size: 0.9rem; }
+.badge { position: fixed; top: 1rem; left: 1rem; background: #ffb000; color: #000; font-weight: 700; padding: 0.4rem 0.8rem; border-radius: 0.3rem; }
+.stale { position: fixed; top: 1rem; right: 1rem; background: #777; color: #000; font-weight: 700; padding: 0.4rem 0.8rem; border-radius: 0.3rem; }
+.hidden { display: none; }

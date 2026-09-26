@@ -1,0 +1,7 @@
+# Pi only — do not install on laptops.
+# RPi.GPIO and rpi_ws281x do NOT work on the Pi 5; do not add them.
+# Versions TBD on the Pi (day-one stack proof, docs/plans/slavik.md step 8).
+pi5neo
+adafruit-blinka
+gpiozero
+lgpio

@@ -1,0 +1,15 @@
+# systemd --user unit. NEVER enabled by install.sh or by any Claude: Chris enables it by hand
+# after the final audit, as the last change before judging. Starts at most once per boot,
+# never respawns, refuses to start while /boot/firmware/NO_KIOSK exists.
+[Unit]
+Description=Irin kiosk (Chromium)
+After=irin.service
+ConditionPathExists=!/boot/firmware/NO_KIOSK
+StartLimitBurst=1
+
+[Service]
+ExecStart=%h/irin/deploy/kiosk.sh
+Restart=no
+
+[Install]
+WantedBy=default.target

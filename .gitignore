@@ -1,0 +1,30 @@
+# Secrets and local state
+.env
+*.db
+backend/irin.db
+backend/keys/
+backend/sounds/generated/
+cloud/audio_cache/
+
+# Personal medical data (raw CGM exports, therapy-change dates, labeled nights);
+# only the README and the raw/.gitkeep placeholder are tracked
+ml/data/*
+!ml/data/README.md
+!ml/data/raw/
+ml/data/raw/*
+!ml/data/raw/.gitkeep
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+
+# Node (frontend/app/dist/ and frontend/app/.env.production are committed on purpose, decision 28)
+node_modules/
+*.local
+
+# OS / media
+.DS_Store
+*.mp4
+*.mov

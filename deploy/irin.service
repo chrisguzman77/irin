@@ -1,0 +1,17 @@
+# systemd --user unit for the kiosk user (~/.config/systemd/user/irin.service).
+# Runs as that user (never root) so audio shares the session's PipeWire with Chromium.
+[Unit]
+Description=Irin backend (FastAPI)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=%h/irin/backend
+EnvironmentFile=%h/irin/.env
+Environment=IRIN_HW=real
+ExecStart=%h/irin/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=default.target

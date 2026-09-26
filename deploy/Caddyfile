@@ -1,0 +1,30 @@
+# DOMAIN comes from the env (irin-out-of-sleep-at-hackgt.tech on Vultr; `localhost` on a laptop,
+# where Caddy serves plain HTTP on one origin for the LAN fallback).
+{$DOMAIN} {
+	root * /srv/app
+	try_files {path} /index.html
+	file_server
+}
+
+api.{$DOMAIN} {
+	reverse_proxy relay:8100
+}
+
+cloud.{$DOMAIN} {
+	reverse_proxy cloud:8200
+}
+
+doctor.{$DOMAIN} {
+	root * /srv/clinician
+	file_server
+}
+
+watch.{$DOMAIN} {
+	root * /srv/watch
+	file_server
+}
+
+family.{$DOMAIN} {
+	root * /srv/family
+	file_server
+}

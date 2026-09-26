@@ -1,0 +1,13 @@
+-- 002_aggregates.sql (George, docs/plans/george.md step 9.2) — C2
+-- Continuous aggregates with refresh policies:
+--   daily_stats (time_bucket '1 day': count, min, max, avg, share under 70, in 70-180, over 180, per device);
+--   overnight_profile (time_bucket '30 minutes' across the last 14 days with percentile_agg(mgdl),
+--     dash.py reads approx_percentile 0.1 / 0.5 / 0.9 by time of day);
+--   nightly (time_bucket '1 day' with origin 22:00 local: coverage = count / 108, low point = min of a
+--     15-minute rolling median, minutes under 70, first and last reading);
+--   hourly_heatmap (hour of day x day of week: share under 70);
+--   alarms_weekly and near_misses_weekly from alarm_events; basal_timing from treatments.
+-- Sensor gaps come from time_bucket_gapfill over readings at query time.
+-- dash.py and the charts read these names; change a name only with a journal note.
+-- STUB: George fills this in.
+SELECT 1;
