@@ -32,7 +32,12 @@ class MockHAL:
         self.led_state = state
         self.led_color = tuple(color) if color is not None else None
         self.led_brightness = clamp01(brightness) if brightness is not None else None
-        self.calls.append(("set_leds", state, self.led_color, self.led_brightness))
+        # plain calls log as ("set_leds", state), the shape backend tests assert on;
+        # the overrides are appended only when given
+        if color is None and brightness is None:
+            self.calls.append(("set_leds", state))
+        else:
+            self.calls.append(("set_leds", state, self.led_color, self.led_brightness))
         log.info("LEDs -> %s color=%s brightness=%s", state, self.led_color, self.led_brightness)
 
     def play_sound(self, name: str, volume: float) -> None:
@@ -57,5 +62,5 @@ class MockHAL:
 
     def set_display_brightness(self, level: float) -> None:
         self.brightness = clamp01(level)
-        self.calls.append(("set_display_brightness", self.brightness))
+        self.calls.append(("set_display_brightness", level))
         log.info("brightness -> %.2f", self.brightness)

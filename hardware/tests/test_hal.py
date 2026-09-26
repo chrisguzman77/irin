@@ -87,4 +87,9 @@ def test_calls_are_logged(mock_hal):
     mock_hal.set_leds("warning")
     mock_hal.play_sound("alarm_soft", 0.5)
     mock_hal.stop_sound()
-    assert [c[0] for c in mock_hal.calls] == ["set_leds", "play_sound", "stop_sound"]
+    assert mock_hal.calls == [("set_leds", "warning"), ("play_sound", "alarm_soft", 0.5), ("stop_sound",)]
+
+
+def test_overrides_extend_the_call_record(mock_hal):
+    mock_hal.set_leds("ambient", color=(1, 2, 3), brightness=0.2)
+    assert mock_hal.calls[-1] == ("set_leds", "ambient", (1, 2, 3), 0.2)
