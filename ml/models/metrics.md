@@ -328,8 +328,9 @@ against Tiger Cloud, 50+ nights). Dashboards draw pictures and never decide.
 
 - **Real glucose, date-shifted by whole days** (the time of day the forecaster
   uses is unchanged; the real dates and offsets never enter the repo): the six
-  core scenarios and basal_change_1. Chris vouches for the real nights at
-  checkpoint 7.
+  core scenarios and basal_change_1. Chris vouched for every one of these
+  real nights at checkpoint 7 (2026-09-26): each is a genuine night of his,
+  not a sensor artifact, and fit to show.
 - **Inferred and labeled:** every reason code in a companion JSON
   (code_source "inferred"), and the glucose side of basal_change_1's alarm
   events.

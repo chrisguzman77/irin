@@ -7,8 +7,8 @@ companion JSON and on every card. Regenerate everything with `python -m demo.mak
 (the real ones only where the raw data lives); ml/tests/test_scenarios.py checks each one.
 
 The six core scenarios (George, step 7.1; real, date-shifted, nights from 2021-03-01, one
-per day in this order; picked by stated criteria in make_scenarios.py, vouched for by
-Chris at checkpoint 7):
+per day in this order; picked by stated criteria in make_scenarios.py; Chris vouched for
+every real night, these six and basal_change_1, at checkpoint 7 on 2026-09-26):
 
 - `the_save.csv`: a HELD-OUT overnight low (forecast_v1 never trained on it), so the
   device's live forecast is out-of-sample: the warning (85 on the 20th-percentile
