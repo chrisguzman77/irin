@@ -33,7 +33,9 @@ separate Irin Cloud service (`cloud/`). Storage is MongoDB Atlas
 ## Relay API v0 (keep identical to docs/plans/chris.md)
 
 - `POST /v0/cards` {recipient_id, sender_id, nonce, ciphertext, source, kind, program, is_demo} (source key). `GET /v0/inbox/{recipient_id}?since=` (bearer).
-- `POST /v0/messages` (doctor -> device, sealed, bearer). `GET /v0/device/{device_id}/messages` (source key; the Pi polls). `POST /v0/messages/{id}/resolution` {status} (source key; metadata only).
+- `POST /v0/messages` {device_id, message_id, nonce, ciphertext, kind, is_demo} (doctor -> device, sealed to the device key, bearer; the sender is the bearer's pairing; message ids are single use). `GET /v0/device/{device_id}/messages` (source key; the Pi polls) -> `{messages: [envelope + sender_id, status, created_at], pairings: [{doctor_id, status, peer_kind}]}` so a revoke from the inbox reaches the device. `POST /v0/messages/{id}/resolution` {status: confirmed | declined | expired} (source key; metadata only). `GET /v0/messages/{id}` (bearer, the sender's) -> the resolution word and time ("Patient confirmed 07:14").
+- Cards: `POST /v0/cards` upserts by `card_id` when given (a re-evaluation never duplicates a card); the recipient must hold a confirmed pairing whose is_demo matches the envelope's (409 otherwise). `GET /v0/inbox/{recipient_id}` needs that recipient's own bearer (403 for another's). `GET /v0/log?limit=` is public metadata: route, ids, kinds, sizes, ciphertext prefixes, timestamps.
+- Rate limit: 600 requests per minute per source key and per bearer (429), RELAY_RATE_LIMIT_PER_MIN.
 - `POST /v0/pair` {token, device_pk, is_demo} (source key). `GET /v0/pair/{token}` (public). `POST /v0/pair/{token}/complete` {doctor_pk, doctor_display_name} (public, single use). `POST /v0/pair/{token}/confirm` (source key; issues the bearer). `POST /v0/pair/{id}/revoke` (source key or bearer).
   Pairing shapes (R5, the Pi's side is backend/app/rounds/pairing.py): `POST /v0/pair` body also carries `peer_kind` (doctor | buddy). `GET /v0/pair/{token}` -> `{status: pending | completed | confirmed, doctor_pk?, doctor_display_name?, is_demo, peer_kind}` (404 once expired or unknown). `POST /v0/pair/{token}/complete` -> `{status: "completed"}` (409 if already completed). `POST /v0/pair/{token}/confirm` -> `{pairing_id, doctor_id, bearer_issued: true}` (the bearer itself goes to the browser through `GET /v0/pair/{token}` after confirm, once, as `bearer`). `POST /v0/pair/{id}/revoke` -> `{status: "revoked"}` and the relay forgets the doctor_pk and the bearer. Both sides show `code4` = first 4 bytes of sha256(UTF-8 of device_pk_b64 + doctor_pk_b64 + token_hex) as a big-endian integer, mod 10000, zero-padded; keys are base64 (standard, padded), tokens 32 hex chars, nonces base64. The QR URL is `<inbox or watch page>/pair#token=...&device_pk=...&relay=...`: everything after # never reaches a server.
 - Owner pairing (R5+): `POST /v0/device/pairings` {code, device_id, device_url, token, expires_at} (source key). `POST /v0/device/pair` {code, username} -> {device_id, device_url, token} (public). `DELETE /v0/device/pair` (the pairing token, or the source key).
@@ -43,7 +45,7 @@ separate Irin Cloud service (`cloud/`). Storage is MongoDB Atlas
 - Hub (B3): `POST /v0/hub/listing`, `GET /v0/hub/list`, `POST /v0/hub/claim`, `GET /v0/hub/claim/{id}/script`, `POST /v0/hub/call`, `POST /v0/hub/treating`, `POST /v0/hub/resolve`, `GET /v0/hub/audit`.
 - Buddy directory (B3+): `POST /v0/users`, `GET /v0/users/search?username=`, `POST /v0/match`, `POST /v0/match/{id}/accept | decline`.
 
-All routes are 501 stubs in the skeleton; each names its step in `detail`.
+Pairing, cards, inbox, messages, the device poll, resolutions, and the log are live (R6); the owner pairing, Spark, resources, hub, and directory routes are 501 stubs naming their step.
 
 ## Clinical Signal Card v0 (the sealed plaintext)
 

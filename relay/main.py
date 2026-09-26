@@ -19,6 +19,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
+import relay_api
 import store
 
 RELAY_SOURCE_KEYS = [k for k in os.environ.get("RELAY_SOURCE_KEYS", "").split(",") if k]
@@ -66,31 +67,7 @@ async def health() -> dict:
     return {"ok": True, "store": store.status()}
 
 
-# --- cards and inbox (R6/R7) ---
-@app.post("/v0/cards")
-async def post_card(): _stub("R6 cards")
-@app.get("/v0/inbox/{recipient_id}")
-async def inbox(recipient_id: str, since: str | None = None): _stub("R6 inbox")
-
-# --- doctor messages (R6/R9) ---
-@app.post("/v0/messages")
-async def post_message(): _stub("R6 messages")
-@app.get("/v0/device/{device_id}/messages")
-async def device_messages(device_id: str): _stub("R6 device poll")
-@app.post("/v0/messages/{message_id}/resolution")
-async def resolution(message_id: str): _stub("R6 resolution")
-
-# --- doctor / buddy pairing (R5/R6) ---
-@app.post("/v0/pair")
-async def pair_start(): _stub("R6 pairing")
-@app.get("/v0/pair/{token}")
-async def pair_state(token: str): _stub("R6 pairing state")
-@app.post("/v0/pair/{token}/complete")
-async def pair_complete(token: str): _stub("R6 pairing complete")
-@app.post("/v0/pair/{token}/confirm")
-async def pair_confirm(token: str): _stub("R6 pairing confirm (issues the bearer)")
-@app.post("/v0/pair/{pairing_id}/revoke")
-async def pair_revoke(pairing_id: str): _stub("R6 pairing revoke")
+app.include_router(relay_api.router)  # R6: pairing, cards, inbox, messages, device poll, resolutions, log
 
 # --- owner pairing (R5+) ---
 @app.post("/v0/device/pairings")
@@ -105,8 +82,6 @@ async def device_unpair(): _stub("R5+ owner unpair")
 async def spark_new_rx(): _stub("R10 simulated Spark offer (demo-only, RELAY_ADMIN_KEY)")
 @app.post("/v0/resources/request")
 async def resources_request(): _stub("R13 resources request")
-@app.get("/v0/log")
-async def log(): _stub("R6 the 'what Impiricus sees' log")
 
 # --- hub (B3) ---
 @app.post("/v0/hub/listing")
