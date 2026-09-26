@@ -1,4 +1,6 @@
-// Kiosk display, detail screen (justin.md step 1).
+// Kiosk display: detail screen (justin.md step 1) and the Detail / Night /
+// Morning modes (step 2). The mode comes from the Pi's clock (/api/health)
+// and settings.night_window_*, never the browser's clock.
 // Renders ONLY from the state_snapshot sent on every WebSocket connect plus the
 // updates after it (hard client rule 1); never assumes it saw messages while
 // disconnected. Time on the graph is the Pi's clock (reading timestamps),
@@ -12,6 +14,8 @@ const GAP_MIN = 15;            // don't join points across a gap this long (matc
 const DISCONNECT_BANNER_MS = 15000;
 const TARGET_LOW = 70;         // time-in-range band, consensus 70-180 mg/dL
 const TARGET_HIGH = 180;
+const MORNING_MIN = 120;       // Morning screen lasts 2 h after the night window ends
+const HEALTH_POLL_MS = 5000;   // the Pi's clock, polled (at 60x replay: 5 clock-min)
 
 const TREND_ARROWS = {
   DoubleUp: "⇈", SingleUp: "↑", FortyFiveUp: "↗", Flat: "→",
@@ -27,6 +31,7 @@ const state = {
   points: [],          // [{t: ms, mgdl}] oldest first, readings received this session
   connected: false,
   downSince: Date.now(),
+  piClock: null,       // ms, the Pi's clock.now() from /api/health
 };
 
 const toMs = (iso) => new Date(iso).getTime(); // naive Pi-local timestamps; only differences matter
@@ -107,6 +112,36 @@ function connect() {
   ws.onerror = () => ws.close();
 }
 
+// --- the Pi's clock and the screen mode ---
+
+async function pollHealth() {
+  try {
+    const h = await (await fetch("/api/health", { cache: "no-store" })).json();
+    const t = toMs(h.clock);
+    if (!Number.isNaN(t)) state.piClock = t;
+  } catch { /* the disconnected banner covers a dead backend */ }
+  render();
+}
+
+const minutesOfDay = (ms) => { const d = new Date(ms); return d.getHours() * 60 + d.getMinutes(); };
+const parseHHMM = (s) => { const [h, m] = String(s || "").split(":").map(Number); return h * 60 + (m || 0); };
+// true when m lies in [start, end) on a 24 h circle
+const inWindow = (m, start, end) => start <= end ? m >= start && m < end : m >= start || m < end;
+
+// "detail" | "night" | "morning". Detail whenever the Pi's clock is unknown or
+// not yet NTP-synced: no clock, no night decision.
+function screenMode() {
+  const now = state.piClock ?? (state.latest ? toMs(state.latest.timestamp) : null);
+  if (now === null || !state.clockSynced || !state.settings) return "detail";
+  const start = parseHHMM(state.settings.night_window_start);
+  const end = parseHHMM(state.settings.night_window_end);
+  if (Number.isNaN(start) || Number.isNaN(end)) return "detail";
+  const m = minutesOfDay(now);
+  if (inWindow(m, start, end)) return "night";
+  if (inWindow(m, end, (end + MORNING_MIN) % 1440)) return "morning";
+  return "detail";
+}
+
 // --- render ---
 
 const isDisconnected = () => !state.connected && Date.now() - state.downSince > DISCONNECT_BANNER_MS;
@@ -123,6 +158,21 @@ function render() {
   document.body.classList.toggle("is-stale", stale);
   document.body.classList.toggle("is-disconnected", disconnected);
 
+  const mode = screenMode();
+  for (const m of ["detail", "night", "morning"]) {
+    document.body.classList.toggle(`mode-${m}`, m === mode);
+    $(m).classList.toggle("hidden", m !== mode);
+  }
+  const num = r ? String(Math.round(r.glucose_mgdl)) : "---";
+  const arrow = r && !r.is_stale ? (TREND_ARROWS[r.trend] ?? "?") : "";
+  $("night-glucose").textContent = $("morning-glucose").textContent = num;
+  $("night-trend").textContent = $("morning-trend").textContent = arrow;
+  const now = state.piClock ?? (r ? toMs(r.timestamp) : null);
+  $("night-clock").textContent = now === null ? "--:--" : hhmm(now);
+  // The Morning numbers (overnight low/high with times, time below/above,
+  // TIR) are night metrics from the backend (nights.py); the snapshot has no
+  // field for them yet, so the screen shows "—" until it does (journal request).
+
   if (r) {
     $("glucose").textContent = Math.round(r.glucose_mgdl);
     $("trend").textContent = r.is_stale ? "" : (TREND_ARROWS[r.trend] ?? "?");
@@ -134,7 +184,7 @@ function render() {
   }
   // IOB, last dose, and today's TIR are not in the snapshot yet (contracts
   // request to Chris, see journal); the tiles stay "—" until they are.
-  drawGraph();
+  if (mode === "detail") drawGraph();
 }
 
 function drawGraph() {
@@ -252,3 +302,5 @@ setInterval(() => { if (!state.connected) render(); }, 1000);
 window.addEventListener("resize", drawGraph);
 render();
 connect();
+pollHealth();
+setInterval(pollHealth, HEALTH_POLL_MS);

@@ -14,7 +14,7 @@
     <div id="banner-disconnected" class="flag flag-disc hidden">DISCONNECTED — number may be old</div>
   </header>
 
-  <main id="detail">
+  <main id="detail" class="screen">
     <section id="now">
       <div id="reading">
         <span id="glucose">---</span>
@@ -45,6 +45,39 @@
         <div class="tile-note" id="tir-note">not yet sent by device</div>
       </div>
     </section>
+  </main>
+
+  <!-- Night: dim clock, smaller number. Shown during settings.night_window on the Pi's clock. -->
+  <main id="night" class="screen hidden">
+    <div id="night-clock">--:--</div>
+    <div id="night-reading">
+      <span id="night-glucose">---</span>
+      <span id="night-trend"></span>
+    </div>
+  </main>
+
+  <!-- Morning: overnight summary, for 2 h after the night window ends. -->
+  <main id="morning" class="screen hidden">
+    <div id="morning-title">Last night</div>
+    <div id="morning-body">
+      <div id="morning-ring-wrap">
+        <svg id="morning-ring" viewBox="0 0 120 120" aria-label="time in range">
+          <circle class="ring-track" cx="60" cy="60" r="50"></circle>
+          <circle class="ring-below" id="ring-below" cx="60" cy="60" r="50"></circle>
+          <circle class="ring-in" id="ring-in" cx="60" cy="60" r="50"></circle>
+          <circle class="ring-above" id="ring-above" cx="60" cy="60" r="50"></circle>
+        </svg>
+        <div id="morning-tir"><span id="tir-night">—</span><small>in range</small></div>
+      </div>
+      <dl id="morning-stats">
+        <div><dt>Low</dt><dd id="night-low">—</dd></div>
+        <div><dt>High</dt><dd id="night-high">—</dd></div>
+        <div><dt>Below range</dt><dd id="night-below">—</dd></div>
+        <div><dt>Above range</dt><dd id="night-above">—</dd></div>
+      </dl>
+    </div>
+    <div id="morning-note">overnight summary not yet sent by device</div>
+    <div id="morning-now">now <span id="morning-glucose">---</span> <span id="morning-trend"></span></div>
   </main>
 
   <script src="display.js"></script>
