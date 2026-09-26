@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import re
 import secrets
+from typing import Callable
 from dataclasses import dataclass, field
 from datetime import timedelta
 
@@ -131,6 +132,7 @@ class Pending:
 @dataclass
 class VoiceLogger:
     _pending: dict[str, Pending] = field(default_factory=dict)
+    is_demo: Callable[[], bool] = lambda: False  # main.py: the replay source is active
 
     def _expire(self) -> None:
         now = clock.now()
@@ -147,7 +149,7 @@ class VoiceLogger:
             return {"status": "incomplete", "missing": list(r.missing), "ask": f"how many {r.missing[0].split()[0]}?"}
         if r.insulin_units is None:  # carbs only: nothing to confirm
             t = Treatment(timestamp=clock.now(), kind="carbs", carbs_g=r.carbs_g, confirmed=True)
-            store.insert_treatment(t)
+            store.insert_treatment(t, is_demo=self.is_demo())
             return {"status": "stored", "stored": [t.model_dump(mode="json")]}
         pid = secrets.token_hex(8)
         now = clock.now()
@@ -165,7 +167,7 @@ class VoiceLogger:
             stored.append(Treatment(timestamp=now, kind="carbs", carbs_g=p.parsed.carbs_g, confirmed=True))
         stored.append(Treatment(timestamp=now, kind="bolus", insulin_units=p.parsed.insulin_units, confirmed=True))
         for t in stored:
-            store.insert_treatment(t)
+            store.insert_treatment(t, is_demo=self.is_demo())
         return {"status": "stored", "stored": [t.model_dump(mode="json") for t in stored]}
 
     def cancel(self, pending_id: str) -> dict:

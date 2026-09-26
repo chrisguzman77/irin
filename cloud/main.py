@@ -48,7 +48,8 @@ def require_device_token(x_device_id: str | None = Header(default=None, alias="X
                          x_device_token: str | None = Header(default=None, alias="X-Device-Token")) -> str:
     if not DEVICE_ID or not DEVICE_TOKEN:
         raise HTTPException(status_code=503, detail="DEVICE_ID / DEVICE_TOKEN not configured")
-    if x_device_id != DEVICE_ID or not x_device_token or not hmac.compare_digest(x_device_token, DEVICE_TOKEN):
+    if x_device_id != DEVICE_ID or not x_device_token or not hmac.compare_digest(
+            x_device_token.encode("utf-8", "replace"), DEVICE_TOKEN.encode("utf-8", "replace")):
         raise HTTPException(status_code=401, detail="bad device token")
     return x_device_id
 
