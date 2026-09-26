@@ -69,7 +69,7 @@ services:
     volumes:
       - mongo_data:/data/db
     ports:
-      - "27017:27017"
+      - "127.0.0.1:27017:27017"
 
   timescaledb:
     image: timescale/timescaledb-ha:pg17
@@ -80,7 +80,7 @@ services:
     volumes:
       - tiger_data:/home/postgres/pgdata/data
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
 
 volumes:
   caddy_data:
