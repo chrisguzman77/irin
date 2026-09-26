@@ -254,7 +254,30 @@ def test_editing_email_or_level_resets_consent_and_drops_pending_stories(client)
     r = c.post(f"/api/family/recipients/{rid}", json={"email": "other@example.com"}, headers=H).json()
     assert r["first_story_approved"] is False and r["email"] == "other@example.com"
     assert st.select_family_story("s-pending").status == "skipped"
-    assert c.post("/api/settings", json={"family_recipients": []}, headers=H).status_code == 400  # only the family routes
+    # the app's Family section replaces the list whole: an empty list revokes everyone, never forgets them
+    r = c.post("/api/settings", json={"family_recipients": []}, headers=H)
+    assert r.status_code == 200 and [x["state"] for x in r.json()["family_recipients"]] == ["revoked"]
+
+
+def test_settings_list_save_keeps_the_consent_rules(client):
+    """Justin's form sends Settings.family_recipients whole with client-side ids."""
+    c = client
+    mom = {"recipient_id": "abc123", "name": "Mom", "email": "mom@example.com", "level": "story_only",
+           "send_mode": "automatic", "state": "active", "first_story_approved": True}  # the client cannot pre-approve
+    r = c.post("/api/settings", json={"family_recipients": [mom]}, headers=H)
+    assert r.status_code == 200 and r.json()["family_recipients"][0]["first_story_approved"] is False
+    main.runtime.settings.family_recipients[0].first_story_approved = True  # the patient taps approve on the first story
+    r = c.post("/api/settings", json={"family_recipients": [{**mom, "send_mode": "approve_each"}]}, headers=H)
+    assert r.json()["family_recipients"][0]["first_story_approved"] is True  # an unrelated edit keeps the consent
+    r = c.post("/api/settings", json={"family_recipients": [{**mom, "level": "story_and_view"}]}, headers=H)
+    assert r.json()["family_recipients"][0]["first_story_approved"] is False  # a level change is a new consent
+    assert c.post("/api/settings", json={"family_recipients": [{**mom, "email": "nope"}]}, headers=H).status_code == 422
+    assert c.post("/api/settings", json={"family_recipients": [mom, mom]}, headers=H).status_code == 422
+    r = c.post("/api/settings", json={"family_recipients": [{**mom, "state": "revoked"}]}, headers=H)
+    assert r.json()["family_recipients"][0]["state"] == "revoked"
+    r = c.post("/api/settings", json={"family_recipients": [{**mom, "state": "active"}]}, headers=H)
+    assert r.json()["family_recipients"][0]["state"] == "revoked"  # revoke is final
+    assert c.get("/api/family/recipients").json()[0]["state"] == "revoked"
 
 
 def test_settings_and_consent_survive_a_restart(monkeypatch, tmp_path):

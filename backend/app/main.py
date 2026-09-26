@@ -10,6 +10,7 @@ import asyncio
 import dataclasses
 import logging
 import math
+import re
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -530,20 +531,56 @@ async def update_settings(patch: dict) -> Settings:
     unknown = set(patch) - set(Settings.model_fields)
     if unknown:
         raise HTTPException(status_code=400, detail=f"unknown settings: {sorted(unknown)}")
-    if "family_recipients" in patch:  # consent has its own routes (validated email, first story waits, revoke is final)
-        raise HTTPException(status_code=400, detail="family_recipients change only through /api/family/recipients")
     try:
         new = Settings.model_validate(_deep_merge(runtime.settings.model_dump(), patch))
         _check_settings(new)
+        if "family_recipients" in patch:  # the app's Family section replaces the list whole; consent rules hold
+            new.family_recipients = _reconcile_recipients(runtime.settings.family_recipients, new.family_recipients)
     except (ValueError, TypeError) as e:
         raise HTTPException(status_code=422, detail=f"invalid settings: {e}")
+    dropped = [r.recipient_id for r in runtime.settings.family_recipients
+               if r.recipient_id not in {n.recipient_id for n in new.family_recipients}]
+    reset = [n.recipient_id for n in new.family_recipients if not n.first_story_approved
+             and any(o.recipient_id == n.recipient_id and o.first_story_approved for o in runtime.settings.family_recipients)]
     override_changed = new.presence_override != runtime.settings.presence_override
     for name in Settings.model_fields:
         setattr(runtime.settings, name, getattr(new, name))
     if override_changed:
         runtime.presence.set_override(new.presence_override)
+    for rid in dropped + reset:  # removed, or re-consented: nothing pending at the old terms goes out
+        await asyncio.to_thread(runtime.family.skip_pending, rid)
     await _settings_changed()
     return runtime.settings
+
+
+def _reconcile_recipients(current: list[FamilyRecipient], incoming: list[FamilyRecipient]) -> list[FamilyRecipient]:
+    """The list from the app, held to the consent rules the dedicated routes
+    enforce: a valid email; a NEW recipient's first story waits for a tap; a
+    changed email or level is a new consent (first story waits again); a
+    revoked recipient stays revoked; a recipient missing from the list is
+    revoked (never silently forgotten). Raises ValueError."""
+    by_id = {r.recipient_id: r for r in current}
+    out: list[FamilyRecipient] = []
+    seen: set[str] = set()
+    for r in incoming:
+        if not re.fullmatch(_EMAIL, r.email) or not r.name.strip() or not r.recipient_id.strip():
+            raise ValueError(f"recipient {r.recipient_id or '?'}: a name, an id, and a valid email are required")
+        if r.recipient_id in seen:
+            raise ValueError(f"recipient {r.recipient_id} listed twice")
+        seen.add(r.recipient_id)
+        old = by_id.get(r.recipient_id)
+        r = r.model_copy()
+        if old is None:
+            r.first_story_approved = False
+        else:
+            if old.state == "revoked":
+                r.state = "revoked"
+            r.first_story_approved = old.first_story_approved and old.email == r.email and old.level == r.level
+        out.append(r)
+    for old in current:  # dropped from the list = revoked, kept on record
+        if old.recipient_id not in seen:
+            out.append(old.model_copy(update={"state": "revoked"}))
+    return out
 
 
 # --- morning reports (step 11): read by the morning screen and the app ---
