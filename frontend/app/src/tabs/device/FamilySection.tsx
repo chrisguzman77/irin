@@ -4,7 +4,10 @@ import type { Settings } from "../../lib/contracts";
 import {
   addRecipient, editRecipient, pauseRecipient, resumeRecipient, revokeRecipient, type Recipient,
 } from "../../lib/family";
+import { useDevice } from "../../lib/device";
+import { revokeViewLink } from "../../lib/familyView";
 import { sameValue } from "../../lib/settings";
+import FamilyViewLink from "./FamilyViewLink";
 
 // Family Story F1 (docs/FAMILY_STORY.md): who receives the morning story,
 // how much they see, and whether each story waits for approval. Read from
@@ -40,6 +43,13 @@ export default function FamilySection({ current, baseUrl }: { current: Settings 
   const [email, setEmail] = useState("");
   const [level, setLevel] = useState<Level>("story_only");
   const [mode, setMode] = useState<SendMode>("approve_each");
+  const demo = useDevice().socket.snapshot?.mode === "replay";
+
+  /** A recipient who is paused, revoked, or moved to Story only loses their live view link too. */
+  const linkOff = async (r: Recipient) => {
+    const res = await revokeViewLink(r.recipient_id);
+    if (!res.ok) setMsg({ text: `${r.name}: ${res.reason}`, tone: "error" });
+  };
 
   useEffect(() => {
     if (pending && current && (current.family_recipients ?? []).some((r) => sameValue(r, pending))) {
@@ -137,9 +147,10 @@ export default function FamilySection({ current, baseUrl }: { current: Settings 
                       className={input}
                       disabled={busy}
                       value={r.level ?? "story_only"}
-                      onChange={(e) =>
-                        act(() => editRecipient(baseUrl, r.recipient_id, { level: e.target.value as Level }), "Saving…")
-                      }
+                      onChange={async (e) => {
+                        const next = e.target.value as Level;
+                        if ((await act(() => editRecipient(baseUrl, r.recipient_id, { level: next }), "Saving…")) && next === "story_only") await linkOff(r);
+                      }}
                     >
                       {LEVELS.map(([v, label]) => (
                         <option key={v} value={v}>{label}</option>
@@ -159,6 +170,9 @@ export default function FamilySection({ current, baseUrl }: { current: Settings 
                       ))}
                     </select>
                   </div>
+                  {r.level === "story_and_view" && (
+                    <FamilyViewLink recipientId={r.recipient_id} name={r.name} demo={demo} disabled={busy || paused} />
+                  )}
                   {r.first_story_approved && (
                     <span className="text-xs text-neutral-500">
                       Changing what {r.name} receives means the next story waits for your approval again.
@@ -179,7 +193,7 @@ export default function FamilySection({ current, baseUrl }: { current: Settings 
                           className={`${btn} flex-1 bg-red-600 text-white`}
                           onClick={async () => {
                             setConfirmRevoke(null);
-                            await act(() => revokeRecipient(baseUrl, r.recipient_id), `Revoking ${r.name}…`);
+                            if (await act(() => revokeRecipient(baseUrl, r.recipient_id), `Revoking ${r.name}…`)) await linkOff(r);
                           }}
                         >
                           Revoke
@@ -192,11 +206,10 @@ export default function FamilySection({ current, baseUrl }: { current: Settings 
                         type="button"
                         disabled={busy}
                         className={`${btn} flex-1 ${paused ? "bg-white text-black" : "bg-neutral-800 text-neutral-200"}`}
-                        onClick={() =>
-                          paused
-                            ? act(() => resumeRecipient(baseUrl, r.recipient_id), `Resuming ${r.name}…`)
-                            : act(() => pauseRecipient(baseUrl, r.recipient_id), `Pausing ${r.name}…`)
-                        }
+                        onClick={async () => {
+                          if (paused) await act(() => resumeRecipient(baseUrl, r.recipient_id), `Resuming ${r.name}…`);
+                          else if (await act(() => pauseRecipient(baseUrl, r.recipient_id), `Pausing ${r.name}…`)) await linkOff(r);
+                        }}
                       >
                         {paused ? "Resume" : "Pause"}
                       </button>
