@@ -7,7 +7,7 @@ and every screen badges DEMO while this source is active (invariant 1)."""
 from __future__ import annotations
 
 import csv
-from bisect import bisect_left, bisect_right
+from bisect import bisect_right
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -26,6 +26,8 @@ class ReplayDataSource(DataSource):
         if not self.rows:
             raise ValueError(f"scenario has no rows: {self.path}")
         self._times: list[datetime] = [r[0] for r in self.rows]
+        self._paused_at: datetime | None = None  # the feed stops here while the clock runs on
+        self._overlay: list[tuple[datetime, float, str]] = []  # injected readings; the CSV stays clean
 
     @staticmethod
     def _load(path: Path) -> list[tuple[datetime, float, str]]:
@@ -42,9 +44,34 @@ class ReplayDataSource(DataSource):
     async def stop(self) -> None:
         clock.reset()
 
+    # --- the demo panel (step 12) ---
+
+    def set_paused(self, paused: bool) -> None:
+        """Pause the FEED, not the clock: no reading newer than the pause moment
+        arrives, so after STALE_AFTER_MIN the latest reading is honestly stale."""
+        if paused and self._paused_at is None:
+            self._paused_at = clock.now()
+        elif not paused:
+            self._paused_at = None
+
+    def inject(self, glucose_mgdl: float, trend: str) -> Reading:
+        """Overlay one reading at the current clock time. rows is never touched."""
+        row = (clock.now(), float(glucose_mgdl), trend)
+        self._overlay.append(row)
+        return self._to_reading(row)
+
+    def _cutoff(self, now: datetime) -> datetime:
+        return min(now, self._paused_at) if self._paused_at is not None else now
+
     def _available(self, now: datetime) -> list[tuple[datetime, float, str]]:
-        """Rows with timestamp <= now (rows are sorted; a bisect, not a scan)."""
-        return self.rows[: bisect_right(self._times, now)]
+        """CSV rows plus injected readings with timestamp <= the feed cutoff
+        (rows are sorted; a bisect, not a scan; an overlay row with the same
+        timestamp as a CSV row sorts after it)."""
+        cutoff = self._cutoff(now)
+        rows = self.rows[: bisect_right(self._times, cutoff)]
+        if not self._overlay:
+            return rows
+        return sorted(rows + [o for o in self._overlay if o[0] <= cutoff], key=lambda r: r[0])
 
     @staticmethod
     def _to_reading(row: tuple[datetime, float, str], stale: bool = False) -> Reading:
@@ -64,10 +91,8 @@ class ReplayDataSource(DataSource):
     async def history(self, minutes: int) -> list[Reading]:
         now = clock.now()
         since = now - timedelta(minutes=minutes)
-        lo = bisect_left(self._times, since)
-        hi = bisect_right(self._times, now)
         # History rows are facts, never "stale"; gaps are read from their timestamps.
-        return [self._to_reading(r) for r in self.rows[lo:hi]]
+        return [self._to_reading(r) for r in self._available(now) if r[0] >= since]
 
     async def seek(self, to: datetime) -> None:
         """R12: bulk-load readings up to `to`, advance clock.py to `to`, and let

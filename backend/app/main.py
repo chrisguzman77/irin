@@ -30,12 +30,14 @@ from .contracts import FRESH_PIN_ENDPOINTS, AlarmState, MorningReport, Reading, 
 from .datasource.base import DataSource
 from .datasource.nightscout import NightscoutDataSource
 from .datasource.replay import ReplayDataSource
+from .demo import bind as bind_demo, router as demo_router
 from .forecast import Forecaster
 from .outputs import GatedOutputs
 from .presence import PresenceMachine, PresenceState
 from .reports import ReportBuilder, SmtpMailer
 from .scheduler import Scheduler, basal_logged_on, timedatectl_synced
 from .voice import MAX_CARBS_G, MAX_UNITS, VoiceLogger
+from .windows import parse_hhmm
 from .ws import Hub
 
 Mode = Literal["replay", "nightscout"]
@@ -129,7 +131,7 @@ def _morning_report_job(night_date: date) -> None:
     task.add_done_callback(_broadcast_tasks.discard)
 
 
-runtime.scheduler.register("morning_report", runtime.settings.night_window_end, _morning_report_job)
+runtime.scheduler.register("morning_report", lambda: runtime.settings.night_window_end, _morning_report_job)
 
 ALARM_TICK_CLOCK_SECONDS = 30.0
 _broadcast_tasks: set[asyncio.Task] = set()  # references held so a broadcast is never GC'd mid-flight
@@ -382,13 +384,50 @@ async def scheduler_state() -> dict:
     sch = runtime.scheduler
     return {"clock_synced": sch.clock_synced, "display_mode": sch.display_mode(),
             "basal_nudge": {"level": sch.nudge.level, "since": sch.nudge.since.isoformat() if sch.nudge.since else None},
-            "jobs": [{"name": j.name, "at": j.at, "last_fired": j.last_fired.isoformat() if j.last_fired else None}
+            "jobs": [{"name": j.name, "at": j.at_hhmm(), "last_fired": j.last_fired.isoformat() if j.last_fired else None}
                      for j in sch.jobs]}
 
 
 @app.get("/api/alarm", response_model=AlarmState)
 async def alarm_state() -> AlarmState:
     return runtime.alarm.state
+
+
+# --- settings (the app's settings form): one shared Settings object, updated in place ---
+
+
+@app.get("/api/settings", response_model=Settings)
+async def get_settings() -> Settings:
+    return runtime.settings
+
+
+@app.post("/api/settings", dependencies=[Depends(require_pin)], response_model=Settings)
+async def update_settings(patch: dict) -> Settings:
+    """Merge the given fields into the live settings (a partial body is fine).
+    The alarm engine, presence machine, scheduler, and report builder all
+    hold the same Settings object, so they see the change at once."""
+    if not isinstance(patch, dict):
+        raise HTTPException(status_code=400, detail="body must be an object of settings fields")
+    unknown = set(patch) - set(Settings.model_fields)
+    if unknown:
+        raise HTTPException(status_code=400, detail=f"unknown settings: {sorted(unknown)}")
+    try:
+        new = Settings.model_validate({**runtime.settings.model_dump(), **patch})
+        for name in ("night_window_start", "night_window_end", "basal_time"):
+            value = getattr(new, name)
+            if value is not None:
+                parse_hhmm(value)  # "HH:MM" only; time() rejects out-of-range fields
+    except (ValueError, TypeError) as e:
+        raise HTTPException(status_code=422, detail=f"invalid settings: {e}")
+    if new.low_threshold >= new.high_threshold:
+        raise HTTPException(status_code=422, detail="low_threshold must be below high_threshold")
+    override_changed = new.presence_override != runtime.settings.presence_override
+    for name in Settings.model_fields:
+        setattr(runtime.settings, name, getattr(new, name))
+    if override_changed:
+        runtime.presence.set_override(new.presence_override)
+    await hub.broadcast(WSMessage(type="settings_change", payload=runtime.settings.model_dump(mode="json")))
+    return runtime.settings
 
 
 # --- morning reports (step 11): read by the morning screen and the app ---
@@ -441,6 +480,11 @@ async def build_report(req: BuildReportRequest) -> MorningReport:
 @app.websocket("/ws")
 async def websocket(ws: WebSocket) -> None:
     await hub.serve(ws)
+
+
+# The demo panel (step 12): PIN-gated, and every control 404s outside demo mode.
+bind_demo(runtime)
+app.include_router(demo_router)
 
 
 # The kiosk page, mounted LAST so /api and /ws win.
