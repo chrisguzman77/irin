@@ -2,7 +2,9 @@
 into numbers with a regex and nothing else: the text never reaches a shell,
 eval, or an SQL string. Any insulin value is ECHOED and needs an explicit
 confirm() before a Treatment exists (invariant 2); a partial parse names the
-missing piece; a pending entry older than TIMEOUT_S on clock.py is discarded.
+missing piece; a pending entry older than TIMEOUT_S WALL seconds is discarded
+(the confirm is a human's thumb, so the window is scaled by the replay speed:
+10 s of wall time is 600 s of clock time at 60x; timers still read clock.py).
 Carbs-only entries are stored at once (no insulin, nothing to confirm)."""
 
 from __future__ import annotations
@@ -16,7 +18,7 @@ from . import store
 from .clock import clock
 from .contracts import Treatment
 
-TIMEOUT_S = 10
+TIMEOUT_S = 10  # wall seconds the person has to confirm
 MAX_CARBS_G = 300
 MAX_UNITS = 50
 
@@ -123,6 +125,7 @@ class Pending:
     pending_id: str
     parsed: ParseResult
     created_at: object  # datetime from clock.now()
+    expires_at: object  # clock.now() + TIMEOUT_S wall seconds at the speed in force when created
 
 
 @dataclass
@@ -131,7 +134,7 @@ class VoiceLogger:
 
     def _expire(self) -> None:
         now = clock.now()
-        for pid in [p for p, e in self._pending.items() if now - e.created_at > timedelta(seconds=TIMEOUT_S)]:
+        for pid in [p for p, e in self._pending.items() if now > e.expires_at]:
             del self._pending[pid]
 
     def submit(self, text: str) -> dict:
@@ -147,7 +150,8 @@ class VoiceLogger:
             store.insert_treatment(t)
             return {"status": "stored", "stored": [t.model_dump(mode="json")]}
         pid = secrets.token_hex(8)
-        self._pending[pid] = Pending(pid, r, clock.now())
+        now = clock.now()
+        self._pending[pid] = Pending(pid, r, now, now + timedelta(seconds=TIMEOUT_S * clock.speed))
         return {"status": "needs_confirm", "pending_id": pid, "echo": r.echo(), "timeout_s": TIMEOUT_S}
 
     def confirm(self, pending_id: str) -> dict:
