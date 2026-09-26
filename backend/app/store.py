@@ -72,6 +72,18 @@ def select_readings(since: datetime, conn: sqlite3.Connection | None = None) -> 
     ]
 
 
+def select_latest_reading(conn: sqlite3.Connection | None = None) -> Reading | None:
+    own = conn is None
+    conn = conn or connect()
+    r = conn.execute("SELECT * FROM readings ORDER BY timestamp DESC LIMIT 1").fetchone()
+    if own:
+        conn.close()
+    if r is None:
+        return None
+    return Reading(timestamp=datetime.fromisoformat(r["timestamp"]), glucose_mgdl=r["glucose_mgdl"],
+                   trend=r["trend"], source=r["source"], is_stale=bool(r["is_stale"]))
+
+
 def insert_treatment(t: Treatment, conn: sqlite3.Connection | None = None) -> int:
     """Invariant 2, enforced again at the storage boundary."""
     if t.insulin_units is not None and not t.confirmed:
