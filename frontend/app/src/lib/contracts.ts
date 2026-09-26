@@ -12,3 +12,4 @@ export type Forecast = S["Forecast"];
 export type AlarmState = S["AlarmState"];
 export type Settings = S["Settings"];
 export type PresenceState = S["PresenceState"];
+export type SignalCard = S["SignalCard"];
