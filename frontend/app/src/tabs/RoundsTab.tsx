@@ -8,6 +8,8 @@ import step from "../fixtures/signal_card_step.json";
 import { readPairingState } from "../lib/pairing";
 import RecallCards from "./device/RecallCards";
 import DoctorSharing from "./rounds/DoctorSharing";
+import StepTimeline from "./rounds/StepTimeline";
+import WatchToday from "./rounds/WatchToday";
 
 // Irin Rounds tab (justin.md R3): this morning's recall questions, then "What
 // my doctor sees": the cards the device actually sealed (GET /api/rounds/cards,
@@ -101,7 +103,9 @@ export default function RoundsTab() {
 
   return (
     <section className="flex flex-col gap-4">
-      {base && <RecallCards lows={socket.recallDue} baseUrl={base} demo={snap?.mode === "replay"} />}
+      {base && <RecallCards items={socket.recallDue} baseUrl={base} demo={snap?.mode === "replay"} />}
+      {base && snap && <WatchToday snap={snap} baseUrl={base} planState={socket.planState} />}
+      {base && snap && <StepTimeline snap={snap} baseUrl={base} planState={socket.planState} />}
       {base && <DoctorSharing />}
       <h2 className="text-xl font-semibold">What my doctor sees</h2>
       {error && <p className="text-sm text-red-400">Could not load the cards from your Irin.</p>}

@@ -6,6 +6,7 @@ import DemoPanel from "./device/DemoPanel";
 import LiveView from "./device/LiveView";
 import LogView from "./device/LogView";
 import RecallCards from "./device/RecallCards";
+import WatchToday from "./rounds/WatchToday";
 import ReportsView from "./device/ReportsView";
 import SettingsForm from "./device/SettingsForm";
 
@@ -89,12 +90,17 @@ export default function DeviceTab() {
       </div>
       {view === "Live" && (
         <RecallCards
-          lows={socket.recallDue}
+          items={socket.recallDue}
           baseUrl={target.url}
           demo={snap?.mode === "replay"}
         />
       )}
       {view === "Live" && <LiveView snap={snap} stale={socket.disconnectedLong} basalNudge={nudge !== "none"} onLog={() => setView("Log")} baseUrl={target.url} />}
+      {view === "Live" && snap && (
+        <div className="mt-4">
+          <WatchToday snap={snap} baseUrl={target.url} planState={socket.planState} />
+        </div>
+      )}
       {view === "Log" && <LogView baseUrl={target.url} settings={snap?.settings} />}
       {view === "Reports" && <ReportsView baseUrl={target.url} mode={snap?.mode} />}
       {view === "Settings" && <SettingsForm current={snap?.settings} baseUrl={target.url} />}
