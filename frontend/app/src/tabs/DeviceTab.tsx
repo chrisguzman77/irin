@@ -23,7 +23,11 @@ export default function DeviceTab() {
     if (location.pathname === DEMO_PATH) history.replaceState(null, "", "/");
     const onPop = () => setView((v) => (v === "Demo" && location.pathname !== DEMO_PATH ? "Live" : v));
     window.addEventListener("popstate", onPop);
-    return () => window.removeEventListener("popstate", onPop);
+    return () => {
+      window.removeEventListener("popstate", onPop);
+      // leaving the Device tab closes the panel, so /demo never outlives it
+      if (location.pathname === DEMO_PATH) history.replaceState(null, "", "/");
+    };
   }, []);
   const openDemo = () => {
     history.pushState(null, "", DEMO_PATH);

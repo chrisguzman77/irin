@@ -1,6 +1,6 @@
 // Kiosk display: detail screen (justin.md step 1) and the Detail / Night /
-// Morning modes (step 2). The mode comes from the Pi's clock (/api/health)
-// and settings.night_window_*, never the browser's clock.
+// Morning modes (step 2). The mode is the backend's display_mode
+// (GET /api/scheduler), never the browser's clock.
 // Alarm visuals (step 3): the tier comes from alarm.trigger_type, the
 // intensity from alarm.state; the takeover covers every mode.
 // Renders ONLY from the state_snapshot sent on every WebSocket connect plus the
@@ -16,8 +16,8 @@ const GAP_MIN = 15;            // don't join points across a gap this long (matc
 const DISCONNECT_BANNER_MS = 15000;
 const TARGET_LOW = 70;         // time-in-range band, consensus 70-180 mg/dL
 const TARGET_HIGH = 180;
-const MORNING_MIN = 120;       // Morning screen lasts 2 h after the night window ends
-const HEALTH_POLL_MS = 5000;   // the Pi's clock, polled (at 60x replay: 5 clock-min)
+const POLL_MS = 5000;          // the Pi's clock and display mode, polled (at 60x replay: 5 clock-min)
+const MODES = ["detail", "night", "morning"];
 
 // U+FE0E forces the text glyph: some platforms draw ↗ ↘ as colour emoji.
 const TREND_ARROWS = Object.fromEntries(Object.entries({
@@ -28,7 +28,9 @@ const TREND_ARROWS = Object.fromEntries(Object.entries({
 const state = {
   mode: null,
   latest: null,        // Reading
-  forecast: null,      // Forecast
+  forecast: null,      // Forecast, only while forecast status is ok
+  forecastNote: "",    // why there is no forecast line (status suspended / unavailable)
+  displayMode: "detail", // the backend's display_mode
   settings: null,
   clockSynced: true,
   points: [],          // [{t: ms, mgdl}] oldest first, readings received this session
@@ -68,6 +70,34 @@ function setMode(mode) {
   state.mode = mode;
 }
 
+// After every snapshot (connect, reconnect, mode switch) the graph is refilled
+// from GET /api/history, so a reload never starts from one point.
+let historyToken = 0;
+async function backfillHistory() {
+  const token = ++historyToken;
+  const mode = state.mode;
+  try {
+    const res = await fetch(`/api/history?minutes=${WINDOW_MIN}`, { cache: "no-store" });
+    if (!res.ok) return;
+    const rows = await res.json();
+    if (token !== historyToken || mode !== state.mode) return; // superseded or the source switched
+    const seen = new Map(state.points.map((p) => [p.t, p]));
+    for (const r of rows) seen.set(toMs(r.timestamp), { t: toMs(r.timestamp), mgdl: r.glucose_mgdl });
+    const newest = state.latest ? toMs(state.latest.timestamp) : Math.max(...seen.keys());
+    state.points = [...seen.values()]
+      .filter((p) => p.t <= newest && p.t >= newest - WINDOW_MIN * 60000)
+      .sort((a, b) => a.t - b.t);
+    render();
+  } catch { /* the graph keeps what it has; the disconnected banner covers a dead backend */ }
+}
+
+// forecast_update carries status ok | suspended | unavailable; only ok draws a line.
+function setForecast(p) {
+  const ok = p && p.status === "ok" && p.predicted_mgdl != null;
+  state.forecast = ok ? p : null;
+  state.forecastNote = ok || !p || !p.status ? "" : `forecast ${p.status}${p.reason ? `: ${p.reason}` : ""}`;
+}
+
 function onMessage(msg) {
   const p = msg.payload || {};
   switch (msg.type) {
@@ -76,18 +106,22 @@ function onMessage(msg) {
       state.settings = p.settings || null;
       state.clockSynced = p.clock_synced !== false;
       state.forecast = p.forecast || null;
+      state.forecastNote = "";
       state.alarm = p.alarm || { state: "idle", trigger_type: null };
       if (p.latest_reading) addReading(p.latest_reading);
       else state.latest = null;
+      backfillHistory();
       break;
     case "reading_update":
       addReading(p);
       break;
     case "forecast_update":
-      state.forecast = p;
+      setForecast(p);
       break;
     case "mode_change":
       setMode(p.mode);
+      backfillHistory();
+      pollDevice();
       break;
     case "alarm_state_change":
       state.alarm = p.alarm || p;
@@ -128,33 +162,24 @@ function connect() {
 
 // --- the Pi's clock and the screen mode ---
 
-async function pollHealth() {
+// The Pi's clock (/api/health, for the night clock face) and the backend's
+// display_mode and clock_synced (/api/scheduler, the NTP guard).
+async function pollDevice() {
   try {
-    const h = await (await fetch("/api/health", { cache: "no-store" })).json();
+    const [h, s] = await Promise.all([
+      fetch("/api/health", { cache: "no-store" }).then((r) => r.json()),
+      fetch("/api/scheduler", { cache: "no-store" }).then((r) => r.json()),
+    ]);
     const t = toMs(h.clock);
     if (!Number.isNaN(t)) state.piClock = t;
+    state.displayMode = MODES.includes(s.display_mode) ? s.display_mode : "detail";
+    if (typeof s.clock_synced === "boolean") state.clockSynced = s.clock_synced;
   } catch { /* the disconnected banner covers a dead backend */ }
   render();
 }
 
-const minutesOfDay = (ms) => { const d = new Date(ms); return d.getHours() * 60 + d.getMinutes(); };
-const parseHHMM = (s) => { const [h, m] = String(s || "").split(":").map(Number); return h * 60 + (m || 0); };
-// true when m lies in [start, end) on a 24 h circle
-const inWindow = (m, start, end) => start <= end ? m >= start && m < end : m >= start || m < end;
-
-// "detail" | "night" | "morning". Detail whenever the Pi's clock is unknown or
-// not yet NTP-synced: no clock, no night decision.
-function screenMode() {
-  const now = state.piClock ?? (state.latest ? toMs(state.latest.timestamp) : null);
-  if (now === null || !state.clockSynced || !state.settings) return "detail";
-  const start = parseHHMM(state.settings.night_window_start);
-  const end = parseHHMM(state.settings.night_window_end);
-  if (Number.isNaN(start) || Number.isNaN(end)) return "detail";
-  const m = minutesOfDay(now);
-  if (inWindow(m, start, end)) return "night";
-  if (inWindow(m, end, (end + MORNING_MIN) % 1440)) return "morning";
-  return "detail";
-}
+// Detail whenever the clock is not synced: no trusted clock, no night decision.
+const screenMode = () => (state.clockSynced ? state.displayMode : "detail");
 
 // --- render ---
 
@@ -175,7 +200,7 @@ function render() {
   document.body.classList.toggle("is-disconnected", disconnected);
 
   const mode = screenMode();
-  for (const m of ["detail", "night", "morning"]) {
+  for (const m of MODES) {
     document.body.classList.toggle(`mode-${m}`, m === mode);
     $(m).classList.toggle("hidden", m !== mode);
   }
@@ -241,12 +266,22 @@ function storePin(pin) {
   try { pin ? localStorage.setItem(PIN_KEY, pin) : localStorage.removeItem(PIN_KEY); } catch { /* kiosk only */ }
 }
 
-// The one place the acknowledge is sent (ack_source = device). The backend's
-// acknowledge endpoint / WS command shape is not in contracts.py or main.py
-// yet (chris.md step 8), so nothing is sent; wire it here when it lands, and
-// on a 401 call storePin(null) and re-prompt the keypad.
-async function sendAcknowledge(_pin) {
-  return { ok: false, reason: "not connected yet: the device has no acknowledge endpoint" };
+// The one place the acknowledge is sent: POST /api/acknowledge, source device
+// (the R2 recorder counts which screen answered). The takeover clears only
+// when the Pi's alarm_state_change arrives, never on the tap itself.
+async function sendAcknowledge(pin) {
+  try {
+    const res = await fetch("/api/acknowledge", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-PIN": pin },
+      body: JSON.stringify({ source: "device" }),
+    });
+    if (res.status === 401) return { ok: false, badPin: true, reason: "PIN not accepted — tap Acknowledge to try again" };
+    if (!res.ok) return { ok: false, reason: `the device refused (${res.status})` };
+    return { ok: true };
+  } catch {
+    return { ok: false, reason: "could not reach the device" };
+  }
 }
 
 async function onAckTap() {
@@ -256,6 +291,7 @@ async function onAckTap() {
   state.ackMsg = "sending…";
   render();
   const res = await sendAcknowledge(pin);
+  if (res.badPin) storePin(null); // the next tap re-prompts the keypad
   state.ackMsg = res.ok ? "" : res.reason;
   render();
 }
@@ -392,6 +428,14 @@ function drawGraph() {
     ctx.setLineDash([]);
     ctx.lineCap = "butt";
   }
+  // No line: say why ("the UI says so"), never leave the gap unexplained.
+  if (!fc && state.forecastNote && !dim) {
+    ctx.textAlign = "right";
+    ctx.textBaseline = "top";
+    ctx.fillStyle = "#999";
+    ctx.font = `${Math.round(fs * 0.85)}px system-ui, sans-serif`;
+    ctx.fillText(state.forecastNote, padL + plotW, padT);
+  }
 }
 
 // The disconnected banner is time-based, so re-check it even with no messages.
@@ -400,5 +444,5 @@ window.addEventListener("resize", drawGraph);
 $("alarm-ack").addEventListener("click", onAckTap);
 render();
 connect();
-pollHealth();
-setInterval(pollHealth, HEALTH_POLL_MS);
+pollDevice();
+setInterval(pollDevice, POLL_MS);
