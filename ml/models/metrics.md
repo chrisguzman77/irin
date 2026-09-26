@@ -301,8 +301,40 @@ Near-miss counts rest on forecast_v1's replayed warnings. Before the
 forecaster's train/test split the model trained on those nights, so a
 near-miss there is not evidence; every near-miss signal above is also
 reported on out-of-sample windows only (few: 3 fortnights, 11 five-day
-windows). The demo windows' answer to the guard is recorded with them in
-step 7.
+windows).
+
+The guard's answer for every demo scenario (demo/scenarios/, step 7), i.e.
+whether any warning or near-miss the scenario shows could come from a model
+that trained on that same night:
+
+| Scenario | Glucose | Warnings / near-misses come from | Evidence? |
+|---|---|---|---|
+| the_save | real, date-shifted | forecast_v1 on a HELD-OUT night (after the split) | yes: out-of-sample |
+| basal_change_1 | real, date-shifted | forecast_v1 RETRAINED WITHOUT the scenario's window (plus 35 / 65 min margins), replayed at 85 | yes: out-of-sample |
+| rearm_low | real, date-shifted | forecast_v1, IN-SAMPLE (the night is before the split) | no: it demonstrates the re-arm, not forecast accuracy, and says so in demo/scenarios/README.md |
+| normal_night, failure, meal_context, high_spike | real, date-shifted | forecast_v1, in-sample | nothing claimed: they demonstrate display, staleness, context, and the high alert, not a warning |
+| titration_synthetic | SYNTHETIC (2020 timestamps) | a labeled overlay written to reproduce the R10 worked example | no model involved |
+
+### Demo scenarios: what is real, what is not (step 7)
+
+- **Real glucose, date-shifted by whole days** (the time of day the forecaster
+  uses is unchanged; the real dates and offsets never enter the repo): the six
+  core scenarios and basal_change_1. Chris vouches for the real nights at
+  checkpoint 7.
+- **Inferred and labeled:** every reason code in a companion JSON
+  (code_source "inferred"), and the glucose side of basal_change_1's alarm
+  events.
+- **SYNTHETIC overlay, labeled** (overlay_synthetic: true): acknowledge
+  times, ack source, escalation, presence, and recall answers in
+  basal_change_1 (its one nocturnal low is left unanswered, never "fine").
+- **SYNTHETIC throughout:** titration_synthetic, built so nights.py yields the
+  Step Watch amber worked example exactly (coverage 1,390 / 1,440; low point
+  98 -> 76; TBR 58 / 1,440; 2 near-misses; 1 low not remembered; rough 3 of 5).
+- **The dose units** in basal_change_1 (18) were given by George; until Chris
+  confirms they are his real dose, say "units illustrative".
+- The Basal Check demo is described every time, verbatim: "glucose real;
+  reason codes inferred and labeled; acknowledge, presence, and recall data
+  are a labeled overlay". Never an unqualified "built from real nights".
 
 ### Caveats, in the spec's own words
 
