@@ -1,4 +1,8 @@
-// Kiosk display, detail screen (justin.md step 1).
+// Kiosk display: detail screen (justin.md step 1) and the Detail / Night /
+// Morning modes (step 2). The mode comes from the Pi's clock (/api/health)
+// and settings.night_window_*, never the browser's clock.
+// Alarm visuals (step 3): the tier comes from alarm.trigger_type, the
+// intensity from alarm.state; the takeover covers every mode.
 // Renders ONLY from the state_snapshot sent on every WebSocket connect plus the
 // updates after it (hard client rule 1); never assumes it saw messages while
 // disconnected. Time on the graph is the Pi's clock (reading timestamps),
@@ -12,11 +16,14 @@ const GAP_MIN = 15;            // don't join points across a gap this long (matc
 const DISCONNECT_BANNER_MS = 15000;
 const TARGET_LOW = 70;         // time-in-range band, consensus 70-180 mg/dL
 const TARGET_HIGH = 180;
+const MORNING_MIN = 120;       // Morning screen lasts 2 h after the night window ends
+const HEALTH_POLL_MS = 5000;   // the Pi's clock, polled (at 60x replay: 5 clock-min)
 
-const TREND_ARROWS = {
+// U+FE0E forces the text glyph: some platforms draw ↗ ↘ as colour emoji.
+const TREND_ARROWS = Object.fromEntries(Object.entries({
   DoubleUp: "⇈", SingleUp: "↑", FortyFiveUp: "↗", Flat: "→",
   FortyFiveDown: "↘", SingleDown: "↓", DoubleDown: "⇊",
-};
+}).map(([k, v]) => [k, v + "\uFE0E"]));
 
 const state = {
   mode: null,
@@ -27,7 +34,14 @@ const state = {
   points: [],          // [{t: ms, mgdl}] oldest first, readings received this session
   connected: false,
   downSince: Date.now(),
+  piClock: null,       // ms, the Pi's clock.now() from /api/health
+  alarm: { state: "idle", trigger_type: null },  // AlarmState
+  ackMsg: "",
 };
+
+const PIN_KEY = "irin.kiosk_pin"; // kiosk-only concession: the low-stakes ack PIN lives in localStorage
+const LOW_TRIGGERS = ["predicted_low", "actual_low"];
+const SOUNDING = ["pending", "active", "rearmed"]; // pending = the predicted-low warning
 
 const toMs = (iso) => new Date(iso).getTime(); // naive Pi-local timestamps; only differences matter
 const hhmm = (ms) => new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
@@ -62,6 +76,7 @@ function onMessage(msg) {
       state.settings = p.settings || null;
       state.clockSynced = p.clock_synced !== false;
       state.forecast = p.forecast || null;
+      state.alarm = p.alarm || { state: "idle", trigger_type: null };
       if (p.latest_reading) addReading(p.latest_reading);
       else state.latest = null;
       break;
@@ -73,6 +88,10 @@ function onMessage(msg) {
       break;
     case "mode_change":
       setMode(p.mode);
+      break;
+    case "alarm_state_change":
+      state.alarm = p.alarm || p;
+      if (!SOUNDING.includes(state.alarm.state)) state.ackMsg = "";
       break;
     case "settings_change":
       state.settings = p.settings || p;
@@ -107,6 +126,36 @@ function connect() {
   ws.onerror = () => ws.close();
 }
 
+// --- the Pi's clock and the screen mode ---
+
+async function pollHealth() {
+  try {
+    const h = await (await fetch("/api/health", { cache: "no-store" })).json();
+    const t = toMs(h.clock);
+    if (!Number.isNaN(t)) state.piClock = t;
+  } catch { /* the disconnected banner covers a dead backend */ }
+  render();
+}
+
+const minutesOfDay = (ms) => { const d = new Date(ms); return d.getHours() * 60 + d.getMinutes(); };
+const parseHHMM = (s) => { const [h, m] = String(s || "").split(":").map(Number); return h * 60 + (m || 0); };
+// true when m lies in [start, end) on a 24 h circle
+const inWindow = (m, start, end) => start <= end ? m >= start && m < end : m >= start || m < end;
+
+// "detail" | "night" | "morning". Detail whenever the Pi's clock is unknown or
+// not yet NTP-synced: no clock, no night decision.
+function screenMode() {
+  const now = state.piClock ?? (state.latest ? toMs(state.latest.timestamp) : null);
+  if (now === null || !state.clockSynced || !state.settings) return "detail";
+  const start = parseHHMM(state.settings.night_window_start);
+  const end = parseHHMM(state.settings.night_window_end);
+  if (Number.isNaN(start) || Number.isNaN(end)) return "detail";
+  const m = minutesOfDay(now);
+  if (inWindow(m, start, end)) return "night";
+  if (inWindow(m, end, (end + MORNING_MIN) % 1440)) return "morning";
+  return "detail";
+}
+
 // --- render ---
 
 const isDisconnected = () => !state.connected && Date.now() - state.downSince > DISCONNECT_BANNER_MS;
@@ -118,10 +167,27 @@ function render() {
 
   $("badge-demo").classList.toggle("hidden", state.mode !== "replay");
   $("badge-clock").classList.toggle("hidden", state.clockSynced);
-  $("banner-stale").classList.toggle("hidden", !(r && r.is_stale));
+  const a = state.alarm || {};
+  const staleAlarm = a.trigger_type === "stale" && a.state !== "idle";
+  $("banner-stale").classList.toggle("hidden", !((r && r.is_stale) || staleAlarm));
   $("banner-disconnected").classList.toggle("hidden", !disconnected);
   document.body.classList.toggle("is-stale", stale);
   document.body.classList.toggle("is-disconnected", disconnected);
+
+  const mode = screenMode();
+  for (const m of ["detail", "night", "morning"]) {
+    document.body.classList.toggle(`mode-${m}`, m === mode);
+    $(m).classList.toggle("hidden", m !== mode);
+  }
+  const num = r ? String(Math.round(r.glucose_mgdl)) : "---";
+  const arrow = r && !r.is_stale ? (TREND_ARROWS[r.trend] ?? "?") : "";
+  $("night-glucose").textContent = $("morning-glucose").textContent = num;
+  $("night-trend").textContent = $("morning-trend").textContent = arrow;
+  const now = state.piClock ?? (r ? toMs(r.timestamp) : null);
+  $("night-clock").textContent = now === null ? "--:--" : hhmm(now);
+  // The Morning numbers (overnight low/high with times, time below/above,
+  // TIR) are night metrics from the backend (nights.py); the snapshot has no
+  // field for them yet, so the screen shows "—" until it does (journal request).
 
   if (r) {
     $("glucose").textContent = Math.round(r.glucose_mgdl);
@@ -134,7 +200,88 @@ function render() {
   }
   // IOB, last dose, and today's TIR are not in the snapshot yet (contracts
   // request to Chris, see journal); the tiles stay "—" until they are.
-  drawGraph();
+  renderAlarm(num, arrow);
+  if (mode === "detail") drawGraph();
+}
+
+// --- alarm (step 3) ---
+
+function renderAlarm(num, arrow) {
+  const a = state.alarm || {};
+  const low = LOW_TRIGGERS.includes(a.trigger_type);
+  const sounding = low && SOUNDING.includes(a.state);
+  const full = a.trigger_type === "actual_low";
+  const box = $("alarm");
+  box.classList.toggle("hidden", !sounding);
+  document.body.classList.toggle("alarm-on", sounding);
+  box.classList.toggle("tier-warning", sounding && !full);
+  box.classList.toggle("tier-full", sounding && full);
+  // Warning escalates when it goes Pending -> Active unacknowledged; full strobes once re-armed.
+  box.classList.toggle("escalated", sounding && !full && a.state !== "pending");
+  box.classList.toggle("strobe", sounding && full && a.state === "rearmed");
+  if (sounding) {
+    $("alarm-title").textContent = full ? "LOW" : "LOW COMING";
+    $("alarm-glucose").textContent = num;
+    $("alarm-trend").textContent = arrow;
+    $("alarm-sub").textContent = full
+      ? (a.state === "rearmed" ? "still low — treat now" : "treat now")
+      : "predicted low within 30 minutes";
+    $("alarm-ack-msg").textContent = state.ackMsg;
+  }
+  $("flag-acked").classList.toggle("hidden", !(low && a.state === "acknowledged"));
+  const high = a.trigger_type === "high" && a.state !== "idle";   // one-shot: tint + indicator, no ack UI
+  $("flag-high").classList.toggle("hidden", !high);
+  document.body.classList.toggle("alarm-high", high);
+}
+
+function cachedPin() {
+  try { return localStorage.getItem(PIN_KEY); } catch { return null; }
+}
+function storePin(pin) {
+  try { pin ? localStorage.setItem(PIN_KEY, pin) : localStorage.removeItem(PIN_KEY); } catch { /* kiosk only */ }
+}
+
+// The one place the acknowledge is sent (ack_source = device). The backend's
+// acknowledge endpoint / WS command shape is not in contracts.py or main.py
+// yet (chris.md step 8), so nothing is sent; wire it here when it lands, and
+// on a 401 call storePin(null) and re-prompt the keypad.
+async function sendAcknowledge(_pin) {
+  return { ok: false, reason: "not connected yet: the device has no acknowledge endpoint" };
+}
+
+async function onAckTap() {
+  const pin = cachedPin() ?? await promptPin();
+  if (!pin) return;
+  storePin(pin);
+  state.ackMsg = "sending…";
+  render();
+  const res = await sendAcknowledge(pin);
+  state.ackMsg = res.ok ? "" : res.reason;
+  render();
+}
+
+// Touch keypad. Resolves with the digits, or null on cancel.
+function promptPin() {
+  return new Promise((resolve) => {
+    let digits = "";
+    const pad = $("keypad"), keys = $("keypad-keys"), dots = $("keypad-dots");
+    const show = () => { dots.textContent = "•".repeat(digits.length); };
+    const done = (v) => { pad.classList.add("hidden"); keys.replaceChildren(); resolve(v); };
+    keys.replaceChildren();
+    for (const k of ["1", "2", "3", "4", "5", "6", "7", "8", "9", "✕", "0", "OK"]) {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.textContent = k;
+      b.onclick = () => {
+        if (k === "✕") return digits ? (digits = digits.slice(0, -1), show()) : done(null);
+        if (k === "OK") return digits && done(digits);
+        if (digits.length < 8) { digits += k; show(); }
+      };
+      keys.append(b);
+    }
+    show();
+    pad.classList.remove("hidden");
+  });
 }
 
 function drawGraph() {
@@ -250,5 +397,8 @@ function drawGraph() {
 // The disconnected banner is time-based, so re-check it even with no messages.
 setInterval(() => { if (!state.connected) render(); }, 1000);
 window.addEventListener("resize", drawGraph);
+$("alarm-ack").addEventListener("click", onAckTap);
 render();
 connect();
+pollHealth();
+setInterval(pollHealth, HEALTH_POLL_MS);
