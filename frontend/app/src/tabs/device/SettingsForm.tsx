@@ -1,9 +1,12 @@
 import { useEffect, useState, type ReactNode } from "react";
 import type { Settings } from "../../lib/contracts";
-import { ALARM_SOUNDS, saveSettings, validate } from "../../lib/settings";
+import { PinRejected } from "../../lib/api";
+import { ALARM_SOUNDS, applied, changedFields, saveSettings, validate } from "../../lib/settings";
 
-// Step 5: every device setting, drafted from the Pi's snapshot. Nothing is
-// shown as applied until the Pi echoes it back.
+// Step 5: every device setting, drafted from the Pi's snapshot. Save sends
+// only the changed fields; nothing is shown as saved until the Pi echoes it
+// back (settings_change), and a reload then shows the Pi's values.
+const ECHO_WAIT_MS = 5000;
 const LED_STATES = [
   ["ambient", "Ambient"],
   ["warning", "Warning (predicted low)"],
@@ -37,17 +40,44 @@ export default function SettingsForm({ current, baseUrl }: { current: Settings |
   const [draft, setDraft] = useState<Settings | null>(current ?? null);
   const [dirty, setDirty] = useState(false);
   const [msg, setMsg] = useState("");
+  const [msgTone, setMsgTone] = useState<"info" | "ok" | "error">("info");
+  const [sending, setSending] = useState(false);
+  const [pending, setPending] = useState<Partial<Settings> | null>(null);
+
+  const say = (text: string, tone: "info" | "ok" | "error" = "info") => {
+    setMsg(text);
+    setMsgTone(tone);
+  };
 
   // Follow the Pi while nothing is being edited.
   useEffect(() => {
     if (!dirty && current) setDraft(current);
   }, [current, dirty]);
 
+  // A save counts only when the Pi's settings carry it.
+  useEffect(() => {
+    if (pending && current && applied(current, pending)) {
+      setPending(null);
+      setDirty(false);
+      say("Saved. Your Irin is using the new settings.", "ok");
+    }
+  }, [current, pending]);
+
+  useEffect(() => {
+    if (!pending) return;
+    const id = window.setTimeout(
+      () => say("Your Irin accepted the change but has not confirmed it yet. Check the connection.", "error"),
+      ECHO_WAIT_MS,
+    );
+    return () => window.clearTimeout(id);
+  }, [pending]);
+
   if (!draft) return <p className="text-neutral-400">Waiting for your Irin's settings…</p>;
 
   const set = <K extends keyof Settings>(k: K, v: Settings[K]) => {
     setDraft({ ...draft, [k]: v });
     setDirty(true);
+    setPending(null);
     setMsg("");
   };
   const num = (v: string) => (v === "" ? Number.NaN : Number(v));
@@ -59,9 +89,27 @@ export default function SettingsForm({ current, baseUrl }: { current: Settings |
       className="pb-28"
       onSubmit={async (e) => {
         e.preventDefault();
-        if (errors.length) return;
-        const res = await saveSettings(baseUrl, draft);
-        setMsg(res.ok ? "Sent. Waiting for your Irin to confirm…" : (res.reason ?? "Save failed."));
+        if (errors.length || !current || sending) return;
+        const patch = changedFields(current, draft);
+        if (Object.keys(patch).length === 0) {
+          setDirty(false);
+          say("Nothing changed.");
+          return;
+        }
+        setSending(true);
+        say("Saving…");
+        try {
+          const res = await saveSettings(baseUrl, patch);
+          if (res.ok) {
+            setPending(patch);
+            say("Sent. Waiting for your Irin to confirm…");
+          } else say(res.reason, "error");
+        } catch (err) {
+          if (err instanceof PinRejected) return; // the app returns to the code screen
+          say("Could not reach your Irin. Nothing was saved.", "error");
+        } finally {
+          setSending(false);
+        }
       }}
     >
       <Section title="Glucose alarms">
@@ -173,21 +221,29 @@ export default function SettingsForm({ current, baseUrl }: { current: Settings |
         </Row>
       </Section>
 
-      <div className="fixed bottom-0 inset-x-0 bg-black/95 border-t border-neutral-800 p-3">
+      <div className="fixed bottom-0 inset-x-0 z-10 bg-black border-t border-neutral-800 p-3">
         <div className="max-w-2xl mx-auto flex flex-col gap-1">
           {errors.length > 0 && <p className="text-red-400 text-sm">{errors[0]}</p>}
-          {msg && <p className="text-amber-300 text-sm">{msg}</p>}
+          {msg && (
+            <p
+              role="status"
+              className={`text-sm ${msgTone === "ok" ? "text-green-400" : msgTone === "error" ? "text-red-400" : "text-amber-300"}`}
+            >
+              {msg}
+            </p>
+          )}
           <div className="flex gap-2">
             <button type="button" disabled={!dirty}
               className="px-4 py-3 rounded-lg border border-neutral-700 text-neutral-300 disabled:opacity-40"
               onClick={() => {
                 setDirty(false);
+                setPending(null);
                 setMsg("");
                 if (current) setDraft(current);
               }}>
               Undo
             </button>
-            <button type="submit" disabled={!dirty || errors.length > 0}
+            <button type="submit" disabled={!dirty || errors.length > 0 || sending || !!pending}
               className="flex-1 py-3 rounded-lg bg-amber-400 text-black font-bold disabled:opacity-40">
               Save
             </button>
