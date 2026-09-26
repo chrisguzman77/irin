@@ -104,12 +104,40 @@ def test_named_tier_test_warning_ack_never_suppresses_the_actual_low():
 def test_idle_to_pending_needs_n_consecutive_predicted_lows(engine):
     eng, hal, log = engine
     eng.process_forecast(forecast(60))
-    eng.process_forecast(forecast(80))  # streak broken
+    eng.process_forecast(forecast(90))  # streak broken (85 is the predicted-low threshold)
     eng.process_forecast(forecast(60))
     assert eng.state.state == "idle"
     eng.process_forecast(forecast(60))
     assert eng.state.state == "pending" and eng.trigger == "predicted_low"
     assert sounds(hal) == ["alarm_soft"] and leds(hal)[-1] == "warning"
+
+
+def test_predicted_threshold_is_85_on_the_forecast_and_70_on_the_reading(engine):
+    eng, hal, log = engine
+    eng.process_forecast(forecast(84))
+    eng.process_forecast(forecast(84))
+    assert eng.state.state == "pending"
+    eng.process_reading(reading(84))  # 84 actual is not a low
+    assert eng.state.state == "pending"
+
+
+def test_missing_forecast_resets_the_count_but_never_clears_a_warning(engine):
+    eng, hal, log = engine
+    eng.process_forecast(forecast(60))
+    eng.process_no_forecast()  # a stale or gapped hour between two lows
+    eng.process_forecast(forecast(60))
+    assert eng.state.state == "idle"  # the count restarted
+    eng.process_forecast(forecast(60))
+    assert eng.state.state == "pending"
+    for _ in range(5):
+        eng.process_no_forecast()
+    assert eng.state.state == "pending"  # stays on through missing forecasts
+    eng.process_forecast(forecast(95))
+    eng.process_no_forecast()
+    eng.process_forecast(forecast(95))
+    assert eng.state.state == "pending"  # the two recoveries must be consecutive real forecasts
+    eng.process_forecast(forecast(95))
+    assert eng.state.state == "idle"
 
 
 def test_predictive_disabled_never_warns(engine):

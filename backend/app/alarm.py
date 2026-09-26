@@ -3,7 +3,9 @@
 States: idle | pending | active | acknowledged | rearmed
 Trigger types: predicted_low | actual_low | high | stale
 
-  Idle -> Pending:        N = 2 consecutive forecasts below the predicted-low threshold.
+  Idle -> Pending:        N = 2 consecutive forecasts below the predicted-low threshold
+                          (85 on the 20th-percentile forecast; a missing forecast resets
+                          the count and never clears a warning already on).
   Pending -> Active:      actual value crosses the low threshold, OR 5 min unacknowledged.
   Pending -> Idle:        warning acknowledged (final for the episode: no re-warn until the
                           episode closes), or the forecast back above threshold for 2
@@ -49,6 +51,10 @@ from .contracts import AlarmState, AlarmStateName, AlarmTrigger, Forecast, Readi
 from .windows import in_window
 
 PENDING_TIMEOUT_MIN = 5
+# George's step 3 operating point (Chris confirmed 2026-09-26): predict() returns a
+# 20th-percentile forecast, so the predicted-low threshold is 85 mg/dL on that output.
+# The actual-low threshold stays Settings.low_threshold (70).
+PREDICTED_LOW_THRESHOLD_MGDL = 85.0
 ESCALATION_MIN = 5
 REARM_MIN = 15
 RECOVERY_READINGS = 2
@@ -114,7 +120,7 @@ class AlarmEngine:
     def predicted_low_threshold(self) -> float:
         """The ONLY place R14(a) vigilance may reach: the predicted-low threshold.
         The actual-low path reads settings.low_threshold directly."""
-        return float(self.settings.low_threshold)
+        return PREDICTED_LOW_THRESHOLD_MGDL
 
     @property
     def trigger(self) -> AlarmTrigger | None:
@@ -241,6 +247,13 @@ class AlarmEngine:
                     self._close_episode(self.last_reading)
                 elif self._warning_acked:
                     self._warning_acked = False  # the acked episode is over; a new crossing warns again
+
+    def process_no_forecast(self) -> None:
+        """A missing forecast (stale or gapped hour) resets the consecutive counts;
+        a warning already on STAYS ON (only 2 real forecasts back above clear it,
+        or an actual low takes over). George/Chris decision, 2026-09-26."""
+        self._low_forecasts = 0
+        self._high_forecasts = 0
 
     def acknowledge(self, source: AckSource) -> bool:
         """Returns True when the ack changed anything. Highs and stale need no ack."""
