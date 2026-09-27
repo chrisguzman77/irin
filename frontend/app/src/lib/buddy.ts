@@ -1,5 +1,5 @@
 import { deviceFetch } from "./api";
-import type { StateSnapshot } from "./contracts";
+import type { Settings, StateSnapshot } from "./contracts";
 
 // Night Buddy B1 (justin.md): the patient side. Everything here renders from
 // the snapshot's buddy_state = {link, open_alert, treating, morning_line}
@@ -37,6 +37,8 @@ export interface MatchState {
   first_name: string | null;
   status: "offered" | "accepted" | "declined" | string;
   pair_url: string | null;
+  /** the other side is a seeded sample profile (relay "Buddy onboarding v2"): it never sends a watch link */
+  sample: boolean;
 }
 
 const str = (v: unknown): string | null => (typeof v === "string" && v ? v : null);
@@ -65,7 +67,7 @@ export function readBuddyState(snap: StateSnapshot | null): BuddyState {
       const o = obj(m);
       const id = str(o?.match_id);
       return o && id
-        ? [{ match_id: id, first_name: str(o.first_name), status: str(o.status) ?? "offered", pair_url: str(o.pair_url) }]
+        ? [{ match_id: id, first_name: str(o.first_name), status: str(o.status) ?? "offered", pair_url: str(o.pair_url), sample: o.sample === true }]
         : [];
     }),
   };
@@ -99,6 +101,7 @@ export function applyBuddyMessage(snap: StateSnapshot, type: string, p: Record<s
       const old = prev.find((m) => m?.match_id === p.match_id);
       const row: Record<string, unknown> = { ...(old ?? {}), match_id: p.match_id, status: p.status ?? old?.status, pair_url: p.pair_url ?? old?.pair_url ?? null };
       if (typeof p.first_name === "string") row.first_name = p.first_name;
+      if (typeof p.sample === "boolean") row.sample = p.sample;
       b.matches = old ? prev.map((m) => (m === old ? row : m)) : [...prev, row];
     }
     else return snap;
@@ -163,15 +166,16 @@ export interface MatchCard {
   intro: string | null;
   why: string | null;
   is_demo: boolean;
+  sample: boolean;
 }
 type Result<T> = { ok: true; value: T } | { ok: false; reason: string };
 
-async function reason(res: Response): Promise<string> {
+export async function reason(res: Response): Promise<string> {
   try {
     const b = await res.json();
     if (b && typeof b.detail === "string")
-      // a 403 / 409 detail is written for the user ("set up the buddy profile first")
-      return res.status === 403 || res.status === 409 ? b.detail : `Your Irin said (${res.status}): ${b.detail}`;
+      // a 403 / 409 / 422 detail is written for the user ("set up the buddy profile first")
+      return res.status === 403 || res.status === 409 || res.status === 422 ? b.detail : `Your Irin said (${res.status}): ${b.detail}`;
   } catch {
     /* no body */
   }
@@ -223,6 +227,7 @@ export async function findMatches(base: string): Promise<Result<MatchCard[]>> {
         intro: str(o.intro),
         why: str(o.why),
         is_demo: o.is_demo === true,
+        sample: o.sample === true,
       }];
     }),
   };
@@ -233,4 +238,11 @@ export async function answerMatch(base: string, matchId: string, verb: "accept" 
   if (!res.ok) return { ok: false, reason: await reason(res) };
   const o = obj(await res.json()) ?? {};
   return { ok: true, value: { match_id: str(o.match_id) ?? matchId, status: str(o.status) ?? "offered" } };
+}
+
+/** The wizard's opt-ins + emergency script in one POST /api/settings (the Pi merges a partial body);
+ * a 403 / 409 / 422 detail comes back as-is. */
+export async function saveBuddySettings(base: string, patch: Partial<Settings>): Promise<Result<null>> {
+  const res = await deviceFetch(base, "/api/settings", { method: "POST", body: JSON.stringify(patch) });
+  return res.ok ? { ok: true, value: null } : { ok: false, reason: await reason(res) };
 }
