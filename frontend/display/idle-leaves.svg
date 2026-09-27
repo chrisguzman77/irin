@@ -2,8 +2,8 @@
   <title>Leaf snowfall</title>
   <defs>
     <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#1d2b3a"/>
-      <stop offset="1" stop-color="#2f4858"/>
+      <stop offset="0" stop-color="#2E2F29"/>
+      <stop offset="1" stop-color="#3A4234"/>
     </linearGradient>
     <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
       <feGaussianBlur stdDeviation="0.8" result="b"/>

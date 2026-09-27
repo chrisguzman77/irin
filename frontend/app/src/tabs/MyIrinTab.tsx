@@ -2,11 +2,11 @@ import { useEffect, useState } from "react";
 import { useDevice } from "../lib/device";
 import {
   DASHBOARDS, fetchDash, ownerBearer,
-  type AlarmRow, type BasalRow, type DashName, type DashResult, type HeatRow, type NearMissRow, type NightRow,
+  type AlarmRow, type BasalRow, type BuddyRow, type StepNightRow, type StepWatchBody, type DashName, type DashResult, type HeatRow, type NearMissRow, type NightRow,
   type ProfileRow, type SensorRow, type TirRow, type UnderTheHood,
 } from "../lib/dash";
 import {
-  AlarmsChart, BasalChart, HeatChart, NearMissChart, NightsChart, ProfileChart, SensorChart, TirChart, UnderTheHoodView, md,
+  AlarmsChart, BasalChart, BuddyChart, HeatChart, StepWatchChart, NearMissChart, NightsChart, ProfileChart, SensorChart, TirChart, UnderTheHoodView, md,
 } from "./myirin/Charts";
 
 // My Irin (justin.md A4 / C4): eleven dashboards over Irin Cloud, one fetch
@@ -18,11 +18,13 @@ const RANGES = [14, 30, 90] as const;
 function Body({ name, result }: { name: DashName; result: DashResult | undefined }) {
   if (!result) return <p className="text-sm text-neutral-400">Loading…</p>;
   if (result.state === "not_yet") return <p className="text-sm text-neutral-400">Not served yet ({result.detail}).</p>;
-  if (result.state === "no_access") return <p className="text-sm text-neutral-400">Needs this phone paired as the owner (arrives with pairing).</p>;
+  if (result.state === "no_access")
+    return <p className="text-sm text-neutral-400">Needs the dashboard token: type it once under Device → Settings.</p>;
   if (result.state === "error") return <p className="text-sm text-amber-300">{result.detail}.</p>;
   const b = result.body;
   if (!b.available) return <p className="text-sm text-neutral-400">Not available yet{b.reason ? `: ${b.reason}` : "."}</p>;
-  if (b.empty) return <p className="text-sm text-neutral-400">No data in this range.</p>;
+  if (b.empty)
+    return <p className="text-sm text-neutral-400">{name === "step_watch" ? "No Step Watch in this range." : "No data in this range."}</p>;
   const rows = (b.rows ?? []) as never[];
   if (name !== "under_the_hood" && rows.length === 0) return <p className="text-sm text-neutral-400">No data in this range.</p>;
   switch (name) {
@@ -34,6 +36,8 @@ function Body({ name, result }: { name: DashName; result: DashResult | undefined
     case "near_misses": return <NearMissChart rows={rows as NearMissRow[]} />;
     case "basal": return <BasalChart rows={rows as BasalRow[]} />;
     case "sensor": return <SensorChart rows={rows as SensorRow[]} />;
+    case "step_watch": return <StepWatchChart body={b as unknown as StepWatchBody} rows={rows as StepNightRow[]} />;
+    case "buddy": return <BuddyChart rows={rows as BuddyRow[]} />;
     case "under_the_hood": return <UnderTheHoodView u={b as unknown as UnderTheHood} />;
     default: return <p className="text-sm text-neutral-400">Not drawn yet.</p>;
   }

@@ -46,7 +46,22 @@ export interface UnderTheHood {
   readings_table_bytes_all_devices: number | null; compressed_before_bytes: number | null; compressed_after_bytes: number | null;
   compression_ratio: number | null; last_aggregate_refresh: string | null;
 }
-export type DashBody = DashBase & { rows?: unknown[] } & Partial<UnderTheHood>;
+/** step_watch (cloud/sql/005): the newest confirmed plan and its window. */
+export interface StepPlan { plan_id: string; drug_class: string; drug_label: string; status: string; started_at: string; steps: { index: number; dose_label: string; planned_start: string }[] }
+export interface StepBaseline { from: string; to: string; low_point_mgdl: number | null; nights: number }
+export interface StepNightRow {
+  night_date: string; coverage_pct: number; low_point_mgdl: number | null; vs_baseline_mgdl: number | null;
+  minutes_below_70: number; tbr_pct: number; near_miss_count: number; level2_count: number;
+  reason_codes: string[]; code_source: string;
+}
+export interface StepCheckin { date: string; gi: "fine" | "rough" | "cant_eat" }
+export interface StepInjection { time: string; dose_label: string | null; confirmed: boolean }
+export interface StepWatchBody { plan: StepPlan | null; baseline: StepBaseline | null; checkins: StepCheckin[]; injections: StepInjection[] }
+export interface BuddyRow {
+  week: string; alerts: number; claims: number; calls: number; treating: number; resolved: number;
+  alerts_device_confirmed: number; alerts_unconfirmed: number;
+}
+export type DashBody = DashBase & { rows?: unknown[] } & Partial<UnderTheHood> & Partial<StepWatchBody>;
 
 export type DashResult =
   | { state: "ok"; body: DashBody }
@@ -71,8 +86,24 @@ export async function fetchDash(name: DashName, days: number, demo: boolean, bea
   return { state: "ok", body: b };
 }
 
-/** The owner's dashboard token. How the app receives it is not pinned yet
- * (the A2 owner pairing): until then there is none, and every panel says so. */
+// The owner's dashboard token (the cloud's OWNER_BEARER), typed once in
+// Settings and kept in this browser's localStorage, until the A2 owner
+// pairing decides how the app receives it. It only reads pictures.
+const BEARER_KEY = "irin.owner_bearer";
+
 export function ownerBearer(): string | null {
-  return null;
+  try {
+    return localStorage.getItem(BEARER_KEY) || null;
+  } catch {
+    return null;
+  }
+}
+
+export function setOwnerBearer(token: string | null): void {
+  try {
+    if (token) localStorage.setItem(BEARER_KEY, token);
+    else localStorage.removeItem(BEARER_KEY);
+  } catch {
+    /* private mode: the token is not kept */
+  }
 }

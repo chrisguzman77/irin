@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS family_stories (story_id TEXT PRIMARY KEY, json TEXT 
 CREATE TABLE IF NOT EXISTS reports (night_date TEXT PRIMARY KEY, json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS presence_transitions (since TEXT PRIMARY KEY, json TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS buddy_events (id INTEGER PRIMARY KEY AUTOINCREMENT, json TEXT NOT NULL);
 """
 
 
@@ -199,6 +200,28 @@ def select_reading_rows(after_rowid: int, limit: int, conn: sqlite3.Connection |
                                 "source": r["source"], "is_stale": bool(r["is_stale"]), "is_demo": False}) for r in rows]
 
 
+FORWARDED_JSON_TABLES = ("alarm_events", "low_events", "night_records", "plans", "symptom_checks", "buddy_events")
+
+
+def select_json_rows(table: str, after_rowid: int, limit: int, conn: sqlite3.Connection | None = None) -> list[tuple[int, dict]]:
+    """The forwarder's reader for the JSON-document tables: rows past a rowid,
+    oldest first. INSERT OR REPLACE gives a rebuilt row a new rowid, so a
+    re-coded night or an updated plan is forwarded again and upserted."""
+    if table not in FORWARDED_JSON_TABLES:
+        raise ValueError(f"not a forwarded table: {table}")
+    own = conn is None
+    conn = conn or connect()
+    try:
+        rows = conn.execute(f"SELECT rowid AS rid, json FROM {table} WHERE rowid > ? ORDER BY rowid LIMIT ?",
+                            (after_rowid, limit)).fetchall()
+    except sqlite3.OperationalError:  # a table a later step creates (buddy_events) is simply empty until then
+        rows = []
+    finally:
+        if own:
+            conn.close()
+    return [(int(r["rid"]), json.loads(r["json"])) for r in rows]
+
+
 def select_treatment_rows(after_rowid: int, limit: int, conn: sqlite3.Connection | None = None) -> list[tuple[int, dict]]:
     own = conn is None
     conn = conn or connect()
@@ -209,6 +232,31 @@ def select_treatment_rows(after_rowid: int, limit: int, conn: sqlite3.Connection
     return [(int(r["rid"]), {"timestamp": r["timestamp"], "kind": r["kind"], "insulin_units": r["insulin_units"],
                                 "carbs_g": r["carbs_g"], "dose_label": r["dose_label"], "text": r["text"],
                                 "confirmed": bool(r["confirmed"]), "is_demo": bool(r["is_demo"])}) for r in rows]
+
+
+# --- Night Buddy (B2/B4): alert, call, treating, resolved, emergency; append-only,
+# read in insertion order by the cloud forwarder like the readings ---
+
+
+def insert_buddy_event(event: dict, conn: sqlite3.Connection | None = None) -> None:
+    """{event_id, kind, at, confidence, is_demo}: never a glucose value."""
+    own = conn is None
+    conn = conn or connect()
+    with conn:
+        conn.execute("INSERT INTO buddy_events (json) VALUES (?)", (json.dumps(event),))
+    if own:
+        conn.close()
+
+
+def select_buddy_event_rows(after_rowid: int = 0, limit: int = 500,
+                            conn: sqlite3.Connection | None = None) -> list[tuple[int, dict]]:
+    own = conn is None
+    conn = conn or connect()
+    rows = conn.execute("SELECT id, json FROM buddy_events WHERE id > ? ORDER BY id LIMIT ?",
+                        (after_rowid, limit)).fetchall()
+    if own:
+        conn.close()
+    return [(int(r["id"]), json.loads(r["json"])) for r in rows]
 
 
 # --- Family Story (F3): one row per story, replaced on status change ---
@@ -440,6 +488,36 @@ def upsert_recall(recall: LowEventRecall, conn: sqlite3.Connection | None = None
         conn.execute("INSERT OR REPLACE INTO low_event_recalls VALUES (?, ?)", (recall.low_event_id, recall.model_dump_json()))
     if own:
         conn.close()
+
+
+DEMO_JSON_TABLES = {"alarm_events": "event_id", "night_records": "night_date", "low_events": "low_event_id",
+                    "low_event_recalls": "low_event_id", "plans": "plan_id", "doctor_messages": "message_id"}
+
+
+def clear_demo_world(conn: sqlite3.Connection | None = None) -> dict[str, int]:
+    """R12: a DIFFERENT scenario starts from an empty demo world. Deletes every
+    is_demo row (nights, low events, questions, alarm episodes, plans, doctor
+    messages, cards, check-ins, demo-logged treatments) and the demo kv keys.
+    Live rows are never touched."""
+    own = conn is None
+    conn = conn or connect()
+    n: dict[str, int] = {}
+    with conn:
+        for table, key in DEMO_JSON_TABLES.items():
+            ids = [r[key] for r in conn.execute(f"SELECT {key}, json FROM {table}").fetchall()
+                   if json.loads(r["json"]).get("is_demo")]
+            conn.executemany(f"DELETE FROM {table} WHERE {key} = ?", [(i,) for i in ids])
+            n[table] = len(ids)
+        ids = [r["card_id"] for r in conn.execute("SELECT card_id, json FROM cards").fetchall()
+               if json.loads(r["json"]).get("card", {}).get("is_demo")]
+        conn.executemany("DELETE FROM cards WHERE card_id = ?", [(i,) for i in ids])
+        n["cards"] = len(ids)
+        n["symptom_checks"] = conn.execute("DELETE FROM symptom_checks WHERE is_demo = 1").rowcount
+        n["treatments"] = conn.execute("DELETE FROM treatments WHERE is_demo = 1").rowcount
+        conn.execute("DELETE FROM kv WHERE key LIKE 'step_watch:green:%' OR key LIKE '%:demo'")
+    if own:
+        conn.close()
+    return n
 
 
 def select_recall(low_event_id: str, conn: sqlite3.Connection | None = None) -> LowEventRecall | None:

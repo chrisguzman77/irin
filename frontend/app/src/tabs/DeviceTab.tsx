@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useBasalNudge } from "../lib/useBasalNudge";
 import { useDevice } from "../lib/device";
+import TreatingButton from "./buddy/TreatingButton";
 import AckBar from "./device/AckBar";
 import DemoPanel from "./device/DemoPanel";
 import LiveView from "./device/LiveView";
@@ -62,6 +63,7 @@ export default function DeviceTab() {
     <>
       {/* keyed per alarm episode/state so a previous tap's message never carries over */}
       <AckBar key={`${a?.trigger_type}-${a?.state}-${a?.started_at}`} alarm={a} baseUrl={target.url} />
+      <TreatingButton snap={snap} baseUrl={target.url} />
       <div className="flex gap-2 mb-2">
         {VIEWS.map((v) => (
           <button

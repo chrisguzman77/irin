@@ -12,8 +12,10 @@ Every response: {name, device_id, is_demo, days, as_of, available, ...}.
 The window ends at the device's NEWEST reading (as_of), not at the server's
 clock, so replayed demo data (2021 timestamps) and history draw the same way.
 No data -> "empty": true, never zeros drawn as data. step_watch and buddy
-report available: false: titration plans, check-ins, and buddy events never
-reach the cloud (the ingest takes readings, alarm events, lows, treatments).
+read the four lists cloud/sql/005 adds (night records, plans, symptom
+checks, buddy events); step_watch's baseline low point is the number
+nights.step_window_metrics calls baseline_low_point, asserted equal in
+cloud/tests/test_dash.py.
 
 Also family_last_night(device_id, is_demo): the rollup behind
 GET /v1/family/last_night (fields pinned in cloud/README.md)."""
@@ -34,11 +36,7 @@ DEVICE_TZ = os.environ.get("DEVICE_TZ", "America/New_York")   # the Pi's local z
 STALE_MIN = 15
 NIGHT_START_H, NIGHT_HOURS = 22, 9
 MAX_DAYS = 3650
-
-NOT_FORWARDED = {
-    "step_watch": "titration plans, stomach check-ins, and injection logs stay on the Pi; they are not forwarded to the cloud",
-    "buddy": "buddy events live in the relay's database; the cloud never receives them",
-}
+BASELINE_NIGHTS, COVERAGE_OK_PCT = 14, 85.0   # nights.py / step_watch.py: the 14 nights before the start, >= 85%
 
 
 def _connect():
@@ -164,16 +162,62 @@ def _under_the_hood(conn, dev, start, end):
             "last_sync": counts["last_reading"], **refresh}
 
 
+def _step_watch(conn, dev, start, end):
+    plan = conn.execute(
+        "SELECT plan_id, drug_class, drug_label, status, started_at, steps FROM plans"
+        " WHERE device_id = %s AND status <> 'pending_confirm' ORDER BY started_at DESC, plan_id DESC LIMIT 1",
+        (dev,)).fetchone()
+    if plan is None:
+        return {"plan": None, "baseline": None, "rows": [], "checkins": [], "injections": []}
+    b0, b1 = plan["started_at"] - timedelta(days=BASELINE_NIGHTS), plan["started_at"] - timedelta(days=1)
+    base = conn.execute(   # the median of non-stale low points, as nights.step_window_metrics
+        "SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY low_point_mgdl) AS low_point_mgdl, count(*)::int AS nights"
+        " FROM night_records WHERE device_id = %s AND night_date >= %s AND night_date <= %s"
+        " AND low_point_mgdl IS NOT NULL AND coverage_pct >= %s AND NOT ('stale' = ANY(reason_codes))",
+        (dev, b0, b1, COVERAGE_OK_PCT)).fetchone()
+    rows = conn.execute(
+        "SELECT night_date, coverage_pct::float8 AS coverage_pct, low_point_mgdl::float8 AS low_point_mgdl,"
+        " minutes_below_70, tbr_pct::float8 AS tbr_pct, near_miss_count, level2_count, reason_codes, code_source"
+        " FROM night_records WHERE device_id = %s AND night_date >= %s AND night_date <= %s ORDER BY night_date",
+        (dev, start.date(), end.date())).fetchall()
+    ref = base["low_point_mgdl"]
+    for r in rows:
+        lp = r["low_point_mgdl"]
+        r["vs_baseline_mgdl"] = lp - ref if lp is not None and ref is not None else None
+    checkins = conn.execute(
+        "SELECT date, gi FROM symptom_checks WHERE device_id = %s AND date >= %s AND date <= %s ORDER BY date",
+        (dev, start.date(), end.date())).fetchall()
+    shots = conn.execute(
+        "SELECT time, dose_label, confirmed FROM treatments"
+        " WHERE device_id = %s AND kind = 'glp1_dose' AND time >= %s AND time <= %s ORDER BY time",
+        (dev, start, end)).fetchall()
+    return {"plan": plan, "baseline": {"from": b0, "to": b1, **base}, "rows": rows,
+            "checkins": checkins, "injections": shots}
+
+
+def _buddy(conn, dev, start, end):
+    rows = conn.execute(
+        "SELECT time_bucket(INTERVAL '7 days', at) AS week,"
+        " count(*) FILTER (WHERE kind = 'alert')::int AS alerts,"
+        " count(*) FILTER (WHERE kind = 'claim')::int AS claims,"
+        " count(*) FILTER (WHERE kind = 'call')::int AS calls,"
+        " count(*) FILTER (WHERE kind = 'treating')::int AS treating,"
+        " count(*) FILTER (WHERE kind = 'resolved')::int AS resolved,"
+        " count(*) FILTER (WHERE kind = 'alert' AND confidence = 'device_confirmed')::int AS alerts_device_confirmed,"
+        " count(*) FILTER (WHERE kind = 'alert' AND confidence = 'unconfirmed')::int AS alerts_unconfirmed"
+        " FROM buddy_events WHERE device_id = %s AND at >= %s AND at <= %s GROUP BY 1 ORDER BY 1",
+        (dev, start - timedelta(days=7), end)).fetchall()
+    return {"rows": rows}
+
+
 HANDLERS = {"nights": _nights, "tir": _tir, "profile": _profile, "lows_heatmap": _lows_heatmap,
             "alarms": _alarms, "near_misses": _near_misses, "basal": _basal, "sensor": _sensor,
-            "under_the_hood": _under_the_hood}
+            "under_the_hood": _under_the_hood, "step_watch": _step_watch, "buddy": _buddy}
 
 
 def query(name: str, days: int, device_id: str, is_demo: bool = False) -> dict:
     days = max(1, min(int(days), MAX_DAYS))
     base = {"name": name, "device_id": device_id, "is_demo": is_demo, "days": days}
-    if name in NOT_FORWARDED:
-        return {**base, "as_of": None, "available": False, "reason": NOT_FORWARDED[name]}
     with _connect() as conn:
         end = conn.execute("SELECT max(time) AS t FROM readings WHERE device_id = %s", (device_id,)).fetchone()["t"]
         if end is None:

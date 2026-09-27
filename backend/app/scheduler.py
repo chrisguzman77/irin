@@ -82,6 +82,7 @@ class Scheduler:
     settings: Settings
     sync_check: SyncCheck | None = None  # None = bypass (mock / replay): clock_synced True
     clock_synced: bool = False
+    held: bool = False  # R12: set while the seek's catch-up replays mornings; no job fires meanwhile
     jobs: list[Job] = field(default_factory=list)
     nudge: BasalNudge = field(default_factory=BasalNudge)
     basal_logged_today: Callable[[date], bool] = lambda d: False  # wired to the store in main.py
@@ -132,8 +133,8 @@ class Scheduler:
         guard in a thread first and calls tick(refresh=False)."""
         if refresh:
             self.refresh_sync()
-        if not self.clock_synced:
-            return []
+        if not self.clock_synced or self.held:
+            return []  # held: the replay catch-up is moving the clock morning by morning (R12)
         now = clock.now()
         fired: list[str] = []
         for job in sorted(self.jobs, key=lambda j: parse_hhmm(j.at_hhmm())):

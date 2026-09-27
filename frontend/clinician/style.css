@@ -49,3 +49,49 @@ dialog::backdrop { background: rgba(0,0,0,0.4); }
 .actbuttons { display: flex; justify-content: flex-end; gap: 8px; }
 #actcancel { font: 600 15px system-ui, sans-serif; padding: 10px 16px; border-radius: 8px; border: 1px solid #d1d5db; background: #fff; cursor: pointer; }
 .pair .badge-demo { align-self: flex-start; margin: 0; }
+
+/* R13: the plan form, the resources handoff, the Impiricus panel, the night replay */
+dialog.wide { width: min(620px, calc(100vw - 32px)); }
+#planform { display: flex; flex-direction: column; gap: 10px; padding: 16px; }
+#planform h3 { margin: 0; font-size: 17px; }
+.planrow { display: flex; gap: 10px; flex-wrap: wrap; } .planrow .field { flex: 1 1 200px; }
+.plansteps { width: 100%; border-collapse: collapse; font-size: 14px; }
+.plansteps th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); padding: 4px; }
+.plansteps td { padding: 3px 4px; } .plansteps td.stepno { font-weight: 700; width: 2em; }
+.plansteps input { font: 15px system-ui, sans-serif; padding: 6px 8px; border: 1px solid #d1d5db; border-radius: 6px; width: 100%; box-sizing: border-box; }
+.check { display: flex; gap: 8px; align-items: flex-start; font-size: 14px; }
+.indent { margin-left: 26px; max-width: 140px; }
+#plansend { font: 700 15px system-ui, sans-serif; padding: 10px 16px; border-radius: 8px; border: 0; background: var(--fg); color: #fff; cursor: pointer; }
+#plancancel { font: 600 15px system-ui, sans-serif; padding: 10px 16px; border-radius: 8px; border: 1px solid #d1d5db; background: #fff; cursor: pointer; }
+.pairbar .linkish + .linkish { margin-left: 8px; }
+.resbox { display: flex; flex-direction: column; gap: 12px; padding: 16px; }
+.resbox h3 { margin: 0; font-size: 17px; }
+.reschoices { display: flex; flex-direction: column; gap: 6px; }
+.reschoice { font: 600 15px system-ui, sans-serif; text-align: left; padding: 10px 12px; border-radius: 8px; border: 1px solid #d1d5db; background: #fff; cursor: pointer; }
+.reschoice:hover { border-color: var(--fg); }
+#resclose { font: 600 15px system-ui, sans-serif; padding: 8px 14px; border-radius: 8px; border: 1px solid #d1d5db; background: #fff; cursor: pointer; }
+#resback { margin-right: auto; }
+.ascend { display: flex; flex-direction: column; gap: 10px; border: 1px solid #c7d2fe; background: #eef2ff; border-radius: 10px; padding: 14px; }
+.ascend-brand { font: 800 12px system-ui, sans-serif; letter-spacing: 0.08em; text-transform: uppercase; color: #3730a3; }
+.ascend-banner { font: 700 16px system-ui, sans-serif; background: #166534; color: #fff; border-radius: 8px; padding: 10px 12px; }
+.ascend-fields { border-collapse: collapse; font-size: 14px; } .ascend-fields td { padding: 3px 12px 3px 0; } .ascend-fields td:first-child { color: var(--muted); }
+.ascend p { margin: 0; }
+.resgo { align-self: flex-start; font: 700 15px system-ui, sans-serif; padding: 10px 16px; border-radius: 8px; border: 0; background: #3730a3; color: #fff; cursor: pointer; }
+.resgo:disabled { opacity: 0.4; }
+.panel summary { cursor: pointer; font-size: 14px; color: var(--muted); padding: 4px 0; }
+.seen ul { margin: 6px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; }
+.seen li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; font-size: 12px; }
+.seen-at { color: var(--muted); font-variant-numeric: tabular-nums; }
+.seen-route { font-weight: 700; }
+.seen-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.seen-chip { background: #f3f4f6; border-radius: 4px; padding: 1px 6px; font-family: ui-monospace, Menlo, monospace; overflow-wrap: anywhere; }
+.seen .badge-demo { margin: 0; }
+.film { background: #fff; border: 1px solid var(--line); border-radius: 10px; overflow-x: auto; }
+.film-svg { display: block; width: 100%; min-width: 360px; height: auto; }
+.film-axis { font: 10px system-ui, sans-serif; fill: #6b7280; }
+.film-target { font-weight: 800; fill: #111827; }
+.filmcap { margin: 0; font-size: 15px; font-weight: 600; min-height: 2.6em; }
+#filmclose { font: 600 15px system-ui, sans-serif; padding: 8px 14px; border-radius: 8px; border: 1px solid #d1d5db; background: #fff; cursor: pointer; }
+#filmplay { margin-right: auto; }
+button.sc-night { cursor: pointer; font-family: inherit; }
+button.sc-night:hover { outline: 2px solid #111827; }

@@ -205,7 +205,7 @@ class Envelope(BaseModel):
     ciphertext: str = Field(pattern=B64, max_length=400_000)
     source: Literal["irin_bedside", "irin_brain"]
     kind: str = Field(pattern=r"^[a-z_]{1,40}$")
-    program: Literal["standing", "step_watch"] | None = None
+    program: Literal["standing", "step_watch", "buddy"] | None = None  # buddy (or absent) for kind buddy_alert
     is_demo: bool = False
     card_id: str | None = Field(default=None, pattern=ID)
 
@@ -224,6 +224,15 @@ async def post_card(env: Envelope, source_key: str = Depends(require_source_key)
     pairing = _owned(_confirmed_pairing(env.recipient_id), source_key)
     if pairing["is_demo"] != env.is_demo:
         raise HTTPException(status_code=409, detail="is_demo does not match the pairing")
+    # a buddy pairing receives buddy alerts and nothing else (no card ever reaches a buddy);
+    # a doctor pairing never receives a buddy alert
+    is_buddy = pairing.get("peer_kind") == "buddy"
+    if is_buddy != (env.kind == "buddy_alert"):
+        raise HTTPException(status_code=409, detail="buddy_alert goes to a buddy pairing, and only buddy_alert does")
+    if is_buddy and env.program not in (None, "buddy"):
+        raise HTTPException(status_code=422, detail="a buddy_alert's program is absent or buddy")
+    if not is_buddy and env.program == "buddy":
+        raise HTTPException(status_code=422, detail="program buddy is for buddy_alert only")
     doc = {**env.model_dump(), "created_at": store.now()}
     coll = store.db()["cards"]
     if env.card_id:
@@ -296,9 +305,14 @@ async def device_messages(device_id: str, source_key: str = Depends(require_sour
     senders = [p["doctor_id"] for p in pairings if p.get("doctor_id")]
     msgs = store.db()["messages"].find({"device_id": device_id, "status": "pending", "sender_id": {"$in": senders}}) \
         .sort("created_at", 1).limit(100)
+    # B3: brokered hub calls for this key's listings (one source key = one device), each delivered once
+    calls = list(store.db()["hub_calls"].find({"source_key_hash": key_hash, "delivered": False}).sort("at", 1).limit(100))
+    if calls:
+        store.db()["hub_calls"].update_many({"_id": {"$in": [c["_id"] for c in calls]}}, {"$set": {"delivered": True}})
     return {"messages": [{**store.public(m), "created_at": m["created_at"].isoformat()} for m in msgs],
             "pairings": [{"doctor_id": p["doctor_id"], "status": p["status"], "peer_kind": p["peer_kind"]}
-                         for p in pairings if p.get("doctor_id")]}
+                         for p in pairings if p.get("doctor_id")],
+            "calls": [{"listing_id": c["listing_id"], "claim_id": c["claim_id"], "at": c["at"].isoformat()} for c in calls]}
 
 
 @router.post("/messages/{message_id}/resolution")
@@ -321,6 +335,43 @@ async def message_state(message_id: str, pairing: dict = Depends(require_bearer)
         raise HTTPException(status_code=404, detail="no such message")
     return {"message_id": message_id, "status": m["status"], "kind": m["kind"], "created_at": m["created_at"].isoformat(),
             "resolved_at": m["resolved_at"].isoformat() if m.get("resolved_at") else None}
+
+
+# ---------------------------------------------------------------- R13: the resources handoff (the pharma moment)
+
+RESOURCE_CATEGORIES = ("glucagon_access", "gi_side_effect_education", "copay_savings", "samples_next_pen",
+                       "bridge_supply", "prior_auth_hub", "ask_msl")
+RESOURCE_BANNER = "No patient data shared with any manufacturer"
+
+
+class ResourceRequest(BaseModel):
+    doctor_id: str = Field(pattern=ID)
+    category: Literal["glucagon_access", "gi_side_effect_education", "copay_savings", "samples_next_pen",
+                      "bridge_supply", "prior_auth_hub", "ask_msl"]
+    brand: str = Field(min_length=1, max_length=80, pattern=r"^[A-Za-z0-9 .,'&()\-]{1,80}$")
+
+
+@router.post("/resources/request")
+async def resources_request(req: ResourceRequest, pairing: dict = Depends(require_bearer)) -> dict:
+    """The doctor's handoff to the mock Ascend: category and brand, from the
+    doctor's own pairing, and NOTHING about the patient (no card, no id, no
+    number). This is the only thing a pharma-side system would ever see."""
+    if req.doctor_id != pairing["doctor_id"]:
+        raise HTTPException(status_code=403, detail="the bearer belongs to another doctor")
+    request_id = secrets.token_hex(8)
+    doc = {"request_id": request_id, "doctor_id": req.doctor_id, "category": req.category, "brand": req.brand,
+           "is_demo": bool(pairing.get("is_demo", False)), "status": "handed_off", "at": store.now()}
+    store.db()["resources"].insert_one(doc)
+    store.audit("resources.request", doctor=req.doctor_id, category=req.category, brand=req.brand, is_demo=doc["is_demo"])
+    return {"request_id": request_id, "status": "handed_off", "category": req.category, "brand": req.brand,
+            "banner": RESOURCE_BANNER, "shared_fields": ["category", "brand"]}
+
+
+@router.get("/resources")
+async def resources(pairing: dict = Depends(require_bearer)) -> list[dict]:
+    """The doctor's own handoffs, newest first (the inbox's history of the pharma moment)."""
+    rows = store.db()["resources"].find({"doctor_id": pairing["doctor_id"]}).sort("at", -1).limit(100)
+    return [{**store.public(r), "at": r["at"].isoformat()} for r in rows]
 
 
 # ---------------------------------------------------------------- the "what Impiricus sees" log

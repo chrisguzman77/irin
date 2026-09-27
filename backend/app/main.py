@@ -27,6 +27,8 @@ from pydantic import BaseModel, Field
 from . import store
 from .alarm import AlarmEngine, Transition
 from .backlight import BacklightController
+from .buddy.rung import BuddyRung
+from .buddy.treating import TreatingError, handle_calls, set_treating
 from .auth import require_fresh_pin, require_pin
 from .clock import clock
 from .config import REPO_ROOT, config
@@ -35,7 +37,7 @@ from .contracts import (FRESH_PIN_ENDPOINTS, AlarmEvent, AlarmState, FamilyRecip
 from .datasource.base import DataSource
 from .datasource.nightscout import NightscoutDataSource
 from .datasource.replay import ReplayDataSource
-from .demo import bind as bind_demo, live_basal_time, restore_live_settings, router as demo_router
+from .demo import bind as bind_demo, live_basal_time, restore_live_settings, router as demo_router, simulated_peers
 from .family_story import FamilyStoryService
 from .forecast import Forecaster
 from .forward import Forwarder, from_config as forwarder_from_config
@@ -51,8 +53,10 @@ from .rounds.evaluate import StandingEngine
 from .rounds.messages import DoctorMessages, MessageError
 from .rounds.pairing import PairingError, PairingService, RelayPairing
 from .rounds.relay_client import RelayClient
+from .rounds.catchup import CatchUp
 from .rounds.recall import ANSWER_UNTIL_HHMM, MorningRecall, RecallError
 from .rounds.step_watch import StepWatch
+from .rounds.vigilance import install as install_vigilance
 from .rounds.nights_adapter import NightsAdapter
 from .scheduler import Scheduler, basal_logged_on, timedatectl_synced
 from . import voice_out
@@ -98,6 +102,8 @@ class Runtime:
     messages: "DoctorMessages | None" = None
     step_watch: "StepWatch | None" = None
     recall: "MorningRecall | None" = None
+    catchup: "CatchUp | None" = None
+    buddy: "BuddyRung | None" = None
 
 
 runtime = Runtime(mode="nightscout" if config.DATASOURCE == "nightscout" else "replay",
@@ -370,6 +376,11 @@ def _make_pairing() -> PairingService:
                           relay_url=config.RELAY_URL, is_demo=lambda: runtime.mode == "replay",
                           on_state=_broadcast_pairing_state)
 
+def _buddy_calls(calls: list[dict]) -> None:
+    """B4: brokered calls from the relay poll: the buddy chime (never an alarm tone, never over a sounding low)."""
+    handle_calls(runtime.buddy, calls, runtime.outputs, lambda: runtime.alarm.state, runtime.settings.volume)
+
+
 ALARM_TICK_CLOCK_SECONDS = 30.0
 _broadcast_tasks: set[asyncio.Task] = set()  # references held so a broadcast is never GC'd mid-flight
 _loop: asyncio.AbstractEventLoop | None = None  # captured in lifespan so worker threads can schedule broadcasts
@@ -412,6 +423,17 @@ runtime.alarm.on_transition(_broadcast_transition)
 runtime.alarm_events = AlarmEventRecorder(is_demo=lambda: runtime.mode == "replay",
                                           brain_only=lambda: config.IRIN_BRAIN_ONLY)
 runtime.alarm.on_transition(runtime.alarm_events)  # R2 observes; it never calls back into alarm.py
+# B2: the buddy rung observes too, AFTER the recorder (it reads the recorder's open episode); additive only
+runtime.buddy = BuddyRung(
+    settings=runtime.settings, alarm_state=lambda: runtime.alarm.state, recorder=runtime.alarm_events,
+    recipients=lambda demo: runtime.pairing.recipients(demo) if runtime.pairing is not None else [],
+    post_card=lambda env: runtime.relay_client.post_card(env),
+    post_hub=lambda path, body: runtime.relay_client.post_hub(path, body),
+    spawn=lambda coro: _schedule(coro), device_id=config.DEVICE_ID or "irin-dev",
+    is_demo=lambda: runtime.mode == "replay", brain_only=lambda: config.IRIN_BRAIN_ONLY,
+    on_alert=lambda p: _schedule(hub.broadcast(WSMessage(type="buddy_alert", payload=p))),
+    on_update=lambda p: _schedule(hub.broadcast(WSMessage(type="hub_update", payload=p))))
+runtime.alarm.on_transition(runtime.buddy)
 # The backlight: dim in the night window, full by day and whenever a low alarm
 # sounds. It observes alarm transitions (never raises into them) and the tick
 # below follows the night window; it writes through the output gate.
@@ -446,6 +468,7 @@ async def _alarm_tick_loop() -> None:
             raw = runtime.outputs.get_presence()
             runtime.presence.sample(raw)
             runtime.alarm_events.sample(raw)  # the same raw radar sample, aggregated per episode (B7)
+            runtime.buddy.tick()  # B2: the rung and the T+20 clock, after the recorder's sample
             runtime.backlight.update()  # follows the night window (writes only on a change)
         except Exception:
             logging.getLogger("irin.main").exception("tick failed; continuing")
@@ -474,26 +497,36 @@ async def lifespan(app: FastAPI):
     _load_settings()
     runtime.pairing = _make_pairing()  # after init_db: it loads the stored pairings
     runtime.relay_client = _make_relay_client()
-    runtime.cards = CardSender(recipients=runtime.pairing.recipients, post=runtime.relay_client.post_card,
+    # a Rounds card goes to doctors only: a buddy pairing never receives clinical numbers (invariant 15)
+    runtime.cards = CardSender(recipients=lambda demo: [p for p in runtime.pairing.recipients(demo) if p.peer_kind == "doctor"],
+                               post=runtime.relay_client.post_card,
                                device_id=config.DEVICE_ID or "irin-dev", on_sent=_broadcast_card_sent)
     runtime.standing = StandingEngine(settings=runtime.settings, sender=runtime.cards,
                                       device_id=config.DEVICE_ID or "irin-dev", is_demo=lambda: runtime.mode == "replay",
                                       brain_only=lambda: config.IRIN_BRAIN_ONLY)
     runtime.alarm_events.on_event = _red_rules_on_alarm_event
     runtime.messages = DoctorMessages(
-        settings=runtime.settings, pairings=lambda: runtime.pairing.pairings,
+        settings=runtime.settings, pairings=lambda: {**simulated_peers(), **{k: p for k, p in runtime.pairing.pairings.items()
+                                                                             if p.peer_kind == "doctor"}},
         post_resolution=runtime.relay_client.post_resolution,
         on_received=lambda d: _schedule(hub.broadcast(WSMessage(type="doctor_message_received", payload=d))),
         on_resolved=lambda d: _schedule(hub.broadcast(WSMessage(type="doctor_message_resolved", payload=d))),
         is_demo=lambda: runtime.mode == "replay")
     runtime.relay_client.on_messages = runtime.messages.receive
     runtime.relay_client.on_tick = _relay_tick
+    runtime.relay_client.on_calls = _buddy_calls
     runtime.step_watch = StepWatch(
         adapter=runtime.ledger.adapter, sender=runtime.cards, device_id=config.DEVICE_ID or "irin-dev",
         is_demo=lambda: runtime.mode == "replay", brain_only=lambda: config.IRIN_BRAIN_ONLY,
         on_plan_state=lambda st: _schedule(hub.broadcast(WSMessage(type="plan_state", payload=st))))
     runtime.messages.on_plan_message = runtime.step_watch.on_plan_message
     runtime.standing.active_watch = lambda: runtime.step_watch.active_plan() is not None
+    # R14(a): step-week vigilance raises ONLY the predicted-low threshold, for 7 days after a step-up,
+    # from the active plan of the current world; the actual-low alarm is untouched
+    install_vigilance(runtime.alarm, runtime.settings, runtime.step_watch.active_plan)
+    # R12: the replay seek's catch-up replays every missing morning through the same ledger, questions and budget
+    runtime.catchup = CatchUp(ledger=runtime.ledger, low_events=runtime.low_events, recall=runtime.recall,
+                              evaluate_night=_evaluate_night, is_demo=lambda: runtime.mode == "replay")
     await runtime.datasource.start()
     hub.start()
     tick_task = asyncio.create_task(_alarm_tick_loop())
@@ -586,6 +619,7 @@ async def set_mode(req: ModeRequest) -> dict:
     await new.start()
     runtime.alarm.reset()  # switch semantics (step 12): alarm state back to idle
     runtime.alarm_events.reset()  # an episode cut by the switch is dropped, never written
+    runtime.buddy.reset()  # an open buddy alert is resolved; the T+20 clock is disarmed with the episode
     await asyncio.to_thread(runtime.pairing.cancel)  # its lock may be held by a relay call in a worker
     runtime.forecaster.reset()
     runtime.voice.reset()
@@ -1247,6 +1281,21 @@ async def skip_story(story_id: str) -> FamilyStory:
     if story is None:
         raise HTTPException(status_code=404, detail="no such story")
     return story
+
+
+# --- Night Buddy (B4): the patient's one-press treating status ---
+
+
+@app.post("/api/buddy/treating", dependencies=[Depends(require_pin)])
+async def buddy_treating() -> dict:
+    """I'm treating: 20 minutes, forwarded to the hub when a listing is open.
+    Never touches the alarm or the T+20 emergency clock (invariant 13)."""
+    try:
+        t = set_treating(runtime.buddy)
+    except TreatingError as e:
+        raise HTTPException(status_code=e.status, detail=e.detail)
+    await hub.broadcast(WSMessage(type="treating_set", payload=t))
+    return t
 
 
 @app.websocket("/ws")

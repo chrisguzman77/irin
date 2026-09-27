@@ -19,6 +19,7 @@ from ..clock import clock
 from ..contracts import Settings
 from . import noise
 from .cards import CardSender, assemble
+from .resources import categories_for
 from .standing import Evaluation, Thresholds, evaluate_basal_check, evaluate_follow_up, evaluate_hypo_response
 
 log = logging.getLogger("irin.rounds.evaluate")
@@ -117,7 +118,8 @@ class StandingEngine:
                                 confidence=ev.confidence, period_start=ev.period_start or since,
                                 period_end=ev.period_end or until, headline=ev.headline, device_id=self.device_id,
                                 is_demo=self.is_demo(), source="irin_brain" if self.brain_only() else "irin_bedside",
-                                nights=ev.nights, excluded_counts=ev.excluded_counts)
+                                nights=ev.nights, excluded_counts=ev.excluded_counts,
+                                resource_categories=categories_for(ev.kind, ev.flags))
                 try:
                     entry["sent"] = await self.sender.send(card, event_key=key)
                 except Exception:
