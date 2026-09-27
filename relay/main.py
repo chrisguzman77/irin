@@ -62,7 +62,7 @@ async def health() -> dict:
     return {"ok": True, "store": store.status()}
 
 
-app.include_router(relay_api.router)  # R6: pairing, cards, inbox, messages, device poll, resolutions, log
+app.include_router(relay_api.router)  # R6: pairing, cards, inbox, messages, device poll, resolutions, log; R13: resources
 
 # --- owner pairing (R5+) ---
 @app.post("/v0/device/pairings")
@@ -75,8 +75,6 @@ async def device_unpair(): _stub("R5+ owner unpair")
 # --- Spark, resources, log (R10, R13) ---
 @app.post("/v0/spark/new_rx")
 async def spark_new_rx(): _stub("R10 simulated Spark offer (demo-only, RELAY_ADMIN_KEY)")
-@app.post("/v0/resources/request")
-async def resources_request(): _stub("R13 resources request")
 
 # --- hub (B3) ---
 @app.post("/v0/hub/listing")
