@@ -17,13 +17,16 @@ check). Audit rows carry device_id and outcome only, never code/token/username."
 
 from __future__ import annotations
 
+import time
+from collections import defaultdict, deque
+
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
 
 import store
-from relay_api import ID, _rate_limit, require_source_key
+from relay_api import ID, require_source_key
 
 router = APIRouter(prefix="/v0/device")
 
@@ -41,14 +44,29 @@ class OwnerRegister(BaseModel):
     @field_validator("expires_at")
     @classmethod
     def _tz_aware(cls, v: datetime) -> datetime:
-        if v.tzinfo is None:
-            raise ValueError("expires_at must carry a UTC offset")
-        return v
+        return v.replace(tzinfo=timezone.utc) if v.tzinfo is None else v  # a naive stamp is UTC
 
 
 class OwnerRedeem(BaseModel):
     code: str = Field(pattern=r"^\d{6}$")
     username: str = Field(min_length=1, max_length=40, pattern=r"^[^\x00-\x1f]{1,40}$")
+
+
+REDEEM_PER_IP_PER_MIN = 10  # a 6-digit code: a few honest typos, never a guessing run
+REDEEM_GLOBAL_PER_MIN = 30  # so rotating IPs buys nothing (30 x 10 min = 0.03% of the code space)
+_redeems: dict[str, deque] = defaultdict(deque)
+
+
+def _redeem_limit(ip: str) -> None:
+    t = time.monotonic()
+    for key, cap in ((f"ip:{ip}", REDEEM_PER_IP_PER_MIN), ("all", REDEEM_GLOBAL_PER_MIN)):
+        q = _redeems[key]
+        while q and q[0] < t - 60:
+            q.popleft()
+        if len(q) >= cap:
+            raise HTTPException(status_code=429, detail="too many tries; wait a minute")
+    _redeems[f"ip:{ip}"].append(t)
+    _redeems["all"].append(t)
 
 
 def _client_ip(request: Request) -> str:
@@ -88,7 +106,7 @@ async def redeem(req: OwnerRedeem, request: Request) -> dict:
     """Public, single-use: the phone app redeems the 6-digit code shown on
     the kiosk. Unknown, expired, or already-used all get the same 404, and
     the relay then drops the plaintext token for good."""
-    _rate_limit(f"ownerpair:{_client_ip(request)}")
+    _redeem_limit(_client_ip(request))
     coll = store.db()["owner_pairings"]
     doc = coll.find_one({"code": req.code})
     if doc is None or "token" not in doc or store.now() > doc["expires_at"]:
@@ -125,7 +143,8 @@ async def unpair(authorization: str | None = Header(default=None),
         if doc is None:
             raise HTTPException(status_code=404, detail="no owner pairing for this device")
         by = "device"
-    coll.update_one({"_id": doc["_id"]}, {"$set": {"state": "revoked", "revoked_at": store.now()}})
+    coll.update_one({"_id": doc["_id"]}, {"$set": {"state": "revoked", "revoked_at": store.now()},
+                                          "$unset": {"code": "", "token": "", "expires_at": ""}})  # a shown code dies too
     store.audit("owner.revoke", device_id=doc["device_id"], by=by)
     return {"status": "revoked"}
 

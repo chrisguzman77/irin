@@ -41,6 +41,7 @@ def mongo():
 @pytest.fixture
 def c():
     store.client().drop_database(store.DB_NAME)
+    owner._redeems.clear()
     with TestClient(app) as client:
         yield client
 
@@ -141,3 +142,27 @@ def test_log_never_carries_code_token_or_username(c):
     dump = json.dumps(c.get("/v0/log").json())
     for secret in ("999991", token, "SecretPhoneName"):
         assert secret not in dump
+
+
+def test_a_naive_expires_at_from_the_pi_is_read_as_utc(c):
+    naive = (store.now() + timedelta(minutes=10)).replace(tzinfo=None).isoformat()
+    r = c.post("/v0/device/pairings", json={"code": "246810", "device_id": "dev-naive", "device_url": "http://localhost:8000",
+                                            "token": secrets.token_urlsafe(32), "expires_at": naive}, headers=SRC)
+    assert r.status_code == 200, r.text
+    assert c.post("/v0/device/pair", json={"code": "246810", "username": "p"}).status_code == 200
+
+
+def test_a_device_revoke_kills_the_code_still_on_screen(c):
+    register(c, "dev-kill", "135790")
+    assert c.request("DELETE", "/v0/device/pair", headers=SRC).status_code == 200
+    r = c.post("/v0/device/pair", json={"code": "135790", "username": "late"})
+    assert r.status_code == 404 and r.json()["detail"] == owner.BAD_CODE_DETAIL
+
+
+def test_redeem_guessing_is_capped_per_ip_and_globally(c):
+    codes = [c.post("/v0/device/pair", json={"code": f"{i:06d}", "username": "x"}).status_code for i in range(11)]
+    assert codes[:10] == [404] * 10 and codes[10] == 429
+    owner._redeems.clear()
+    out = [c.post("/v0/device/pair", json={"code": f"{i:06d}", "username": "x"},
+                  headers={"X-Forwarded-For": f"10.0.0.{i}"}).status_code for i in range(31)]
+    assert out[:30] == [404] * 30 and out[30] == 429  # rotating IPs buys nothing
