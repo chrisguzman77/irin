@@ -170,6 +170,8 @@ const clips = new Map();
 let audioNote = "";
 
 function unlockAudio() {
+  // iOS 17+: a "playback" session plays through the ring/silent switch, like a music app
+  try { if (navigator.audioSession) navigator.audioSession.type = "playback"; } catch { /* older Safari */ }
   try {
     ctx ||= new (window.AudioContext || window.webkitAudioContext)();
     ctx.resume();
@@ -218,7 +220,7 @@ async function sound(listingId, url) {
   }
   if (!ctx || ctx.state !== "running") {
     token.blocked = true; // the 1 s render retries
-    audioNote = "Sound is off on this page: tap On watch before bed so an alert can sound.";
+    audioNote = "Sound is off on this page (a new page, or the phone paused it). Tap the button above to sound the alert.";
     return;
   }
   let buf = url ? await clip(url) : null;
@@ -273,6 +275,11 @@ $("onwatch").addEventListener("click", async () => {
   renderWatch();
   schedule(0);
 });
+// iOS pauses page audio when the tab goes to the background or another app opens (WhatsApp),
+// and resumes it only inside a gesture: any tap on the page brings the sound back.
+document.addEventListener("pointerdown", () => {
+  if ((onWatch || shown) && (!ctx || ctx.state !== "running")) unlockAudio();
+}, { capture: true });
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState !== "visible") return;
   if (onWatch && !wakeLock) lock();
@@ -522,6 +529,7 @@ $("alert-close").addEventListener("click", () => {
 $("call").addEventListener("click", () => { unlockAudio(); if (shown) call(shown); });
 $("gotit").addEventListener("click", () => { unlockAudio(); if (shown) gotIt(shown); });
 $("script").addEventListener("click", () => { if (shown) script(shown); });
+$("soundon").addEventListener("click", () => { unlockAudio(); setTimeout(renderAlert, 100); });
 
 function renderAlert() {
   if (!shown) return;
@@ -572,6 +580,7 @@ function renderAlert() {
   if (shouldSound) sound(shown, a.alert.audio_url);
   else if (playing) stopAudio();
   $("alert-audio").textContent = shouldSound ? audioNote : "";
+  $("soundon").hidden = !(shouldSound && (!ctx || ctx.state !== "running"));
 }
 
 // ------------------------------------------------------------ the buddy card and the hub
