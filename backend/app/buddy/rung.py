@@ -479,6 +479,7 @@ class BuddyRung:
         except Exception:
             log.exception("buddy morning line failed")
             return
+        self._update({"event": "morning", "line": self.morning["line"], "night_date": self.morning["night_date"]})
         await self._deliver_line(dict(self.morning), demo)
 
     async def _deliver_line(self, morning: dict, demo: bool) -> int:

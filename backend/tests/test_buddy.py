@@ -500,6 +500,7 @@ def test_b5_morning_line_after_a_quiet_night_is_the_template_sealed_to_the_buddy
     assert env["recipient_id"] == "buddy-demo" and env["program"] == "buddy" and env["is_demo"] is True
     assert env["card_id"] == "bl-2019-12-31"
     assert payload == {"line": quiet, "kind": "buddy_line", "night_date": "2019-12-31"}
+    assert {"event": "morning", "line": quiet, "night_date": "2019-12-31"} in rig.updates  # live to an open app
 
 
 def test_b5_close_out_after_a_resolved_episode_broadcast_sealed_and_kept_for_the_morning(rig, monkeypatch):
