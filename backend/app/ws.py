@@ -116,6 +116,8 @@ class Hub:
             await clock.sleep(POLL_CLOCK_SECONDS)
 
     async def _poll(self) -> None:
+        if getattr(self.runtime, "catching_up", False):
+            return  # R12: a skipped morning's reading never reaches the alarm engine or the forecaster
         try:
             reading = await self.runtime.datasource.get_latest()
         except NotImplementedError:

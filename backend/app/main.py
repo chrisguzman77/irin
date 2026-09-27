@@ -35,7 +35,7 @@ from .contracts import (FRESH_PIN_ENDPOINTS, AlarmEvent, AlarmState, FamilyRecip
 from .datasource.base import DataSource
 from .datasource.nightscout import NightscoutDataSource
 from .datasource.replay import ReplayDataSource
-from .demo import bind as bind_demo, live_basal_time, restore_live_settings, router as demo_router
+from .demo import bind as bind_demo, live_basal_time, restore_live_settings, router as demo_router, simulated_peers
 from .family_story import FamilyStoryService
 from .forecast import Forecaster
 from .forward import Forwarder, from_config as forwarder_from_config
@@ -483,7 +483,7 @@ async def lifespan(app: FastAPI):
                                       brain_only=lambda: config.IRIN_BRAIN_ONLY)
     runtime.alarm_events.on_event = _red_rules_on_alarm_event
     runtime.messages = DoctorMessages(
-        settings=runtime.settings, pairings=lambda: runtime.pairing.pairings,
+        settings=runtime.settings, pairings=lambda: {**simulated_peers(), **runtime.pairing.pairings},
         post_resolution=runtime.relay_client.post_resolution,
         on_received=lambda d: _schedule(hub.broadcast(WSMessage(type="doctor_message_received", payload=d))),
         on_resolved=lambda d: _schedule(hub.broadcast(WSMessage(type="doctor_message_resolved", payload=d))),

@@ -39,6 +39,9 @@ def bind(runtime) -> None:
     _runtime = runtime
 
 
+_live_brain_only: bool | None = None  # the live IRIN_BRAIN_ONLY while the demo toggle overrides it
+
+
 def live_basal_time() -> tuple[str | None] | None:
     """The stashed live basal_time while the demo button overrides it (None otherwise),
     so persistence writes the live value, never the demo one."""
@@ -48,7 +51,9 @@ def live_basal_time() -> tuple[str | None] | None:
 def restore_live_settings() -> bool:
     """Called by the mode switch on the way back to live: the basal-time button's
     value never reaches the live nudge ladder. Returns True when something changed."""
-    global _live_basal_time
+    global _live_basal_time, _live_brain_only
+    if _live_brain_only is not None:  # the demo panel's brain-only toggle never reaches live cards
+        config.IRIN_BRAIN_ONLY, _live_brain_only = _live_brain_only, None
     if _live_basal_time is None:
         return False
     (_runtime.settings.basal_time,), _live_basal_time = _live_basal_time, None
@@ -91,6 +96,9 @@ async def select_scenario(req: ScenarioRequest) -> dict:
     path = SCENARIOS_DIR / f"{req.name}.csv"
     if not path.exists():
         raise HTTPException(status_code=404, detail=f"no scenario named {req.name}")
+    if store.get_kv("demo:scenario") not in (None, req.name):
+        store.clear_demo_world()  # a different scenario never inherits the last one's nights, cards or plan
+    store.set_kv("demo:scenario", req.name)
     new = ReplayDataSource(path, speed=clock.speed)
     await _runtime.datasource.stop()
     _runtime.datasource = new
@@ -182,7 +190,8 @@ def _seek_target(req: SeekRequest, replay: ReplayDataSource, comp) -> datetime:
     if req.date is not None:
         day = req.date
     elif req.step is not None:
-        plan = comp.plan if comp is not None and comp.plan is not None else None
+        # the stored plan first: a confirmed hold moved its later steps
+        plan = _runtime.step_watch.active_plan() or (comp.plan if comp is not None else None)
         if plan is None:
             raise HTTPException(status_code=409, detail="this scenario has no plan to seek by step")
         if req.step > len(plan.steps):
@@ -208,15 +217,23 @@ async def seek(req: SeekRequest) -> dict:
     if to < clock.now():
         raise HTTPException(status_code=409, detail="the replay is already past that point; play the scenario from the start first")
     await replay.seek(to)
-    _runtime.alarm.reset()  # the skipped readings never alarmed; the engine meets the new present cold
-    if getattr(_runtime, "alarm_events", None) is not None:
-        _runtime.alarm_events.reset()
-    _runtime.forecaster.reset()
-    _runtime.voice.reset()
-    summary = await _runtime.catchup.run(replay.span[0], to, comp)
+    _runtime.catching_up = True  # the hub poll and the scheduler stand still while mornings are replayed
     if _runtime.scheduler is not None:
-        for job in _runtime.scheduler.jobs:  # today's jobs already ran inside the catch-up
-            job.last_fired = to.date()
+        _runtime.scheduler.held = True
+    try:
+        summary = await _runtime.catchup.run(replay.span[0], to, comp)
+    finally:
+        _runtime.catching_up = False
+        if _runtime.scheduler is not None:
+            for job in _runtime.scheduler.jobs:  # today's jobs already ran inside the catch-up
+                job.last_fired = clock.now().date()
+            _runtime.scheduler.held = False
+        _runtime.alarm.reset()  # the skipped readings never alarmed; the engine meets the new present cold
+        if getattr(_runtime, "alarm_events", None) is not None:
+            _runtime.alarm_events.reset()
+        _runtime.forecaster.reset()
+        _runtime.voice.reset()
+        _runtime.hub._last = None
     await _broadcast("mode_change", {"mode": "replay", "scenario": Path(replay.path).stem, "seek": to.isoformat()})
     return {"scenario": Path(replay.path).stem, "clock": clock.now().isoformat(), **summary}
 
@@ -229,8 +246,24 @@ class BrainOnlyRequest(BaseModel):
 async def set_brain_only(req: BrainOnlyRequest) -> dict:
     """Irin Brain only: the Rounds adapter ignores presence, alarm hardware events
     and logged context; card rows change confidence label, never blank."""
+    global _live_brain_only
+    if _live_brain_only is None:
+        _live_brain_only = config.IRIN_BRAIN_ONLY  # the live value, restored on the way back to live
     config.IRIN_BRAIN_ONLY = req.brain_only
     return {"brain_only": config.IRIN_BRAIN_ONLY}
+
+
+def simulated_peers() -> dict:
+    """The demo's simulated message senders (the Spark offer). They can SEND a
+    pending message for the patient to confirm; they are never a card recipient
+    and never listed as a pairing."""
+    if _runtime is None or getattr(_runtime, "pairing", None) is None:
+        return {}
+    from .contracts import Pairing
+
+    p = _runtime.pairing  # rebuilt on every call, so a pending offer survives a restart
+    return {SPARK_ID: Pairing(device_id=p.device_id, doctor_id=SPARK_ID, doctor_display_name="Impiricus Spark (simulated)",
+                              doctor_pk=p.device_pk, status="paired", peer_kind="doctor", is_demo=True)}
 
 
 SPARK_ID = "impiricus-spark"
@@ -248,23 +281,25 @@ async def spark_offer() -> dict:
     plan = comp.plan if comp is not None and comp.plan is not None else None
     if plan is None:
         raise HTTPException(status_code=409, detail="this scenario has no plan to offer")
-    pairing = _runtime.pairing
-    if SPARK_ID not in pairing.pairings or pairing.pairings[SPARK_ID].status != "paired":
-        peer = Pairing(device_id=pairing.device_id, doctor_id=SPARK_ID, doctor_display_name="Impiricus Spark (simulated)",
-                       doctor_pk=pairing.device_pk, status="paired", peer_kind="doctor", is_demo=True)
-        pairing.pairings[SPARK_ID] = peer
-        store.upsert_pairing(peer)
     now = clock.now()
     msg = DoctorMessage(message_id=f"spark-{plan.plan_id}-{now.date().isoformat()}", plan_id=plan.plan_id, kind="plan_create",
                         plan=plan.model_copy(update={"status": "pending_confirm"}), created_at=now,
                         text="Spark suggests a Step Watch for this plan (simulated offer)")
-    if store.select_doctor_message(msg.message_id) is None:
-        from .rounds.messages import EXPIRY
+    existing = store.select_doctor_message(msg.message_id)
+    if existing is not None:
+        return {"message_id": msg.message_id, "plan_id": plan.plan_id, "status": existing["message"]["status"]}
+    from .rounds.messages import DoctorMessages, MessageError
 
-        doc = {"message": msg.model_dump(mode="json"), "sender_id": SPARK_ID, "doctor_display_name": "Impiricus Spark (simulated)",
-               "is_demo": True, "received_at": now.isoformat(), "expires_at": (now + EXPIRY).isoformat(), "resolution_posted": True}
-        store.upsert_doctor_message(doc)
-        await _broadcast("doctor_message_received", {**doc, "status": "pending"})
+    try:
+        DoctorMessages._validate_kind(msg)  # the same checks a real doctor's message meets at receive
+    except MessageError as e:
+        raise HTTPException(status_code=409, detail=f"the scenario's plan cannot be offered: {e.detail}")
+    from .rounds.messages import EXPIRY
+
+    doc = {"message": msg.model_dump(mode="json"), "sender_id": SPARK_ID, "doctor_display_name": "Impiricus Spark (simulated)",
+           "is_demo": True, "received_at": now.isoformat(), "expires_at": (now + EXPIRY).isoformat(), "resolution_posted": True}
+    store.upsert_doctor_message(doc)
+    await _broadcast("doctor_message_received", {**doc, "status": "pending"})
     return {"message_id": msg.message_id, "plan_id": plan.plan_id, "status": "pending"}
 
 

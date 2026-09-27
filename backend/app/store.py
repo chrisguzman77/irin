@@ -442,6 +442,36 @@ def upsert_recall(recall: LowEventRecall, conn: sqlite3.Connection | None = None
         conn.close()
 
 
+DEMO_JSON_TABLES = {"alarm_events": "event_id", "night_records": "night_date", "low_events": "low_event_id",
+                    "low_event_recalls": "low_event_id", "plans": "plan_id", "doctor_messages": "message_id"}
+
+
+def clear_demo_world(conn: sqlite3.Connection | None = None) -> dict[str, int]:
+    """R12: a DIFFERENT scenario starts from an empty demo world. Deletes every
+    is_demo row (nights, low events, questions, alarm episodes, plans, doctor
+    messages, cards, check-ins, demo-logged treatments) and the demo kv keys.
+    Live rows are never touched."""
+    own = conn is None
+    conn = conn or connect()
+    n: dict[str, int] = {}
+    with conn:
+        for table, key in DEMO_JSON_TABLES.items():
+            ids = [r[key] for r in conn.execute(f"SELECT {key}, json FROM {table}").fetchall()
+                   if json.loads(r["json"]).get("is_demo")]
+            conn.executemany(f"DELETE FROM {table} WHERE {key} = ?", [(i,) for i in ids])
+            n[table] = len(ids)
+        ids = [r["card_id"] for r in conn.execute("SELECT card_id, json FROM cards").fetchall()
+               if json.loads(r["json"]).get("card", {}).get("is_demo")]
+        conn.executemany("DELETE FROM cards WHERE card_id = ?", [(i,) for i in ids])
+        n["cards"] = len(ids)
+        n["symptom_checks"] = conn.execute("DELETE FROM symptom_checks WHERE is_demo = 1").rowcount
+        n["treatments"] = conn.execute("DELETE FROM treatments WHERE is_demo = 1").rowcount
+        conn.execute("DELETE FROM kv WHERE key LIKE 'step_watch:green:%' OR key LIKE '%:demo'")
+    if own:
+        conn.close()
+    return n
+
+
 def select_recall(low_event_id: str, conn: sqlite3.Connection | None = None) -> LowEventRecall | None:
     own = conn is None
     conn = conn or connect()

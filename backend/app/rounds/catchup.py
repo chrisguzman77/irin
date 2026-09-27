@@ -63,7 +63,8 @@ class Companion:
         raw = json.loads(p.read_text())
         return cls(
             scenario=raw.get("scenario", p.stem), kind=raw.get("kind", "core"), synthetic=bool(raw.get("synthetic", False)),
-            reason_codes={date.fromisoformat(d): (list(v["codes"]), v.get("code_source", "inferred"))
+            # invariant 9: reason codes on history are inferred and labeled so, whatever the file says
+            reason_codes={date.fromisoformat(d): (list(v["codes"]), "inferred")
                           for d, v in (raw.get("reason_codes") or {}).items()},
             plan=TitrationPlan.model_validate(raw["plan"]) if raw.get("plan") else None,
             dose_change=raw.get("dose_change") or None,
@@ -94,8 +95,9 @@ class CatchUp:
             store.upsert_alarm_event(a.model_copy(update={"is_demo": demo}))
             n["alarm_events"] += 1
         for c in comp.symptom_checks:
-            store.upsert_symptom_check(c.model_copy(update={"is_demo": demo}))
-            n["symptom_checks"] += 1
+            if store.select_symptom_check(c.date, demo) is None:  # a tap on the kiosk during the demo wins
+                store.upsert_symptom_check(c.model_copy(update={"is_demo": demo}))
+                n["symptom_checks"] += 1
         if comp.injections:
             first = min(t.timestamp for t in comp.injections) - timedelta(days=1)
             have = {(t.timestamp, t.kind, t.dose_label) for t in store.select_treatments(first)}
@@ -103,7 +105,10 @@ class CatchUp:
                 if (t.timestamp, t.kind, t.dose_label) not in have:
                     store.insert_treatment(t, is_demo=demo)
                     n["injections"] += 1
-        if comp.plan is not None and not any(p.plan_id == comp.plan.plan_id for p in store.select_plans()):
+        offered = any((d.get("message", {}).get("plan_id") == (comp.plan.plan_id if comp.plan else None))
+                      for d in store.select_doctor_messages()) if comp.plan is not None else False
+        # a plan offered through Spark enters only through the patient's confirm (invariant 8)
+        if comp.plan is not None and not offered and not any(p.plan_id == comp.plan.plan_id for p in store.select_plans()):
             store.upsert_plan(comp.plan.model_copy(update={"status": "active", "is_demo": demo}))
             store.set_kv(f"step_watch:green:{comp.plan.plan_id}", "[]")
             n["plan"] = 1
@@ -164,9 +169,11 @@ class CatchUp:
         demo = self.is_demo()
         summary: dict[str, Any] = {"seeded": self.seed(comp), "nights_built": 0, "mornings_evaluated": 0, "answers_overlaid": 0, "to": to.isoformat()}
         saved_hook, self.ledger.on_record = self.ledger.on_record, None  # the mornings run here, in order, awaited
+        landed = to
         try:
             for night_date in self.nights_until(first_row, to):
                 _, end = night_window(night_date, s.night_window_start, s.night_window_end)
+                landed = end  # a morning that fails leaves the clock before it, so the same seek can be retried
                 clock.set(speed=speed, start=end + MORNING_OFFSET)
                 existing = store.select_night_record(night_date)
                 if existing is None or existing.is_demo != demo:
@@ -180,8 +187,9 @@ class CatchUp:
                 summary["mornings_evaluated"] += 1
                 if self.on_progress is not None:
                     self.on_progress({"night_date": night_date.isoformat(), "to": to.isoformat()})
+            landed = to
         finally:
             self.ledger.on_record = saved_hook
-            clock.set(speed=speed, start=to)
+            clock.set(speed=speed, start=landed)
         log.info("catch-up to %s: %s", to.isoformat(), summary)
         return summary

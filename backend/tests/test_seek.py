@@ -47,7 +47,8 @@ def rig(monkeypatch, tmp_path):
     r.relay = relay
     yield r
     main.runtime.pairing.pairings.pop("doc-8", None)
-    main.runtime.pairing.pairings.pop("impiricus-spark", None)
+    store.set_kv("demo:scenario", "")
+    main.runtime.catching_up = False
     main.runtime.standing.last.clear()
     main.config.IRIN_BRAIN_ONLY = False
     main.runtime.datasource = main.make_datasource(main.runtime.mode)
@@ -184,3 +185,80 @@ def test_companion_loads_every_scenario_and_missing_is_none():
     b = Companion.load(SCENARIOS_DIR / "basal_change_1.csv")
     assert b.kind == "basal_change" and not b.synthetic and b.dose_change["date"] == "2021-02-01" and b.plan is None
     assert Companion.load(SCENARIOS_DIR / "the_save.csv") is None
+
+
+def test_the_spark_sender_is_never_a_card_recipient(rig):
+    """A relay that 404s unknown recipients: after the offer, the next demo card is still "sent"."""
+    c = rig.open()
+    try:
+        c.post("/api/demo/scenario", json={"name": "titration_synthetic"}, headers=H)
+        assert c.post("/api/demo/spark_offer", headers=H).json()["status"] == "pending"
+        assert "impiricus-spark" not in main.runtime.pairing.pairings
+        assert all(p["doctor_id"] != "impiricus-spark" for p in c.get("/api/pairings").json())
+        assert [p.doctor_id for p in main.runtime.pairing.recipients(True)] == ["doc-8"]
+        r = c.post("/api/demo/send_card", json={"fixture": "signal_card_step"}, headers=H)
+        assert r.json()["status"] == "sent" and r.json()["recipients"] == ["doc-8"]
+        assert c.post("/api/demo/spark_offer", headers=H).json()["status"] == "pending"  # the stored status, not a constant
+    finally:
+        c.__exit__(None, None, None)
+
+
+def test_a_different_scenario_starts_from_an_empty_demo_world(rig):
+    c = rig.open()
+    try:
+        c.post("/api/demo/scenario", json={"name": "titration_synthetic"}, headers=H)
+        c.post("/api/demo/seek", json={"step": 1, "day": 10}, headers=H)
+        assert c.get("/api/nights?days=100").json() and store.select_plans()
+        c.post("/api/demo/scenario", json={"name": "titration_synthetic"}, headers=H)  # the same one: kept (a reboot)
+        assert store.select_plans()
+        c.post("/api/demo/scenario", json={"name": "basal_change_1"}, headers=H)
+        assert c.get("/api/nights?days=5000").json() == [] and store.select_plans() == []
+        assert c.get("/api/rounds/cards").json() == [] and store.get_kv("step_watch:green:demo-tirzepatide") is None
+    finally:
+        c.__exit__(None, None, None)
+
+
+def test_the_catch_up_holds_the_scheduler_and_the_poll(rig, monkeypatch):
+    c = rig.open()
+    try:
+        c.post("/api/demo/scenario", json={"name": "titration_synthetic"}, headers=H)
+        seen = []
+        real = main.runtime.catchup.evaluate_night
+
+        async def spy(night_date):
+            seen.append((main.runtime.scheduler.tick(refresh=False), main.runtime.catching_up))
+            await main.hub._poll()
+            return await real(night_date)
+
+        monkeypatch.setattr(main.runtime.catchup, "evaluate_night", spy)
+        before = main.runtime.alarm.state.state
+        assert c.post("/api/demo/seek", json={"step": 1, "day": 5}, headers=H).status_code == 200
+        assert seen and all(fired == [] and flag for fired, flag in seen)  # no job fired mid-replay
+        assert main.runtime.catching_up is False and main.runtime.scheduler.held is False
+        assert main.runtime.alarm.state.state == before == "idle"
+    finally:
+        c.__exit__(None, None, None)
+
+
+def test_brain_only_never_reaches_live_and_step_seek_follows_a_hold(rig):
+    c = rig.open()
+    try:
+        c.post("/api/demo/scenario", json={"name": "titration_synthetic"}, headers=H)
+        c.post("/api/demo/brain_only", json={"brain_only": True}, headers=H)
+        c.post("/api/mode", json={"mode": "nightscout"}, headers=H)
+        assert main.config.IRIN_BRAIN_ONLY is False
+        c.post("/api/mode", json={"mode": "replay"}, headers=H)
+        c.post("/api/demo/scenario", json={"name": "titration_synthetic"}, headers=H)
+        c.post("/api/demo/seek", json={"step": 1, "day": 10}, headers=H)
+        from app.rounds.step_watch import apply_hold
+
+        store.upsert_plan(apply_hold(main.runtime.step_watch.active_plan(), 2, from_index=0))  # step 2 now starts 02-26
+        r = c.post("/api/demo/seek", json={"step": 2, "day": 1}, headers=H)
+        # the held step 2 starts 02-26, past the scenario's end: refused, naming the HELD date (the stored plan, not the file's)
+        assert r.status_code == 422 and "2020-02-26" in r.json()["detail"]
+        ids = [k["card_id"] for k in rig.relay.cards]
+        assert len(ids) == len(set(ids))  # never the same card twice on the relay
+        green = store.get_kv("step_watch:green:demo-tirzepatide") or ""
+        assert "demo-tirzepatide:0" in green  # step 1's check was green
+    finally:
+        c.__exit__(None, None, None)
