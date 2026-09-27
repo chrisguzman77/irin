@@ -201,3 +201,24 @@ def test_log_and_the_whole_store_hold_no_plaintext(c):
     for word in ("mgdl", "glucose", "3:10 AM", "Chris", "low_point"):  # distinctive tokens only: hex and base64 contain digits
         assert word not in dump, word
     assert "bearer_pending" not in dump  # delivered once, then gone
+
+
+def test_resources_request_carries_category_and_brand_and_nothing_about_the_patient(c):
+    """R13: the pharma moment. The doctor's own bearer, a category from the
+    list, a brand; the relay stores and logs exactly that and no patient field."""
+    device, doctor, doctor_id, bearer = pair(c)
+    body = {"doctor_id": doctor_id, "category": "gi_side_effect_education", "brand": "Mounjaro"}
+    assert c.post("/v0/resources/request", json=body).status_code == 401  # no bearer
+    assert c.post("/v0/resources/request", json={**body, "category": "free_lunch"}, headers=bearer).status_code == 422
+    _, _, other_id, other = pair(c, token="ef" * 16)
+    assert c.post("/v0/resources/request", json={**body, "doctor_id": other_id}, headers=bearer).status_code == 403
+    r = c.post("/v0/resources/request", json=body, headers=bearer)
+    assert r.status_code == 200 and r.json()["status"] == "handed_off" and r.json()["shared_fields"] == ["category", "brand"]
+    assert r.json()["banner"] == "No patient data shared with any manufacturer"
+    mine = c.get("/v0/resources", headers=bearer).json()
+    assert [(m["category"], m["brand"], m["is_demo"]) for m in mine] == [("gi_side_effect_education", "Mounjaro", True)]
+    assert c.get("/v0/resources", headers=other).json() == []  # another doctor sees nothing of it
+    dump = json.dumps(list(store.db()["resources"].find({}, {"_id": 0})), default=str) + json.dumps(c.get("/v0/log").json())
+    for word in ("card_id", "glucose", "mgdl", "nadir", "patient", "device", "irin-test", "night"):
+        assert word not in dump, word
+    assert any(row["route"] == "resources.request" and row["category"] == "gi_side_effect_education" for row in c.get("/v0/log").json())

@@ -323,6 +323,43 @@ async def message_state(message_id: str, pairing: dict = Depends(require_bearer)
             "resolved_at": m["resolved_at"].isoformat() if m.get("resolved_at") else None}
 
 
+# ---------------------------------------------------------------- R13: the resources handoff (the pharma moment)
+
+RESOURCE_CATEGORIES = ("glucagon_access", "gi_side_effect_education", "copay_savings", "samples_next_pen",
+                       "bridge_supply", "prior_auth_hub", "ask_msl")
+RESOURCE_BANNER = "No patient data shared with any manufacturer"
+
+
+class ResourceRequest(BaseModel):
+    doctor_id: str = Field(pattern=ID)
+    category: Literal["glucagon_access", "gi_side_effect_education", "copay_savings", "samples_next_pen",
+                      "bridge_supply", "prior_auth_hub", "ask_msl"]
+    brand: str = Field(min_length=1, max_length=80, pattern=r"^[A-Za-z0-9 .,'&()\-]{1,80}$")
+
+
+@router.post("/resources/request")
+async def resources_request(req: ResourceRequest, pairing: dict = Depends(require_bearer)) -> dict:
+    """The doctor's handoff to the mock Ascend: category and brand, from the
+    doctor's own pairing, and NOTHING about the patient (no card, no id, no
+    number). This is the only thing a pharma-side system would ever see."""
+    if req.doctor_id != pairing["doctor_id"]:
+        raise HTTPException(status_code=403, detail="the bearer belongs to another doctor")
+    request_id = secrets.token_hex(8)
+    doc = {"request_id": request_id, "doctor_id": req.doctor_id, "category": req.category, "brand": req.brand,
+           "is_demo": bool(pairing.get("is_demo", False)), "status": "handed_off", "at": store.now()}
+    store.db()["resources"].insert_one(doc)
+    store.audit("resources.request", doctor=req.doctor_id, category=req.category, brand=req.brand, is_demo=doc["is_demo"])
+    return {"request_id": request_id, "status": "handed_off", "category": req.category, "brand": req.brand,
+            "banner": RESOURCE_BANNER, "shared_fields": ["category", "brand"]}
+
+
+@router.get("/resources")
+async def resources(pairing: dict = Depends(require_bearer)) -> list[dict]:
+    """The doctor's own handoffs, newest first (the inbox's history of the pharma moment)."""
+    rows = store.db()["resources"].find({"doctor_id": pairing["doctor_id"]}).sort("at", -1).limit(100)
+    return [{**store.public(r), "at": r["at"].isoformat()} for r in rows]
+
+
 # ---------------------------------------------------------------- the "what Impiricus sees" log
 
 
