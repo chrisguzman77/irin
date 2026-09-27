@@ -52,6 +52,7 @@ class Evaluation:
     excluded_counts: dict[str, int] = field(default_factory=dict)
     period_start: date | None = None
     period_end: date | None = None
+    phase_key: str | None = None  # Follow-up: the budget key of its phase (day 7 or day 14 of one change)
 
 
 def _window_values(night_records, low_events, recalls, alarm_events, alarm_source: str) -> tuple[dict, dict]:
@@ -157,28 +158,36 @@ def evaluate_follow_up(before, after_7, after_14, thresholds: Thresholds = Thres
     """Before a confirmed dose change versus after it: a comparison of the same
     computed numbers, never a judgement of the dose."""
     b_vals, b_conf = _window_values(before, [], [], (), alarm_source)
-    a7_vals, _ = _window_values(after_7, [], [], (), alarm_source)
-    a14_vals, a_conf = _window_values(after_14, [], [], (), alarm_source)
+    a7_vals, a7_conf = _window_values(after_7, [], [], (), alarm_source)
+    phase7 = after_14 is None  # the day-7 card: no 14-day numbers exist yet
+    a14_vals, a_conf = (a7_vals, a7_conf) if phase7 else _window_values(after_14, [], [], (), alarm_source)
+    after_14 = list(after_7) if phase7 else after_14
     start, end = _period(list(before) + list(after_14))
     metrics = {"before_nights": b_vals["nights"], "before_clean_nights": b_vals["clean_nights"],
                "before_rise_median": b_vals["rise_median_clean"], "after7_clean_nights": a7_vals["clean_nights"],
                "after7_rise_median": a7_vals["rise_median_clean"], "after14_clean_nights": a14_vals["clean_nights"],
                "after14_rise_median": a14_vals["rise_median_clean"],
                "excluded_nights": (b_vals["excluded_nights"] or []) + (a14_vals["excluded_nights"] or [])}
+    if phase7:
+        metrics.pop("after14_clean_nights")
+        metrics.pop("after14_rise_median")
     confidence = {k: (a_conf["clean_nights"] if k.startswith("after") else b_conf["clean_nights"])
                   for k in metrics if k != "excluded_nights"}
     common = dict(kind="follow_up", metrics=metrics, confidence=confidence, nights=_night_rows(list(before) + list(after_14)),
                   excluded_counts=_excluded_counts(metrics), period_start=start, period_end=end)
     need = thresholds.follow_up_clean_per_side
-    if b_vals["clean_nights"] < need or a14_vals["clean_nights"] < need or metrics["after14_rise_median"] is None \
+    after_key = "after7" if phase7 else "after14"
+    after_rise = metrics[f"{after_key}_rise_median"]
+    if b_vals["clean_nights"] < need or a14_vals["clean_nights"] < need or after_rise is None \
             or metrics["before_rise_median"] is None:
         return Evaluation(status="insufficient", flags=[], headline="Not enough data yet: fewer than "
                           f"{need} clean nights on one side of the change.", **common)
-    delta = metrics["after14_rise_median"] - metrics["before_rise_median"]
+    delta = after_rise - metrics["before_rise_median"]
     metrics["rise_change"] = delta
     confidence["rise_change"] = a_conf["clean_nights"]
-    status = "green" if abs(metrics["after14_rise_median"]) <= thresholds.rise_min_mgdl else "amber"
-    return Evaluation(status=status, flags=[] if status == "green" else ["rise_high" if metrics["after14_rise_median"] > 0 else "rise_low"],
+    status = "green" if abs(after_rise) <= thresholds.rise_min_mgdl else "amber"
+    days = "days 1-7" if phase7 else "days 1-14"
+    return Evaluation(status=status, flags=[] if status == "green" else ["rise_high" if after_rise > 0 else "rise_low"],
                       headline=(f"Median overnight rise {metrics['before_rise_median']:+.0f} mg/dL before the change, "
-                                f"{metrics['after14_rise_median']:+.0f} after ({a14_vals['clean_nights']} clean nights)."),
+                                f"{after_rise:+.0f} after, {days} ({a14_vals['clean_nights']} clean nights)."),
                       **common)

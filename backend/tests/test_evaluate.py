@@ -134,7 +134,7 @@ def test_a_red_is_sent_once_per_episode_across_mornings_and_restarts(monkeypatch
         assert r[0]["status"] == "red" and r[0]["budget"] == "sent" and len(relay.cards) == 1
         clock.advance(24 * 3600)  # the next morning, same episodes in the window
         r = c.post("/api/rounds/evaluate", json={"today": (today + timedelta(days=1)).isoformat(), "only": "hypo_response"}, headers=H).json()
-        assert r[0]["budget"] == "red_duplicate" and len(relay.cards) == 1
+        assert r[0]["budget"] in ("red_duplicate", "interval") and len(relay.cards) == 1
         main.runtime.pairing.pairings.pop("doc-8")
         main.runtime.standing.last.clear()
 

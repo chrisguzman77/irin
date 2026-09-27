@@ -288,6 +288,10 @@ async def seek(req: SeekRequest) -> dict:
         _runtime.forecaster.reset()
         _runtime.voice.reset()
         _runtime.hub._last = None
+    # land at 1x so the screen holds the moment (a scenario's last rows are minutes away; at 60x the
+    # display would go honestly stale within a minute on stage); the panel's speed control raises it again
+    replay.speed = 1.0
+    clock.set(speed=1.0, start=clock.now())
     await _broadcast("mode_change", {"mode": "replay", "scenario": Path(replay.path).stem, "seek": to.isoformat()})
     return {"scenario": Path(replay.path).stem, "clock": clock.now().isoformat(), **summary}
 

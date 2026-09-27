@@ -63,7 +63,7 @@ def template_narrative(kind: str, headline: str, metrics: dict, confidence: dict
     for key, value in metrics.items():
         if key in UNLABELED or isinstance(value, (dict, list)) or value is None or isinstance(value, bool):
             continue
-        shown = f"{value:g}" if isinstance(value, float) else str(value)
+        shown = f"{round(value, 1):g}" if isinstance(value, float) else str(value)
         rows.append(f"{key.replace('_', ' ')} {shown} ({confidence.get(key, 'inferred')})")
     body = "; ".join(rows)
     return f"{headline} Computed by Irin from the device's own record: {body}." if body else headline

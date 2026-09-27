@@ -64,7 +64,8 @@ def test_both_without_a_watch_sends_the_basal_check_twice(rig):
     c = rig.open()
     try:
         c.post("/api/demo/scenario", json={"name": "basal_change_1"}, headers=H)
-        assert c.post("/api/demo/seek", json={"date": "2021-02-15"}, headers=H).status_code == 200
+        # before the confirmed change: afterwards a Basal Check window would straddle it and is not evaluated
+        assert c.post("/api/demo/seek", json={"date": "2021-01-25"}, headers=H).status_code == 200
         bedside, brain = _pair(c, rig, {"mode": "both"})
         assert bedside["program"] == "standing" and bedside["kind"] == "basal_check"
         _differ_only_in_labels(bedside, brain)

@@ -74,8 +74,13 @@ class StandingEngine:
                 return [r for r in store.select_night_records(a, b) if r.is_demo == demo]
             before = nights(change - timedelta(days=w), change - timedelta(days=1))
             after_7 = nights(change, change + timedelta(days=6))
-            after_14 = nights(change, min(today, change + timedelta(days=w - 1)))
-            out.append(evaluate_follow_up(before, after_7, after_14, self.thresholds, alarm_source=alarm_source))
+            day14 = today >= change + timedelta(days=w - 1)
+            after_14 = nights(change, change + timedelta(days=w - 1)) if day14 else None
+            ev = evaluate_follow_up(before, after_7, after_14, self.thresholds, alarm_source=alarm_source)
+            ev.phase_key = f"follow_up:{change.isoformat()}:{14 if day14 else 7}"
+            out.append(ev)
+        if change is not None and self.window(today)[0] <= change <= today:
+            out = [e for e in out if e.kind != "basal_check"]  # nights both sides of a dose change are confounded
         return out
 
     def therapy_change_date(self) -> date | None:
@@ -107,9 +112,10 @@ class StandingEngine:
         for ev in self.evaluations(today):
             if only and ev.kind != only:
                 continue
-            key = (event_key or self._red_event_key(inp)) if ev.status == "red" else None
+            key = (event_key or self._red_event_key(inp)) if ev.status == "red" else getattr(ev, "phase_key", None)
+            window_only = ev.kind == "hypo_response" and ev.status == "red" and set(ev.flags) <= {"lows"}
             verdict = noise.allow(ev.kind, "standing", ev.status, clock.now(), history,
-                                  active_watch=self.active_watch(), event_key=key)
+                                  active_watch=self.active_watch(), event_key=key, window_only=window_only)
             entry = {"kind": ev.kind, "status": ev.status, "flags": ev.flags, "headline": ev.headline,
                      "budget": verdict.reason, "sent": None}
             self.last[ev.kind] = entry
