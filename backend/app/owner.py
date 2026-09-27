@@ -32,7 +32,7 @@ import logging
 import secrets
 import threading
 from dataclasses import dataclass, field
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 
 import httpx
@@ -140,7 +140,9 @@ class OwnerPairingService:
             token = secrets.token_urlsafe(32)
             ttl = TOKEN_TTL * clock.speed  # 10 wall minutes whatever the replay speed
             expires_at = clock.now() + ttl
-            self.relay.register(code, self.device_id, self.device_url, token, expires_at.isoformat())
+            # the relay's deadline is WALL time in UTC: clock.now() is naive and, in replay, the scenario's date
+            relay_expires = datetime.now(timezone.utc) + TOKEN_TTL
+            self.relay.register(code, self.device_id, self.device_url, token, relay_expires.isoformat())
             store.set_kv(KV_KEY, json.dumps({"token_sha256": _sha256(token), "state": "pending",
                                              "username": None, "paired_at": None}))
             self._changed()

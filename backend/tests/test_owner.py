@@ -76,6 +76,10 @@ def test_mint_registers_with_the_relay_and_never_returns_the_token(svc):
     assert out["expires_in_s"] == 600
     assert relay.registered["code"] == out["code"] and relay.registered["device_id"] == "irin-test"
     assert len(relay.registered["token"]) >= 43  # never shipped back to the caller
+    from datetime import datetime, timezone
+    relay_exp = datetime.fromisoformat(relay.registered["expires_at"])  # the relay's deadline: tz-aware wall UTC
+    assert relay_exp.tzinfo is not None
+    assert 590 <= (relay_exp - datetime.now(timezone.utc)).total_seconds() <= 600
     assert states[-1] == {"state": "pending", "username": None, "paired_at": None}
     assert s.state()["state"] == "pending"
 
