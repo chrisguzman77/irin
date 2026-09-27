@@ -5,8 +5,12 @@ Python over the store: candidates are CGM-verified watchers (be_watcher on)
 in the requester's pool (same is_demo); hours_covered (the requester's
 22:00-08:00 sleep window in UTC intersected with the candidate's
 availability, averaged per night), mirror (UTC offset difference 10-14 h),
-shared_languages; score = hours_covered + 2 * mirror + len(shared_languages);
-sort, limit 3; declined candidates never return.
+shared_languages (casefold compare, stored as sent); score = hours_covered +
+2 * mirror + len(shared_languages) + 3 when the candidate's home offset is
+within 60 minutes of the requester's preferred buddy zone (timezones[1], v2);
+sort, limit 3; declined candidates never return. Seeded sample profiles
+(seed: true, relay/seed_buddies.py) accept at once when a real user accepts,
+never post a pair link, and every row naming one carries sample: true.
 The introduction and why-this-match lines are narrative text (Muse) beside
 the match; the scorer never reads them and an LLM never picks the buddy.
 
@@ -142,8 +146,13 @@ def _minutes(hhmm: str) -> int:
     return int(h) * 60 + int(m)
 
 
-def _offset_min(user: dict, at: datetime) -> int:
-    return int(at.astimezone(ZoneInfo(user["timezones"][0])).utcoffset().total_seconds() // 60)
+def _offset_min(user: dict, at: datetime, index: int = 0) -> int:
+    return int(at.astimezone(ZoneInfo(user["timezones"][index])).utcoffset().total_seconds() // 60)
+
+
+def _wrap_diff(a: int, b: int) -> int:
+    d = abs(a - b) % 1440
+    return min(d, 1440 - d)
 
 
 def _utc_intervals(local: list[tuple[int, int]], offset: int) -> list[tuple[int, int]]:
@@ -184,13 +193,15 @@ def score(req: dict, cand: dict, at: datetime) -> dict:
     awake = _merge(_utc_intervals(_availability(cand), cand_off))
     covered = sum(max(0, min(e1, e2) - max(s1, s2)) for s1, e1 in nights for s2, e2 in awake)
     hours = round(covered / 60 / 7, 1)
-    diff = abs(req_off - cand_off) % 1440
-    diff = min(diff, 1440 - diff)
-    mirror = 600 <= diff <= 840
+    mirror = 600 <= _wrap_diff(req_off, cand_off) <= 840
+    prefers = len(req["timezones"]) > 1 and _wrap_diff(_offset_min(req, at, 1), cand_off) <= 60
     theirs = {x.casefold() for x in cand.get("languages", [])}
-    shared = sorted({x for x in req.get("languages", []) if x.casefold() in theirs})
-    return {"score": round(hours + 2 * mirror + len(shared), 1), "hours_covered": hours, "mirror": mirror,
-            "shared_languages": shared}
+    shared = {}  # casefold -> the requester's first spelling, so "English" and "english" count once
+    for x in req.get("languages", []):
+        if x.casefold() in theirs:
+            shared.setdefault(x.casefold(), x)
+    return {"score": round(hours + 2 * mirror + len(shared) + 3 * prefers, 1), "hours_covered": hours,
+            "mirror": mirror, "shared_languages": sorted(shared.values())}
 
 
 # ---------------------------------------------------------------- routes
@@ -204,9 +215,14 @@ def _other(m: dict, user_id: str) -> str:
     return next(u for u in m["users"] if u != user_id)
 
 
+def _sample(other: dict) -> dict:
+    """`sample: true` on any row whose user is a seeded sample profile; real rows are unchanged."""
+    return {"sample": True} if other.get("seed") else {}
+
+
 def _match_out(m: dict, me: dict, other: dict) -> dict:
     return {"match_id": m["match_id"], "candidate_id": other["user_id"], "first_name": other["first_name"],
-            **score(me, other, store.now()), "status": m["status"]}
+            **score(me, other, store.now()), "status": m["status"], **_sample(other)}
 
 
 @router.post("/users")
@@ -234,7 +250,7 @@ async def users_search(username: str = Query(min_length=1, max_length=30), user:
         "is_demo": user["is_demo"], "user_id": {"$ne": user["user_id"]},
         "$or": [{"optins.have_buddy": True}, {"optins.be_watcher": True}]}).sort("username", 1).limit(20)
     out = [{"user_id": r["user_id"], "username": r["username"], "first_name": r["first_name"],
-            "languages": r.get("languages", []), "be_watcher": r["optins"]["be_watcher"]} for r in rows]
+            "languages": r.get("languages", []), "be_watcher": r["optins"]["be_watcher"], **_sample(r)} for r in rows]
     store.audit("directory.search", user_id=user["user_id"], results=len(out))
     return out
 
@@ -268,7 +284,7 @@ async def match(body: MatchIn | None = None, user: dict = Depends(require_user))
         if m["status"] != "offered":  # declined or accepted in the meantime
             continue
         out.append({"match_id": m["match_id"], "candidate_id": c["user_id"], "first_name": c["first_name"], **parts,
-                    "status": "offered"})
+                    "status": "offered", **_sample(c)})
     store.audit("directory.match", user_id=user["user_id"], match_ids=[o["match_id"] for o in out])
     return out
 
@@ -288,7 +304,7 @@ async def match_accept(match_id: str, user: dict = Depends(require_user)) -> dic
     m, other = _my_match(match_id, _verified(user))
     if m["status"] == "declined":
         raise HTTPException(status_code=409, detail="match declined")
-    accepted_by = sorted(set(m["accepted_by"]) | {user["user_id"]})
+    accepted_by = sorted(set(m["accepted_by"]) | {user["user_id"]} | ({other["user_id"]} if other.get("seed") else set()))
     status = "accepted" if set(accepted_by) == set(m["users"]) else "offered"
     m = store.db()["matches"].find_one_and_update({"_id": m["_id"], "status": {"$ne": "declined"}},
                                                   {"$set": {"accepted_by": accepted_by, "status": status}},
@@ -333,12 +349,12 @@ def poll_matches(key_hash: str) -> list[dict]:
     if user is None:
         return []
     rows = list(store.db()["matches"].find({"users": user["user_id"]}).sort("created_at", 1).limit(50))
-    names = {u["user_id"]: u["first_name"] for u in
-             store.db()["users"].find({"user_id": {"$in": [_other(m, user["user_id"]) for m in rows]}})}
+    others = {u["user_id"]: u for u in
+              store.db()["users"].find({"user_id": {"$in": [_other(m, user["user_id"]) for m in rows]}})}
     out = []
     for m in rows:
         other = _other(m, user["user_id"])
-        if other in names:
-            out.append({"match_id": m["match_id"], "first_name": names[other], "status": m["status"],
-                        "pair_url": m.get("pair_urls", {}).get(other)})
+        if other in others:
+            out.append({"match_id": m["match_id"], "first_name": others[other]["first_name"], "status": m["status"],
+                        "pair_url": m.get("pair_urls", {}).get(other), **_sample(others[other])})
     return out
