@@ -65,7 +65,10 @@ const SOUNDING = ["pending", "active", "rearmed"]; // pending = the predicted-lo
 const toMs = (iso) => new Date(iso).getTime(); // naive Pi-local timestamps; only differences matter
 const hhmm = (ms) => new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
 // the top-right clock only: 12-hour with AM/PM ("9:29 PM"), George's choice
-const hm12 = (ms) => new Date(ms).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true });
+// Chromium puts a narrow no-break space (U+202F) before AM/PM; Nunito has no
+// glyph for it, so it becomes a plain space and the whole clock stays in Nunito.
+const hm12 = (ms) => new Date(ms).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true })
+  .replace(/[\u202f\u00a0]/g, " ");
 
 // --- data ---
 
