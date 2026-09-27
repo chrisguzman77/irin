@@ -29,6 +29,10 @@ export interface BuddyState {
   emergency: { at: string | null; text: string } | null;
   /** B3+ directory: my matches, from buddy_state.matches and hub_update "match" */
   matches: MatchState[];
+  /** Buddy v3 (relay/README.md, PINNED): buddy_state.my_buddy = the stored
+   * MatchOffer of this world's accepted match, or null. Not in src/types yet
+   * (buddy_state is an untyped dict), so it is read with readMatchCard. */
+  myBuddy: MatchCard | null;
 }
 /** buddy_state.matches[i]; pair_url is the other side's watcher /pair link, once both accepted */
 export interface MatchState {
@@ -70,6 +74,7 @@ export function readBuddyState(snap: StateSnapshot | null): BuddyState {
         ? [{ match_id: id, first_name: str(o.first_name), status: str(o.status) ?? "offered", pair_url: str(o.pair_url), sample: o.sample === true }]
         : [];
     }),
+    myBuddy: readMatchCard(b.my_buddy),
   };
 }
 
@@ -212,24 +217,24 @@ export async function findMatches(base: string): Promise<Result<MatchCard[]>> {
   if (!res.ok) return { ok: false, reason: await reason(res) };
   const body = await res.json();
   const rows = Array.isArray(body) ? body : Array.isArray(obj(body)?.matches) ? (obj(body)!.matches as unknown[]) : [];
+  return { ok: true, value: rows.flatMap((r) => readMatchCard(r) ?? []) };
+}
+
+/** One MatchOffer (POST /api/buddy/match rows, buddy_state.my_buddy), read defensively. */
+export function readMatchCard(r: unknown): MatchCard | null {
+  const o = obj(r);
+  if (!o || !str(o.match_id)) return null;
   return {
-    ok: true,
-    value: rows.flatMap((r) => {
-      const o = obj(r);
-      if (!o || !str(o.match_id)) return [];
-      return [{
-        match_id: str(o.match_id)!,
-        first_name: str(o.first_name) ?? "Someone",
-        hours_covered: typeof o.hours_covered === "number" ? o.hours_covered : 0,
-        mirror: o.mirror === true,
-        shared_languages: Array.isArray(o.shared_languages) ? o.shared_languages.filter((x): x is string => typeof x === "string") : [],
-        score: typeof o.score === "number" ? o.score : 0,
-        intro: str(o.intro),
-        why: str(o.why),
-        is_demo: o.is_demo === true,
-        sample: o.sample === true,
-      }];
-    }),
+    match_id: str(o.match_id)!,
+    first_name: str(o.first_name) ?? "Someone",
+    hours_covered: typeof o.hours_covered === "number" ? o.hours_covered : 0,
+    mirror: o.mirror === true,
+    shared_languages: Array.isArray(o.shared_languages) ? o.shared_languages.filter((x): x is string => typeof x === "string") : [],
+    score: typeof o.score === "number" ? o.score : 0,
+    intro: str(o.intro),
+    why: str(o.why),
+    is_demo: o.is_demo === true,
+    sample: o.sample === true,
   };
 }
 
@@ -245,4 +250,63 @@ export async function answerMatch(base: string, matchId: string, verb: "accept" 
 export async function saveBuddySettings(base: string, patch: Partial<Settings>): Promise<Result<null>> {
   const res = await deviceFetch(base, "/api/settings", { method: "POST", body: JSON.stringify(patch) });
   return res.ok ? { ok: true, value: null } : { ok: false, reason: await reason(res) };
+}
+
+// Buddy v3 hub for app users (relay/README.md, PINNED), through the Pi's
+// GET /api/buddy/hub and POST /api/buddy/hub/{listing_id}/claim (require_pin).
+// Local types until `npm run types` picks up the Pi's routes. A row never
+// carries a glucose value, place, or contact (invariant 15); the script arrives
+// only in the claim reply, while the claim is live (invariant 14).
+export interface HubRow {
+  listing_id: string;
+  first_name: string;
+  languages: string[];
+  elapsed_min: number;
+  urgency: number;
+  confidence: "device_confirmed" | "unconfirmed";
+  sample: boolean;
+}
+export interface HubClaim {
+  claim_id: string;
+  expires_at: string | null;
+  steps: string[];
+}
+
+export async function getHub(base: string): Promise<Result<HubRow[]>> {
+  const res = await deviceFetch(base, "/api/buddy/hub", { pinned: true });
+  if (!res.ok) return { ok: false, reason: await reason(res) };
+  const body = await res.json();
+  return {
+    ok: true,
+    value: (Array.isArray(body) ? body : []).flatMap((r) => {
+      const o = obj(r);
+      if (!o || !str(o.listing_id)) return [];
+      return [{
+        listing_id: str(o.listing_id)!,
+        first_name: str(o.first_name) ?? "Someone",
+        languages: Array.isArray(o.languages) ? o.languages.filter((x): x is string => typeof x === "string") : [],
+        elapsed_min: typeof o.elapsed_min === "number" ? o.elapsed_min : 0,
+        urgency: typeof o.urgency === "number" ? o.urgency : 0,
+        // anything but an explicit device_confirmed reads as unconfirmed (never overstate confidence)
+        confidence: o.confidence === "device_confirmed" ? "device_confirmed" : "unconfirmed",
+        sample: o.sample === true,
+      }];
+    }),
+  };
+}
+
+/** A 409 ("someone else is helping") comes back as its detail. */
+export async function claimHub(base: string, listingId: string): Promise<Result<HubClaim>> {
+  const res = await deviceFetch(base, `/api/buddy/hub/${encodeURIComponent(listingId)}/claim`, { method: "POST" });
+  if (!res.ok) return { ok: false, reason: await reason(res) };
+  const o = obj(await res.json()) ?? {};
+  const steps = obj(o.script)?.steps;
+  return {
+    ok: true,
+    value: {
+      claim_id: str(o.claim_id) ?? "",
+      expires_at: str(o.expires_at),
+      steps: Array.isArray(steps) ? steps.filter((x): x is string => typeof x === "string") : [],
+    },
+  };
 }
