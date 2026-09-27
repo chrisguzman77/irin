@@ -17,6 +17,9 @@ const GAP_MIN = 15;            // don't join points across a gap this long (matc
 const DISCONNECT_BANNER_MS = 15000;
 const TARGET_LOW = 70;         // time-in-range band, consensus 70-180 mg/dL
 const TARGET_HIGH = 180;
+const LINE_IN = "#EFEEEA";     // graph line in range (70-180): brand Off-white
+const LINE_HIGH = "#ffd60a";   // graph line above range: yellow
+const LINE_LOW = "#ff3b30";    // graph line below range: red
 const POLL_MS = 5000;          // the Pi's clock and display mode, polled (at 60x replay: 5 clock-min)
 const MODES = ["detail", "night", "morning"];
 
@@ -46,6 +49,7 @@ const state = {
   familyStories: [],   // FamilyStory list of the latest night (snapshot family_story_status + updates)
   doctorMessages: [],  // pending DoctorMessage list (snapshot pending_doctor_messages + updates)
   doctorName: null,    // the one paired doctor's display name (irinDoctorName of pairing_state)
+  doctorSenders: {},   // message_id -> that message's own doctor_display_name (e.g. the simulated Spark)
   doctorMsg: "",
   doctorAsking: null,  // message_id the keypad is open for
   pairing: {},         // pairing_state (snapshot + pairing_state messages)
@@ -124,6 +128,7 @@ function onMessage(msg) {
       state.presence = p.presence || null;
       state.familyStories = Array.isArray(p.family_story_status) ? p.family_story_status : [];
       state.doctorMessages = Array.isArray(p.pending_doctor_messages) ? p.pending_doctor_messages : [];
+      loadDoctorSenders();
       setPairing(p.pairing_state);
       state.planState = p.plan_state || {};
       state.activePlan = p.active_plan || null;
@@ -150,6 +155,8 @@ function onMessage(msg) {
       const m = p.message || p;
       if (m && typeof m.message_id === "string" && (m.status || "pending") === "pending")
         state.doctorMessages = state.doctorMessages.filter((x) => x.message_id !== m.message_id).concat([m]);
+      if (m && typeof m.message_id === "string" && typeof p.doctor_display_name === "string" && p.doctor_display_name.trim())
+        state.doctorSenders[m.message_id] = p.doctor_display_name.trim();
       break;
     }
     case "doctor_message_resolved": {
@@ -375,6 +382,29 @@ function updateIdle() {
 
 // --- doctor-message takeover (R4, invariant 8) ---
 
+// Each pending message's own sender name (GET /api/rounds/messages carries
+// doctor_display_name per message; the snapshot's DoctorMessage has none).
+// A read only, with the kiosk's cached PIN if there is one: it never prompts,
+// and without it the paired-doctor rule names the sender.
+async function loadDoctorSenders() {
+  const pin = cachedPin();
+  if (!pin || !state.doctorMessages.length) return;
+  try {
+    const res = await fetch("/api/rounds/messages", { headers: { "X-PIN": pin }, cache: "no-store" });
+    if (!res.ok) return;
+    const docs = await res.json();
+    if (!Array.isArray(docs)) return;
+    for (const d of docs) {
+      const id = d && d.message && d.message.message_id;
+      if (typeof id === "string" && typeof d.doctor_display_name === "string" && d.doctor_display_name.trim())
+        state.doctorSenders[id] = d.doctor_display_name.trim();
+    }
+    renderDoctor();
+  } catch {
+    /* the paired-doctor rule stays */
+  }
+}
+
 // The oldest pending message, echoed in plain words (doctor-echo.js). Confirm
 // and Decline are fresh-PIN verbs: the keypad always opens (postFresh). The
 // takeover never confirms or closes on its own: it goes away only when the
@@ -384,7 +414,7 @@ function renderDoctor() {
   const m = state.doctorMessages[0];
   box.classList.toggle("hidden", !m);
   if (!m) return;
-  const e = window.irinDoctorEcho(m, state.doctorName);
+  const e = window.irinDoctorEcho(m, state.doctorSenders[m.message_id] || state.doctorName);
   const n = state.doctorMessages.length;
   $("doctor-count").textContent = n > 1 ? `1 of ${n} messages` : "";
   $("doctor-who").textContent = `${e.who}:`;
@@ -845,7 +875,7 @@ function drawGraph() {
   const y = (v) => padT + (1 - (Math.min(Math.max(v, yMin), yMax) - yMin) / (yMax - yMin)) * plotH;
 
   // target band
-  ctx.fillStyle = "rgba(60, 180, 110, 0.14)";
+  ctx.fillStyle = "rgba(125, 155, 110, 0.20)";  // target band: brand Sage
   ctx.fillRect(padL, y(TARGET_HIGH), plotW, y(TARGET_LOW) - y(TARGET_HIGH));
 
   // y gridlines
@@ -853,16 +883,16 @@ function drawGraph() {
   ctx.textAlign = "right";
   ctx.textBaseline = "middle";
   for (const v of [TARGET_LOW, TARGET_HIGH, 250].filter((v) => v < yMax)) {
-    ctx.strokeStyle = v === TARGET_LOW ? "rgba(255,59,48,0.5)" : "#262626";
+    ctx.strokeStyle = v === TARGET_LOW ? "rgba(255,59,48,0.5)" : "#4A4C41";
     ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(padL, y(v)); ctx.lineTo(padL + plotW, y(v)); ctx.stroke();
-    ctx.fillStyle = "#777";
+    ctx.fillStyle = "#A9AA9E";
     ctx.fillText(String(v), padL - fs * 0.4, y(v));
   }
 
   if (!r) {
     ctx.textAlign = "center";
-    ctx.fillStyle = "#555";
+    ctx.fillStyle = "#8C8D82";
     ctx.fillText("waiting for readings", padL + plotW / 2, padT + plotH / 2);
     return;
   }
@@ -870,43 +900,58 @@ function drawGraph() {
   // x labels: every hour, Pi clock
   ctx.textAlign = "center";
   ctx.textBaseline = "top";
-  ctx.fillStyle = "#777";
+  ctx.fillStyle = "#A9AA9E";
   const hour = 3600000;
   for (let t = Math.ceil(tStart / hour) * hour; t <= tEnd; t += hour) {
-    ctx.strokeStyle = "#1a1a1a";
+    ctx.strokeStyle = "#3A3B33";
     ctx.beginPath(); ctx.moveTo(x(t), padT); ctx.lineTo(x(t), padT + plotH); ctx.stroke();
     ctx.fillText(hhmm(t), x(t), padT + plotH + fs * 0.4);
   }
 
   // "now" divider between history and forecast
   const tNow = toMs(r.timestamp);
-  ctx.strokeStyle = "#333";
+  ctx.strokeStyle = "#5C5E52";
   ctx.setLineDash([2, 4]);
   ctx.beginPath(); ctx.moveTo(x(tNow), padT); ctx.lineTo(x(tNow), padT + plotH); ctx.stroke();
   ctx.setLineDash([]);
 
-  // history line, broken across gaps
-  const lineColor = dim ? "#777" : "#e8e8e8";
-  ctx.strokeStyle = lineColor;
+  // history line, broken across gaps, no point markers (George, stepping in for
+  // Justin): the line itself is colored by range, white in 70-180, YELLOW above,
+  // RED below, switching exactly where it crosses 70 or 180 (each segment is
+  // split at the crossing, so a colour never bleeds past the threshold). Stale
+  // or disconnected data stays all grey (invariant 1: never drawn as live).
   ctx.lineWidth = Math.max(2, fs * 0.18);
   ctx.lineJoin = "round";
-  ctx.beginPath();
+  ctx.lineCap = "round";
+  const rangeColor = (v) => (dim ? "#777" : v < TARGET_LOW ? LINE_LOW : v > TARGET_HIGH ? LINE_HIGH : LINE_IN);
+  const piece = (t0, v0, t1, v1) => {
+    ctx.strokeStyle = rangeColor((v0 + v1) / 2);
+    ctx.beginPath(); ctx.moveTo(x(t0), y(v0)); ctx.lineTo(x(t1), y(v1)); ctx.stroke();
+  };
   let prev = null;
   for (const p of pts) {
-    if (!prev || p.t - prev.t > GAP_MIN * 60000) ctx.moveTo(x(p.t), y(p.mgdl));
-    else ctx.lineTo(x(p.t), y(p.mgdl));
+    if (prev && p.t - prev.t <= GAP_MIN * 60000) {
+      // the times (in order) where this segment crosses 70 or 180
+      const cuts = [TARGET_LOW, TARGET_HIGH]
+        .filter((th) => (prev.mgdl - th) * (p.mgdl - th) < 0)
+        .map((th) => prev.t + ((th - prev.mgdl) / (p.mgdl - prev.mgdl)) * (p.t - prev.t))
+        .sort((a, b) => a - b);
+      let t0 = prev.t, v0 = prev.mgdl;
+      for (const tc of cuts) {
+        const vc = prev.mgdl + ((tc - prev.t) / (p.t - prev.t)) * (p.mgdl - prev.mgdl);
+        piece(t0, v0, tc, vc);
+        t0 = tc; v0 = vc;
+      }
+      piece(t0, v0, p.t, p.mgdl);
+    } else {
+      // the first reading of a run (after a gap, or the very first) gets a cap
+      // in its range colour, so a lone reading between two gaps still shows
+      ctx.strokeStyle = rangeColor(p.mgdl);
+      ctx.beginPath(); ctx.moveTo(x(p.t), y(p.mgdl)); ctx.lineTo(x(p.t) + 0.1, y(p.mgdl)); ctx.stroke();
+    }
     prev = p;
   }
-  ctx.stroke();
-
-  // points colored by range
-  const dot = Math.max(2.5, fs * 0.22);
-  for (const p of pts) {
-    ctx.fillStyle = dim ? "#777"
-      : p.mgdl < TARGET_LOW ? "#ff3b30"
-      : p.mgdl > TARGET_HIGH ? "#ffb000" : "#e8e8e8";
-    ctx.beginPath(); ctx.arc(x(p.t), y(p.mgdl), dot, 0, Math.PI * 2); ctx.fill();
-  }
+  ctx.lineCap = "butt";
 
   // DOTTED forecast: latest reading -> predicted value at +horizon
   if (fc) {
@@ -923,7 +968,7 @@ function drawGraph() {
   if (!fc && state.forecastNote && !dim) {
     ctx.textAlign = "right";
     ctx.textBaseline = "top";
-    ctx.fillStyle = "#999";
+    ctx.fillStyle = "#A9AA9E";
     ctx.font = `${Math.round(fs * 0.85)}px system-ui, sans-serif`;
     ctx.fillText(state.forecastNote, padL + plotW, padT);
   }

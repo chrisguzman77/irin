@@ -49,6 +49,7 @@ class Hub:
             active_plan=self.runtime.step_watch.active_plan() if getattr(self.runtime, "step_watch", None) else None,
             plan_state=self.runtime.step_watch.plan_state() if getattr(self.runtime, "step_watch", None) else {},
             todays_checkin_status=self.checkin_status(),
+            buddy_state=self.runtime.buddy.state() if getattr(self.runtime, "buddy", None) else {},
         )
 
     def checkin_status(self) -> dict:
@@ -116,6 +117,8 @@ class Hub:
             await clock.sleep(POLL_CLOCK_SECONDS)
 
     async def _poll(self) -> None:
+        if getattr(self.runtime, "catching_up", False):
+            return  # R12: a skipped morning's reading never reaches the alarm engine or the forecaster
         try:
             reading = await self.runtime.datasource.get_latest()
         except NotImplementedError:
@@ -124,6 +127,8 @@ class Hub:
             self._last = reading
             if self.runtime.alarm is not None:
                 self.runtime.alarm.process_reading(reading)
+            if getattr(self.runtime, "buddy", None) is not None:
+                self.runtime.buddy.on_reading(reading)  # B2 brain_only: level 2 confirmation
             await self.broadcast(WSMessage(type="reading_update", payload=reading.model_dump(mode="json")))
             await self._forecast(reading)
 

@@ -40,8 +40,22 @@ need no time-zone arithmetic. Every primary key includes the time column
 | alarm_events | device_id, started_at timestamp, event_id text, tier text, acknowledged_at timestamp, ack_source text, escalated bool, rearm_count int, crossed_actual bool, presence_during text, is_demo bool | (device_id, started_at, event_id) |
 | low_events | device_id, started_at timestamp, low_event_id text, night_date date, nadir_mgdl real, nadir_at timestamp, minutes_below_70 int, auc_below_70 real, recovery_slope real, carbs_logged_within_30min bool, inferred_unfelt bool, alarm_event_id text, is_demo bool | (device_id, started_at, low_event_id) |
 | treatments | device_id, time timestamp, kind text, insulin_units real, carbs_g real, dose_label text, text text, confirmed bool, is_demo bool | (device_id, time, kind) |
+| night_records | device_id, night_date date, window_start timestamp, window_end timestamp, coverage_pct real, reason_codes text[], code_source text, rise_mgdl real, low_point_mgdl real, tbr_pct real, minutes_below_70 int, near_miss_count int, level2_count int, is_demo bool | (device_id, night_date) |
+| plans | device_id, started_at date, plan_id text, drug_class text, drug_label text, steps jsonb, status text, is_demo bool | (device_id, started_at, plan_id) |
+| symptom_checks | device_id, date date, gi text, is_demo bool | (device_id, date) |
+| buddy_events | device_id, at timestamp, event_id text, kind text, confidence text, is_demo bool | (device_id, at, event_id) |
 
-`cloud/tests/test_ingest.py` creates these four tables as plain tables in a
+The last four (cloud/sql/005) carry the Step Watch and Night Buddy
+dashboards. They are the contracts objects' fields as serialized:
+`night_records` from NightRecord (reason_codes a text array; the upsert
+replaces a re-coded night), `plans` from TitrationPlan (steps = the
+`[{index, dose_label, planned_start}]` list as JSON; the upsert replaces
+status), `symptom_checks` from SymptomCheck (the upsert replaces the day's
+answer, like the Pi's second tap), `buddy_events` {event_id, kind: alert |
+claim | call | treating | resolved, at, confidence: device_confirmed |
+unconfirmed}. None of them holds a glucose value beyond a night's low point.
+
+`cloud/tests/test_ingest.py` creates the first four tables as plain tables in a
 scratch schema (the same columns, no hypertable) and needs a reachable
 TIGER_URI (the compose file's timescaledb, or a scratch schema on Tiger
 Cloud); it skips otherwise.
@@ -69,14 +83,40 @@ the chart says so and never draws zeros. Timestamps are the Pi's naive local tim
 | basal | `basal_timing` | dose: time, minutes_of_day, insulin_units, confirmed; `usual_time: null` (a device setting) |
 | sensor | readings, `time_bucket_gapfill` | day: day, slots_with_reading, gap_minutes, coverage_pct (of 288) |
 | under_the_hood | counts, compression stats, jobs | one object: readings, first_reading, last_reading, last_sync, readings_table_bytes_all_devices, compressed_before_bytes, compressed_after_bytes, compression_ratio, last_aggregate_refresh |
-| step_watch | (none yet) | `available: false` + `reason`: plans, check-ins, injection logs are not forwarded to the cloud |
-| buddy | (none yet) | `available: false` + `reason`: buddy events live in the relay's database |
+| step_watch | `night_records`, `plans`, `symptom_checks`, treatments (kind glp1_dose) | see below |
+| buddy | `buddy_events` | week: week, alerts, claims, calls, treating, resolved, alerts_device_confirmed, alerts_unconfirmed |
 
-`step_watch` and `buddy` turn real when their data reaches the cloud: the C1
-payload (Pi forwarder + ingest) must first carry plans, symptom checks,
-injections (and night records, for the nights strip's reason codes); buddy
-events need a relay-side feed. Until then the endpoints say why instead of
-drawing anything.
+`step_watch` draws the newest plan whose status is not `pending_confirm`, with
+the window's nights, check-ins, and shots. It returns `empty: true` when there
+is no plan or no night in the window:
+
+```json
+{ ...common fields,
+  "plan": {"plan_id": "p1", "drug_class": "glp1", "drug_label": "Semaglutide",
+           "status": "active", "started_at": "2020-01-15",
+           "steps": [{"index": 0, "dose_label": "0.25 mg", "planned_start": "2020-01-15"}]},  // null: no plan
+  "baseline": {"from": "2020-01-01", "to": "2020-01-14",       // the 14 nights before started_at
+               "low_point_mgdl": 88.0,                           // median low point of those nights with
+               "nights": 12},                                    //   coverage >= 85% and no "stale" code; null if none
+  "rows": [{"night_date": "2020-01-20", "coverage_pct": 97.2, "low_point_mgdl": 81.0,
+            "vs_baseline_mgdl": -7.0,                            // low_point - baseline (null if either is)
+            "minutes_below_70": 0, "tbr_pct": 0.0, "near_miss_count": 0, "level2_count": 0,
+            "reason_codes": ["clean"], "code_source": "inferred"}],   // one per night in the window
+  "checkins":   [{"date": "2020-01-20", "gi": "fine"}],          // fine | rough | cant_eat; a missing day is absent
+  "injections": [{"time": "2020-01-15T08:00:00", "dose_label": "0.25 mg", "confirmed": true}] }
+```
+
+`baseline` is null with no plan. `baseline.low_point_mgdl` is the number
+`nights.step_window_metrics` calls `baseline_low_point` (cloud/tests/test_dash.py
+asserts they are equal). The chart draws it as a reference line and never
+colors a night by it (invariant 21: the card says what a shift means, not the
+dashboard). `code_source` says whether reason codes were logged or inferred,
+and the chart shows it.
+
+`buddy` rows: one per 7-day bucket (time_bucket, like `alarms`) with a count
+of each event kind. Alerts are split by confidence so device-confirmed and
+unconfirmed are drawn distinctly (invariant 15). The table holds no names,
+contacts, or glucose values to draw.
 
 Invariant 21: dashboards draw pictures and never decide. `nights` equals
 `ml/models/nights.py` (asserted by `ml/tests/test_agreement.py` and, through

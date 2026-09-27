@@ -91,10 +91,12 @@ def test_schema_matches_the_ingest_column_contract(db):
     assert cols["treatments"][:3] == ["device_id", "time", "kind"]
     hyper = {r[0] for r in db.execute(
         "SELECT hypertable_name FROM timescaledb_information.hypertables WHERE hypertable_schema = current_schema()")}
-    assert hyper == {"readings", "alarm_events", "low_events", "treatments"}
+    # the four ingest tables are hypertables; later migrations (005: night_records,
+    # buddy_events, ...) may add more, which is not this contract's business
+    assert {"readings", "alarm_events", "low_events", "treatments"} <= hyper
     caggs = {r[0] for r in db.execute(
         "SELECT view_name FROM timescaledb_information.continuous_aggregates WHERE view_schema = current_schema()")}
-    assert caggs == {"daily_stats", "overnight_profile", "hourly_heatmap", "alarms_weekly"}
+    assert {"daily_stats", "overnight_profile", "hourly_heatmap", "alarms_weekly"} <= caggs
 
 
 def test_ingest_upsert_targets_exist(db):
