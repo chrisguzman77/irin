@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS family_stories (story_id TEXT PRIMARY KEY, json TEXT 
 CREATE TABLE IF NOT EXISTS reports (night_date TEXT PRIMARY KEY, json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS presence_transitions (since TEXT PRIMARY KEY, json TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS buddy_events (id INTEGER PRIMARY KEY AUTOINCREMENT, json TEXT NOT NULL);
 """
 
 
@@ -231,6 +232,31 @@ def select_treatment_rows(after_rowid: int, limit: int, conn: sqlite3.Connection
     return [(int(r["rid"]), {"timestamp": r["timestamp"], "kind": r["kind"], "insulin_units": r["insulin_units"],
                                 "carbs_g": r["carbs_g"], "dose_label": r["dose_label"], "text": r["text"],
                                 "confirmed": bool(r["confirmed"]), "is_demo": bool(r["is_demo"])}) for r in rows]
+
+
+# --- Night Buddy (B2/B4): alert, call, treating, resolved, emergency; append-only,
+# read in insertion order by the cloud forwarder like the readings ---
+
+
+def insert_buddy_event(event: dict, conn: sqlite3.Connection | None = None) -> None:
+    """{event_id, kind, at, confidence, is_demo}: never a glucose value."""
+    own = conn is None
+    conn = conn or connect()
+    with conn:
+        conn.execute("INSERT INTO buddy_events (json) VALUES (?)", (json.dumps(event),))
+    if own:
+        conn.close()
+
+
+def select_buddy_event_rows(after_rowid: int = 0, limit: int = 500,
+                            conn: sqlite3.Connection | None = None) -> list[tuple[int, dict]]:
+    own = conn is None
+    conn = conn or connect()
+    rows = conn.execute("SELECT id, json FROM buddy_events WHERE id > ? ORDER BY id LIMIT ?",
+                        (after_rowid, limit)).fetchall()
+    if own:
+        conn.close()
+    return [(int(r["id"]), json.loads(r["json"])) for r in rows]
 
 
 # --- Family Story (F3): one row per story, replaced on status change ---

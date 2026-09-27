@@ -166,9 +166,9 @@ def test_seek_is_demo_only_and_the_spark_offer_waits_for_a_fresh_pin(rig, monkey
         r = c.post(f"/api/rounds/messages/{mid}/confirm", headers=H)  # the typed PIN (the screens re-prompt the keypad)
         assert r.status_code == 200 and r.json()["message"]["status"] == "confirmed"
         assert c.get("/api/rounds/plan", headers=H).json()["plan_id"] == "demo-tirzepatide"  # "start watch"
-        assert c.post("/api/demo/buddy_rung", headers=H).status_code == 404
         # live mode: every control is gone
         c.post("/api/mode", json={"mode": "nightscout"}, headers=H)
+        assert c.post("/api/demo/buddy_rung", headers=H).status_code == 404
         assert c.post("/api/demo/seek", json={"day": 2}, headers=H).status_code == 404
         assert c.post("/api/demo/spark_offer", headers=H).status_code == 404
         c.post("/api/mode", json={"mode": "replay"}, headers=H)

@@ -359,7 +359,23 @@ async def spark_offer() -> dict:
 
 @router.post("/buddy_rung", dependencies=[Depends(require_pin), Depends(require_demo)])
 async def buddy_rung() -> dict:
-    raise HTTPException(status_code=404, detail="the buddy rung arrives with the Night Buddy tier")
+    """B2 on a laptop: the mock radar is undriven (unknown), so drive it to
+    detected for this episode; if no actual low is running, inject one (and
+    hold the feed paused on it, so the next CSV rows cannot recover it before
+    T+10; POST /api/demo/pause {paused: false} resumes). The rung itself
+    decides; this only sets the stage."""
+    hal = getattr(_runtime.outputs, "hal", None)
+    driven = hasattr(hal, "set_presence_for_test")
+    if driven:
+        hal.set_presence_for_test(True)
+        _runtime.alarm_events.sample(True)  # the open episode sees someone in the room at once
+    st = _runtime.alarm.state
+    injected = None
+    if not (st.state in ("active", "acknowledged", "rearmed") and st.trigger_type == "actual_low"):
+        _replay().set_paused(True)
+        injected = _replay().inject(55, "SingleDown").model_dump(mode="json")
+    return {"status": "staged", "presence_driven": driven, "injected": injected,
+            "feed_paused": injected is not None, "alarm": _runtime.alarm.state.state}
 
 
 @router.post("/basal_time", dependencies=[Depends(require_pin), Depends(require_demo)])
