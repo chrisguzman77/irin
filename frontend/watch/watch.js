@@ -312,7 +312,8 @@ async function pollInbox() {
         continue;
       }
       const line = safeBuddyLine(p.line);
-      if (line) lines.set(String(p.night_date || ""), { line, receivedAt: ms(env.created_at) || Date.now() });
+      if (line) lines.set(String(p.night_date || ""), { line, receivedAt: ms(env.created_at) || Date.now(),
+        closeOut: p.line_kind === "close_out", listingId: typeof p.listing_id === "string" ? p.listing_id : null });
       continue;
     }
     if (env.kind !== "buddy_alert") continue;
@@ -349,29 +350,31 @@ async function pollInbox() {
   render();
 }
 
-/** B5: the device sends the close-out as a buddy_line after it resolves an episode. The line names
- * no listing, so it belongs to the newest alert it arrived after: that alert shows as closed with
- * the line. An alert already closed (the hub dropped it) keeps its closing time: never a second
+/** B5: a close-out (line_kind close_out) closes exactly the listing it names, with its line; with no
+ * listing_id, the newest alert it arrived after (fallback). A morning line never closes or reopens
+ * an alert. An alert already closed (the hub dropped it) keeps its closing time: never a second
  * resolve. If the device re-posts the alert as still open, mergeListing reopens it and it sounds. */
 function closeFromLine() {
-  const newest = [...byListing.entries()].map(([id, aid]) => ({ id, a: alerts.get(aid) }))
+  const newestAlert = () => [...byListing.entries()].map(([id, aid]) => ({ id, a: alerts.get(aid) }))
     .filter((x) => x.a && listings.has(x.id)).sort((x, y) => y.a.receivedAt - x.a.receivedAt)[0];
-  if (!newest) return;
-  // the FIRST line after the alert is its close-out (a reload reads every line at once)
-  const dev = [...lines.values()].filter((x) => x.receivedAt >= newest.a.receivedAt)
-    .sort((x, y) => x.receivedAt - y.receivedAt)[0];
-  if (!dev) return;
-  const e = listings.get(newest.id);
-  if (e.closeLine) return; // the episode's close-out stands; a later morning line goes on the buddy card only
-  if (e.l.status !== "resolved") {
-    mergeListing({ ...e.l, status: "resolved" });
-    listings.get(newest.id).resolvedAt = dev.receivedAt;
-    const seen = hubSeen();
-    seen[newest.id] = dev.receivedAt; // a reload never pops it again
-    saveHubSeen(seen);
-    handled.add(newest.id);
+  for (const dev of [...lines.values()].filter((x) => x.closeOut).sort((x, y) => x.receivedAt - y.receivedAt)) {
+    let id = dev.listingId;
+    if (!id) {
+      const n = newestAlert();
+      id = n && dev.receivedAt >= n.a.receivedAt ? n.id : null;
+    }
+    const e = id ? listings.get(id) : null;
+    if (!e || e.closeLine) continue;
+    if (e.l.status !== "resolved") {
+      mergeListing({ ...e.l, status: "resolved" });
+      listings.get(id).resolvedAt = dev.receivedAt;
+      const seen = hubSeen();
+      seen[id] = dev.receivedAt; // a reload never pops it again
+      saveHubSeen(seen);
+      handled.add(id);
+    }
+    listings.get(id).closeLine = dev.line;
   }
-  listings.get(newest.id).closeLine = dev.line;
 }
 
 async function pollHub() {
