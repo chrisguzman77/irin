@@ -24,7 +24,7 @@
         <button id="onwatch" type="button" class="btn onwatch" aria-pressed="false">On watch</button>
         <p id="watchstate" class="note"></p>
       </div>
-      <p class="caveat">A locked phone needs a native Critical Alert or a call; keep this page open while on watch.</p>
+      <p class="caveat">A locked phone needs a native Critical Alert or a call; keep this page open while on watch. Answer alerts in this tab: a link from WhatsApp opens a new page that stays silent until tapped.</p>
 
       <nav class="tabs" aria-label="Views">
         <button type="button" data-tab="buddy" aria-pressed="true">Buddy</button>
@@ -66,6 +66,7 @@
     <p id="alert-line" class="alert-line"></p>
     <p id="alert-state" class="alert-state"></p>
     <div class="alert-actions">
+      <button id="soundon" type="button" class="btn big sound" hidden>Tap to sound the alert</button>
       <button id="call" type="button" class="btn big call">Call</button>
       <button id="gotit" type="button" class="btn big ghost">I've got this</button>
       <button id="script" type="button" class="btn big ghost" hidden>Execute script</button>

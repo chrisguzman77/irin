@@ -124,3 +124,4 @@ main > section { display: flex; flex-direction: column; gap: 14px; }
 .wa .btn { align-self: flex-start; }
 .card .morning { margin: 0; font-size: 16px; font-weight: 700; color: var(--mint); }
 .alert .badge-demo { align-self: flex-start; }
+.btn.sound { background: #fde68a; color: #450a0a; }
