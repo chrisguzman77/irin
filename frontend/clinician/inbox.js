@@ -2,6 +2,7 @@ import { renderCard } from "./card.js";
 import { openPlanForm } from "./plan-form.js";
 import { loadHandoffs, openResources } from "./resources.js";
 import { initSeen } from "./seen.js";
+import { openReplay } from "./replay.js";
 import { RELAY_URL } from "./config.js";
 import { clear, load, openFromDevice, relay, saveSent, sealToDevice, sentMessages } from "./session.js";
 
@@ -162,7 +163,8 @@ function render() {
   $("handoffs").hidden = !!card;
   if (card) {
     $("card").replaceChildren(renderCard(card, { actions: true, onAction: (key) => openAction(card, key),
-      onResource: (c) => openResources(s, card.resource_categories || [], () => loadHandoffs(s, "handofflist"), c) }));
+      onResource: (c) => openResources(s, card.resource_categories || [], () => loadHandoffs(s, "handofflist"), c),
+      onNight: (i) => openReplay(card, i) }));
     const mine = sent.filter((m) => m.card_id === card.card_id);
     $("sent").hidden = !mine.length;
     $("sentlist").replaceChildren(...mine.map((m) => {

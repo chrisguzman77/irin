@@ -86,3 +86,12 @@ dialog.wide { width: min(620px, calc(100vw - 32px)); }
 .seen-chips { display: flex; flex-wrap: wrap; gap: 4px; }
 .seen-chip { background: #f3f4f6; border-radius: 4px; padding: 1px 6px; font-family: ui-monospace, Menlo, monospace; overflow-wrap: anywhere; }
 .seen .badge-demo { margin: 0; }
+.film { background: #fff; border: 1px solid var(--line); border-radius: 10px; overflow-x: auto; }
+.film-svg { display: block; width: 100%; min-width: 360px; height: auto; }
+.film-axis { font: 10px system-ui, sans-serif; fill: #6b7280; }
+.film-target { font-weight: 800; fill: #111827; }
+.filmcap { margin: 0; font-size: 15px; font-weight: 600; min-height: 2.6em; }
+#filmclose { font: 600 15px system-ui, sans-serif; padding: 8px 14px; border-radius: 8px; border: 1px solid #d1d5db; background: #fff; cursor: pointer; }
+#filmplay { margin-right: auto; }
+button.sc-night { cursor: pointer; font-family: inherit; }
+button.sc-night:hover { outline: 2px solid #111827; }
