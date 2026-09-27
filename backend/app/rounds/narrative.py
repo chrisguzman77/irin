@@ -13,6 +13,7 @@ Tasks and the context each reads (metrics are always the computed numbers):
   family_story    level (story_only | story_and_view), name, scope (family, memory Readonly)
   buddy_line      kind (all_quiet | close_out), name, treated, recovered, scope; metrics may hold call_at "HH:MM"
   buddy_intro     name (first name only), shared_languages, scope; metrics may hold hours_covered
+  match_why       name, mirror, shared_languages; metrics = hours_covered, shared_language_count
 `scope` is a contracts.NarrativeScope (or its dict); Backboard keeps one
 assistant and thread per scope (ids in the kv table). Only morning_report has a
 default scope; any other task without one, and any Muse model, runs with memory
@@ -45,7 +46,7 @@ META_MODEL = "muse-spark-1.3"  # Meta direct's model when it stands in for an op
 THRESHOLDS = (54, 70, 180)  # the consensus range limits any narrative may name
 SECOND_OPINION_PROMPT = REPO_ROOT / "ml" / "prompts" / "second_opinion.md"
 
-_ROUTING_KEY = {"card": "clinician_card", "buddy_intro": "match_explanation"}
+_ROUTING_KEY = {"card": "clinician_card", "buddy_intro": "match_explanation", "match_why": "match_explanation"}
 
 # What a Muse prompt may carry, per task (invariant 22): counts, shares, and times, never a glucose value
 # or an insulin amount. Anything not listed is dropped, at every depth.
@@ -53,7 +54,8 @@ _STORY_KEYS = frozenset({"readings", "coverage_pct", "tir_pct", "tbr_pct", "tar_
                          "low_at", "high_at", "carbs_g"})
 _BUDDY_KEYS = frozenset({"call_at", "treated_at", "recovered_at", "hours_covered", "nights", "alerts", "calls"})
 _MUSE_KEYS = {"morning_report": _STORY_KEYS, "family_story": _STORY_KEYS,
-              "buddy_line": _BUDDY_KEYS, "buddy_intro": _BUDDY_KEYS, "card": frozenset()}
+              "buddy_line": _BUDDY_KEYS, "buddy_intro": _BUDDY_KEYS,
+              "match_why": _BUDDY_KEYS | {"shared_language_count"}, "card": frozenset()}
 
 _now = time.monotonic  # the chain's deadline is network wall time, not replay time (tests replace it)
 
@@ -74,6 +76,12 @@ BUDDY_INTRO_SYSTEM = (
     "You introduce two adults with type 1 diabetes who could back each other up overnight, in one or two warm "
     "sentences explaining why they match. First names only, no glucose values, no medical advice. Use ONLY the "
     "numbers given, exactly as given, in digits."
+)
+MATCH_WHY_SYSTEM = (
+    "You write one short sentence telling an adult with type 1 diabetes why a possible overnight buddy fits them: "
+    "the night hours they cover, whether their day is the reader's night, and the languages they share. No names "
+    "beyond the first name, no glucose values, no medical advice. Use ONLY the numbers given, exactly as given, in "
+    "digits."
 )
 
 
@@ -140,10 +148,11 @@ def _collect(value, forms: dict[str, set[str]], key: str = "", only_key: re.Patt
             _collect(float(s), forms, key, only_key)
 
 
-def _forms(metrics: dict) -> dict[str, set[str]]:
+def _forms(metrics: dict, thresholds: bool = True) -> dict[str, set[str]]:
     forms: dict[str, set[str]] = {}
     _collect(metrics, forms)
-    _collect(list(THRESHOLDS), forms)
+    if thresholds:
+        _collect(list(THRESHOLDS), forms)
     return forms
 
 
@@ -183,12 +192,12 @@ def _token_ok(sign: str, num: str, before: str, forms: dict[str, set[str]]) -> b
     return True
 
 
-def validate(text: str, metrics: dict) -> bool:
+def validate(text: str, metrics: dict, thresholds: bool = True) -> bool:
     """True when every numeric token in the text exists in the metrics (any
     depth; whole-number or one-decimal rounding, half up; clock times in 24- or
     12-hour form; a written sign must agree with the metric's) or is one of the
     range THRESHOLDS. Domain terms (type 1, GLP-1, Level 2, Step N) are not numbers."""
-    forms = _forms(metrics)
+    forms = _forms(metrics, thresholds)
     stripped = _strip_terms(text, metrics)
     return all(_token_ok(sign, num, stripped[max(0, at - 40):at], forms) for sign, num, at in _tokens(stripped))
 
@@ -250,6 +259,10 @@ def _template(task: str, context: dict, metrics: dict) -> str:
         return _buddy_line_template(context, metrics)
     if task == "buddy_intro":
         return _buddy_intro_template(context, metrics)
+    if task == "match_why":
+        from ..buddy.directory import why_line
+        return why_line(metrics.get("hours_covered"), bool(context.get("mirror")),
+                        list(context.get("shared_languages") or []))
     raise ValueError(f"unknown narrative task {task!r}")
 
 
@@ -284,13 +297,17 @@ def _system_and_prompt(task: str, context: dict, metrics: dict, muse: bool) -> t
     if task == "family_story":
         from ..family_story import FAMILY_SYSTEM_PROMPT, family_prompt
         return FAMILY_SYSTEM_PROMPT, family_prompt(metrics, context.get("level", "story_only"))
-    system = {"card": CARD_SYSTEM, "buddy_line": BUDDY_LINE_SYSTEM, "buddy_intro": BUDDY_INTRO_SYSTEM}[task]
+    system = {"card": CARD_SYSTEM, "buddy_line": BUDDY_LINE_SYSTEM, "buddy_intro": BUDDY_INTRO_SYSTEM,
+              "match_why": MATCH_WHY_SYSTEM}[task]
     about = json.dumps(_prompt_context(context, muse), default=str)
     return system, f"About: {about}\nThe only numbers you may use: {json.dumps(metrics, default=str)}"
 
 
+BUDDY_TASKS = ("buddy_line", "buddy_intro", "match_why")  # a buddy never sees a glucose-like number, not even 70
+
+
 def _passes(task: str, context: dict, text: str, metrics: dict) -> bool:
-    if not validate(text, metrics):
+    if not validate(text, metrics, thresholds=task not in BUDDY_TASKS):
         return False
     if task == "card":
         return not _names_a_dose(text, metrics)

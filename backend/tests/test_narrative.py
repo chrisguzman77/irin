@@ -350,3 +350,32 @@ def test_card_echoing_the_headline_dose_ships_the_template_and_step_n_passes(mon
 def test_card_prompt_forbids_any_dose_even_the_headlines():
     s = narrative.CARD_SYSTEM.lower()
     assert "drug strength" in s and "even" in s and "headline" in s and "this step" in s
+
+
+# --- buddy v3: match_why ---
+
+WHY_CTX = {"name": "Sam", "shared_languages": ["English", "Japanese"], "mirror": True}
+WHY_METRICS = {"hours_covered": 8, "shared_language_count": 2}
+
+
+def test_match_why_template_mode_calls_nothing_and_is_the_why_line(monkeypatch):
+    from app.buddy.directory import why_line
+    fakes = Fakes(monkeypatch, backboard="x", meta="x", anthropic="x")
+    out = narrative.generate("match_why", WHY_CTX, WHY_METRICS)
+    assert out == why_line(8, True, ["English", "Japanese"]) and fakes.calls == []
+
+
+def test_match_why_is_routed_like_match_explanation_and_validated(monkeypatch, live):
+    fakes = Fakes(monkeypatch, backboard="x", meta="Sam is awake for 8 of your night hours and shares 2 languages.")
+    assert narrative.generate("match_why", WHY_CTX, WHY_METRICS) == \
+        "Sam is awake for 8 of your night hours and shares 2 languages."
+    assert fakes.names() == ["meta"]  # Muse, never Backboard
+    Fakes(monkeypatch, meta="Sam is awake for 9 of your night hours.")
+    assert narrative.generate("match_why", WHY_CTX, WHY_METRICS) == template("match_why", WHY_CTX, WHY_METRICS)
+
+
+def test_buddy_text_may_not_name_a_glucose_threshold():
+    """Review: 70/54/180 are allowed on cards but never in a buddy's words (invariant 15)."""
+    assert narrative.validate("keeps you above 70 overnight", {"hours_covered": 8})
+    assert not narrative.validate("keeps you above 70 overnight", {"hours_covered": 8}, thresholds=False)
+    assert not narrative._passes("match_why", {}, "Sam keeps you above 70 overnight.", {"hours_covered": 8})

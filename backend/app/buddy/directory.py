@@ -16,8 +16,17 @@ Match: the relay scores (deterministic; a model never picks a buddy). The
 Pi adds two lines beside each offer: `intro`, written by
 narrative.generate("buddy_intro") in a worker thread (Meta when routed and
 keyed, validated against hours_covered, the template otherwise; first names
-only, never a glucose value), and `why`, the deterministic why-this-match
-line built from the score parts.
+only, never a glucose value), and `why`, written by
+narrative.generate("match_why") the same way, validated against
+{hours_covered, shared_language_count}, with the deterministic why_line as
+its template. Every offer is kept (kv buddy_offer:<world>:<match_id>);
+buddy_state.my_buddy is the stored offer of this world's first accepted
+match, or null.
+
+Hub (buddy v3): GET /api/buddy/hub and POST /api/buddy/hub/{id}/claim proxy
+the relay's /v0/users/hub routes with the stored user_bearer, under the same
+world guard as match; the relay's 403/404/409 details reach the app as-is.
+The claim's script is passed through only in that response (invariant 14).
 
 Accept: once a match is accepted by BOTH sides (at accept time or later,
 seen on the relay poll), the Pi starts a buddy pairing with the existing
@@ -173,6 +182,13 @@ def why_line(hours_covered: Any, mirror: bool, shared_languages: list[str]) -> s
     return "; ".join(parts) + "."
 
 
+def why_text(first_name: str, shared_languages: list[str], mirror: bool, hours_covered: Any) -> str:
+    """narrative.py's match_why: validated, why_line(...) on any failure. Worker thread only."""
+    return narrative.generate("match_why", {"name": first_name, "shared_languages": list(shared_languages),
+                                            "mirror": bool(mirror)},
+                              {"hours_covered": hours_covered, "shared_language_count": len(shared_languages)})
+
+
 def intro_line(first_name: str, shared_languages: list[str], mirror: bool, hours_covered: Any) -> str:
     """narrative.py's buddy_intro: validated, the template on any failure. Worker thread only."""
     return narrative.generate("buddy_intro", {"name": first_name, "shared_languages": list(shared_languages),
@@ -180,6 +196,16 @@ def intro_line(first_name: str, shared_languages: list[str], mirror: bool, hours
 
 
 # --- the service ---
+
+
+def _relay_detail(r: httpx.Response, default: str) -> str:
+    try:
+        detail = r.json().get("detail")
+    except (ValueError, AttributeError):
+        return default
+    if isinstance(detail, dict):
+        detail = detail.get("detail")
+    return detail if isinstance(detail, str) and detail else default
 
 
 def _kv_json(key: str) -> dict | None:
@@ -277,8 +303,9 @@ class BuddyDirectory:
         return httpx.AsyncClient(base_url=self.relay_url.rstrip("/"), headers=headers, timeout=10.0,
                                  transport=self.transport)
 
-    async def _call(self, method: str, path: str, body: dict, bearer: str | None = None,
-                    refused: str = "the relay refused this request") -> Any:
+    async def _call(self, method: str, path: str, body: dict | None, bearer: str | None = None,
+                    refused: str = "the relay refused this request", passthrough: bool = False) -> Any:
+        """passthrough: the relay's own 403/404/409 detail reaches the app (the hub routes)."""
         if not self.relay_url or not self.source_key:
             raise DirectoryError(503, "the relay is not configured on this device")
         try:
@@ -291,6 +318,8 @@ class BuddyDirectory:
             raise DirectoryError(409, "save your buddy profile again")
         if r.status_code == 422:
             raise DirectoryError(422, "the relay refused the fields (no email, phone, location, or glucose value)")
+        if passthrough and r.status_code in (403, 404, 409):
+            raise DirectoryError(r.status_code, _relay_detail(r, refused))
         if r.status_code == 403:
             raise DirectoryError(403, refused)
         if r.status_code == 404:
@@ -350,20 +379,49 @@ class BuddyDirectory:
             name = str(r.get("first_name") or "")[:40]
             langs = [str(x) for x in (r.get("shared_languages") or [])]
             mirror, hours = bool(r.get("mirror")), r.get("hours_covered") or 0
-            intro = await asyncio.to_thread(intro_line, name, langs, mirror, hours)  # never on the event loop
+            intro, why = await asyncio.gather(  # never on the event loop
+                asyncio.to_thread(intro_line, name, langs, mirror, hours),
+                asyncio.to_thread(why_text, name, langs, mirror, hours))
             return MatchOffer(match_id=str(r["match_id"]), first_name=name, hours_covered=float(hours),
                               mirror=mirror, shared_languages=langs, score=float(r.get("score") or 0),
-                              intro=intro, why=why_line(hours, mirror, langs), is_demo=demo,
-                              sample=bool(r.get("sample")))
+                              intro=intro, why=why, is_demo=demo, sample=bool(r.get("sample")))
 
         offers = list(await asyncio.gather(*(offer(r) for r in rows)))
         mirrors = self._mirrors()
         for o, r in zip(offers, rows):
             mirrors[o.match_id] = o.mirror
+            store.set_kv(f"buddy_offer:{self._world()}:{o.match_id}", o.model_dump_json())
             self._set(o.match_id, o.first_name, str(r.get("status") or "offered"),
                       self.matches.get(o.match_id, {}).get("pair_url"), o.sample)
         store.set_kv(f"buddy_match_mirror:{self._world()}", json.dumps(mirrors))
         return offers
+
+    def my_buddy(self) -> dict | None:
+        """buddy_state.my_buddy: the stored offer of this world's first accepted match, or None."""
+        for mid, m in self.matches.items():
+            if m.get("status") == "accepted":
+                raw = _kv_json(f"buddy_offer:{self._world()}:{mid}")
+                return MatchOffer.model_validate(raw).model_dump() if raw else None
+        return None
+
+    # --- the hub (buddy v3) ---
+
+    async def hub_list(self) -> list[dict]:
+        self._check_world()
+        rows = await self._call("GET", "/v0/users/hub", None, bearer=self._bearer(),
+                                refused="the hub is for CGM-verified users only", passthrough=True)
+        if not isinstance(rows, list):
+            raise DirectoryError(502, "relay answered without a hub list")
+        keep = ("listing_id", "first_name", "languages", "elapsed_min", "urgency", "confidence", "sample")
+        return [{k: r[k] for k in keep if k in r} for r in rows if isinstance(r, dict)]  # the pinned fields only (inv. 15)
+
+    async def hub_claim(self, listing_id: str) -> dict:
+        self._check_world()
+        out = await self._call("POST", f"/v0/users/hub/{listing_id}/claim", {}, bearer=self._bearer(),
+                               refused="someone else is helping right now", passthrough=True)
+        if not isinstance(out, dict) or not out.get("claim_id"):
+            raise DirectoryError(502, "relay answered without a claim")
+        return out
 
     async def respond(self, match_id: str, action: Literal["accept", "decline"]) -> MatchStatus:
         self._check_world()

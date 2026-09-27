@@ -33,6 +33,8 @@ OFFERS = [{"match_id": "m1", "candidate_id": "u2", "first_name": "Sam", "score":
            "mirror": True, "shared_languages": ["English"], "status": "offered"},
           {"match_id": "m2", "candidate_id": "u3", "first_name": "Ana", "score": 7, "hours_covered": 6,
            "mirror": False, "shared_languages": ["English", "Spanish"], "status": "offered"}]
+HUB = [{"listing_id": "h1", "first_name": "Kai", "languages": ["English"], "elapsed_min": 7, "urgency": 2,
+        "confidence": "device_confirmed", "sample": True}]
 
 
 class FakeRelay:
@@ -47,6 +49,7 @@ class FakeRelay:
         self.pair_link_status = None  # force an answer from pair_link (e.g. 404)
         self.bearer_dead = False  # a relay DB reset: every bearer call is 401
         self.user_is_demo = None  # ONE user per source key: the last upsert's is_demo wins
+        self.hub_claimed: set[str] = set()  # buddy v3: listings someone holds
 
 
     def transport(self):
@@ -81,6 +84,18 @@ class FakeRelay:
                 if action == "decline":
                     self.match_status[mid] = "declined"
                 return httpx.Response(200, json={"match_id": mid, "status": self.match_status[mid]})
+            if path == "/v0/users/hub":
+                return httpx.Response(200, json=HUB)
+            if path.startswith("/v0/users/hub/") and path.endswith("/claim"):
+                lid = path.split("/")[4]
+                if lid not in {h["listing_id"] for h in HUB}:
+                    return httpx.Response(404, json={"detail": "no such listing"})
+                if lid in self.hub_claimed:
+                    return httpx.Response(409, json={"detail": "someone else is helping Kai",
+                                                     "holder_expires_at": "2020-01-01T21:03:00+00:00"})
+                self.hub_claimed.add(lid)
+                return httpx.Response(200, json={"claim_id": "c1", "expires_at": "2020-01-01T21:03:00+00:00",
+                                                 "script": {"steps": ["Call Kai", "Ask if they ate sugar"]}})
             if path == "/v0/pair":
                 return httpx.Response(200, json={"ok": True})
             if path.endswith("/messages"):
@@ -598,3 +613,83 @@ def test_v2_sample_flag_passes_through_poll_rows_and_the_hub_update(db):
     rows = {r["match_id"]: r for r in d.snapshot()}
     assert rows["m1"]["sample"] is True and rows["m2"]["sample"] is False
     assert any(u["match_id"] == "m1" and u["sample"] is True for u in ups)
+
+
+# --- buddy v3: my_buddy, the why line, the hub proxy ---
+
+
+def test_v3_every_offer_is_stored_and_my_buddy_is_the_accepted_one(db):
+    relay = FakeRelay()
+    d, world = make_dir(relay)
+    run(d.save_profile(BuddyProfile(**PROFILE)))
+    offers = run(d.find_matches())
+    assert json.loads(store.get_kv("buddy_offer:demo:m2")) == offers[1].model_dump()
+    assert d.my_buddy() is None  # offered only
+    relay.match_status["m2"] = "accepted"
+    run(d.respond("m2", "accept"))
+    assert d.my_buddy() == offers[1].model_dump()
+    world["demo"] = False  # the other world never sees this world's buddy
+    d.reset()
+    assert d.my_buddy() is None
+
+
+def test_v3_my_buddy_is_null_after_a_decline(db):
+    relay = FakeRelay()
+    d, _ = make_dir(relay)
+    run(d.save_profile(BuddyProfile(**PROFILE)))
+    run(d.find_matches())
+    run(d.respond("m1", "decline"))
+    assert d.my_buddy() is None
+
+
+def test_v3_the_why_line_is_written_by_match_why_and_falls_back_on_an_invented_number(db, monkeypatch, muse):
+    fakes = Fakes(monkeypatch, meta="Sam covers 11 of your night hours.")  # 11 is the score, not hours_covered
+    relay = FakeRelay()
+    d, _ = make_dir(relay)
+    run(d.save_profile(BuddyProfile(**PROFILE)))
+    sam = run(d.find_matches())[0]
+    assert sam.why == "Awake for 8 of your night hours; a mirror across time zones: their day is your night; " \
+                      "you share English."
+    assert any("shared_language_count" in c[1] for c in fakes.calls)  # match_why reached Muse, then fell back
+
+
+def test_v3_hub_endpoints_proxy_with_the_user_bearer(app_client):
+    c, main, relay, sent = app_client
+    for method, path in [("get", "/api/buddy/hub"), ("post", "/api/buddy/hub/h1/claim")]:
+        assert getattr(c, method)(path).status_code == 401, path
+    assert c.get("/api/buddy/hub", headers=PIN).status_code == 409  # no profile yet
+    c.post("/api/buddy/profile", headers=PIN, json=PROFILE)
+    assert c.get("/api/buddy/hub", headers=PIN).json() == HUB
+    [(_, _, _, headers)] = relay.to("/v0/users/hub")
+    assert headers["authorization"] == "Bearer bearer-secret"
+    r = c.post("/api/buddy/hub/h1/claim", headers=PIN)
+    assert r.status_code == 200 and r.json()["script"] == {"steps": ["Call Kai", "Ask if they ate sugar"]}
+    r = c.post("/api/buddy/hub/h1/claim", headers=PIN)
+    assert (r.status_code, r.json()["detail"]) == (409, "someone else is helping Kai")  # the relay's words
+    r = c.post("/api/buddy/hub/nope/claim", headers=PIN)
+    assert (r.status_code, r.json()["detail"]) == (404, "no such listing")
+
+    with c.websocket_connect("/ws") as ws:
+        assert json.loads(ws.receive_text())["payload"]["buddy_state"]["my_buddy"] is None
+    c.post("/api/buddy/match", headers=PIN)
+    relay.match_status["m1"] = "accepted"
+    c.post("/api/buddy/match/m1/accept", headers=PIN)
+    with c.websocket_connect("/ws") as ws:
+        mine = json.loads(ws.receive_text())["payload"]["buddy_state"]["my_buddy"]
+    assert mine["match_id"] == "m1" and mine["first_name"] == "Sam" and mine["is_demo"] is True
+
+
+def test_v3_the_hub_answers_409_in_the_other_world_and_a_401_asks_for_the_profile(app_client):
+    c, main, relay, _ = app_client
+    c.post("/api/buddy/profile", headers=PIN, json=PROFILE)
+    try:
+        assert c.post("/api/mode", json={"mode": "nightscout"}, headers=PIN).status_code == 200
+        r = c.get("/api/buddy/hub", headers=PIN)
+        assert (r.status_code, r.json()["detail"]) == (409, "save your buddy profile in this mode first")
+        assert c.post("/api/buddy/hub/h1/claim", headers=PIN).status_code == 409
+    finally:
+        c.post("/api/mode", json={"mode": "replay"}, headers=PIN)
+    assert not relay.to("/v0/users/hub") and not relay.to("/claim")
+    relay.bearer_dead = True
+    r = c.get("/api/buddy/hub", headers=PIN)
+    assert (r.status_code, r.json()["detail"]) == (409, "save your buddy profile again")

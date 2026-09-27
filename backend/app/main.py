@@ -549,6 +549,7 @@ async def lifespan(app: FastAPI):
     runtime.relay_client = _make_relay_client()
     runtime.directory = _make_directory()
     runtime.buddy.matches = runtime.directory.snapshot
+    runtime.buddy.my_buddy = runtime.directory.my_buddy
     runtime.buddy.link_mode = runtime.directory.mode_for
     # a Rounds card goes to doctors only: a buddy pairing never receives clinical numbers (invariant 15)
     runtime.cards = CardSender(recipients=lambda demo: [p for p in runtime.pairing.recipients(demo) if p.peer_kind == "doctor"],
@@ -1427,6 +1428,24 @@ async def buddy_match_accept(match_id: str) -> MatchStatus:
 async def buddy_match_decline(match_id: str) -> MatchStatus:
     try:
         return await runtime.directory.respond(match_id, "decline")
+    except DirectoryError as e:
+        raise _directory_error(e)
+
+
+@app.get("/api/buddy/hub", dependencies=[Depends(require_pin)])
+async def buddy_hub() -> list[dict]:
+    """Buddy v3: the relay's hub listings for this user (shared language; never a glucose value or contact)."""
+    try:
+        return await runtime.directory.hub_list()
+    except DirectoryError as e:
+        raise _directory_error(e)
+
+
+@app.post("/api/buddy/hub/{listing_id}/claim", dependencies=[Depends(require_pin)])
+async def buddy_hub_claim(listing_id: str) -> dict:
+    """The exclusive lease; the script comes back only in this response, while the claim is live (invariant 14)."""
+    try:
+        return await runtime.directory.hub_claim(listing_id)
     except DirectoryError as e:
         raise _directory_error(e)
 
