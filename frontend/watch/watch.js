@@ -116,7 +116,8 @@ function mergeListing(l) {
   // elapsed_min changes only when the device re-posts: count on from when this value was first seen
   const seenAt = old && old.l.elapsed_min === l.elapsed_min ? old.seenAt : Date.now();
   const e = { l, seenAt, prev, reopened: old ? old.reopened : false, resolvedAt: old ? old.resolvedAt : null,
-    onHub: old ? old.onHub : false };
+    onHub: old ? old.onHub : false, closeLine: old ? old.closeLine : null };
+  if (l.status !== "resolved") e.closeLine = null; // reopened: the close-out no longer stands
   if (prev === "treating" && l.status === "open") e.reopened = true;          // treating ran out unrecovered: top urgency
   if (l.status === "resolved" && prev !== "resolved") e.resolvedAt = old ? Date.now() : null;
   if (l.status === "resolved" || l.status === "treating") e.reopened = false;
@@ -337,6 +338,7 @@ async function pollInbox() {
       pop = l.listing_id;
     }
   }
+  closeFromLine();
   firstInbox = false;
   lastOk = new Date();
   status();
@@ -345,6 +347,31 @@ async function pollInbox() {
     else showAlert(pop);
   }
   render();
+}
+
+/** B5: the device sends the close-out as a buddy_line after it resolves an episode. The line names
+ * no listing, so it belongs to the newest alert it arrived after: that alert shows as closed with
+ * the line. An alert already closed (the hub dropped it) keeps its closing time: never a second
+ * resolve. If the device re-posts the alert as still open, mergeListing reopens it and it sounds. */
+function closeFromLine() {
+  const newest = [...byListing.entries()].map(([id, aid]) => ({ id, a: alerts.get(aid) }))
+    .filter((x) => x.a && listings.has(x.id)).sort((x, y) => y.a.receivedAt - x.a.receivedAt)[0];
+  if (!newest) return;
+  // the FIRST line after the alert is its close-out (a reload reads every line at once)
+  const dev = [...lines.values()].filter((x) => x.receivedAt >= newest.a.receivedAt)
+    .sort((x, y) => x.receivedAt - y.receivedAt)[0];
+  if (!dev) return;
+  const e = listings.get(newest.id);
+  if (e.closeLine) return; // the episode's close-out stands; a later morning line goes on the buddy card only
+  if (e.l.status !== "resolved") {
+    mergeListing({ ...e.l, status: "resolved" });
+    listings.get(newest.id).resolvedAt = dev.receivedAt;
+    const seen = hubSeen();
+    seen[newest.id] = dev.receivedAt; // a reload never pops it again
+    saveHubSeen(seen);
+    handled.add(newest.id);
+  }
+  listings.get(newest.id).closeLine = dev.line;
 }
 
 async function pollHub() {
@@ -507,7 +534,7 @@ function renderAlert() {
 
   $("alert-demo").hidden = !l.is_demo;
   $("alert-conf").replaceWith(Object.assign(confBadge(l.confidence), { id: "alert-conf" }));
-  $("alert-line").textContent = a ? a.message : "";
+  $("alert-line").textContent = st === "resolved" && e.closeLine ? e.closeLine : a ? a.message : "";
   $("alert").classList.toggle("calm", st === "resolved" || st === "treating" || other);
 
   let head, state = "";
