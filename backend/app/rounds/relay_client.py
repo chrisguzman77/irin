@@ -33,6 +33,7 @@ class RelayClient:
     on_pairings: Callable[[list[dict]], Any] | None = None  # R5: revocations from the inbox
     on_tick: Callable[[], Any] | None = None  # R7: retry unsent cards
     on_calls: Callable[[list[dict]], Any] | None = None  # B4: brokered buddy calls [{listing_id, claim_id, at}]
+    on_owner: Callable[[dict], Any] | None = None  # A2: this device's owner-pairing state
     polls: int = 0
     failures: int = 0
     last_error: str | None = None
@@ -110,7 +111,8 @@ class RelayClient:
             return None
         self.polls += 1
         self.last_error = None
-        for observer, key in ((self.on_pairings, "pairings"), (self.on_messages, "messages"), (self.on_calls, "calls")):
+        for observer, key in ((self.on_pairings, "pairings"), (self.on_messages, "messages"), (self.on_calls, "calls"),
+                              (self.on_owner, "owner")):
             if observer is not None and body.get(key):
                 try:
                     result = observer(body[key])
