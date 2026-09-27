@@ -3,8 +3,8 @@ import type { components } from "../../types/pi";
 import { deviceFetch, PinRejected } from "../../lib/api";
 import type { StateSnapshot } from "../../lib/contracts";
 import {
-  basalNudge, buddyRung, injectLow, listScenarios, playScenario, seek, sendEvaluatedCard, setBrainOnly, setPaused, setSpeed,
-  sparkOffer, type ScenarioList, type SeekResult,
+  basalNudge, buddyRung, injectLow, latestEvaluations, listScenarios, playScenario, seek, sendEvaluatedCard, setBrainOnly, setPaused, setSpeed,
+  sparkOffer, type Evaluation, type ScenarioList, type SeekResult,
 } from "../../lib/demo";
 import { sendSampleCard, type SampleFixture } from "../../lib/cards";
 
@@ -18,6 +18,20 @@ type ModeRequest = components["schemas"]["ModeRequest"];
 const SPEEDS = [1, 10, 60, 120] as const;
 const INJECT_MIN = 39;
 const INJECT_MAX = 401;
+
+// The noise budget's verdicts (backend/app/rounds/noise.py Verdict.reason), in words.
+const BUDGET: Record<string, string> = {
+  sent: "sent",
+  digest: "held for the digest (green never interrupts)",
+  interval: "held: one card of this kind per 14 days",
+  red_cap: "held: one red per kind per 12 hours",
+  red_duplicate: "held: this event's red was already sent",
+  watch: "held: a Step Watch is running",
+  insufficient: "held: not enough data",
+  per_step: "held: one per step",
+  per_plan: "held: once per plan",
+  program_day: "held: the other program sent today",
+};
 
 /** "Mar 22 09:00" from the Pi's naive local time, read as text */
 function clockText(iso: string | null | undefined): string {
@@ -67,6 +81,14 @@ export default function DemoPanel({ snap, baseUrl, onClose }: { snap: StateSnaps
   const [seekStep, setSeekStep] = useState("2");
   const [seekDay, setSeekDay] = useState("8");
   const [seekDate, setSeekDate] = useState("");
+  const [evals, setEvals] = useState<Evaluation[] | null>(null);
+  const loadEvals = useCallback(async () => {
+    try {
+      setEvals(await latestEvaluations(baseUrl));
+    } catch {
+      setEvals(null);
+    }
+  }, [baseUrl]);
   const mode = snap?.mode;
   const demo = mode === "replay";
 
@@ -323,7 +345,10 @@ export default function DemoPanel({ snap, baseUrl, onClose }: { snap: StateSnaps
                   if (!r.ok) return r.reason;
                   setMsg({ text: seekText(r.body), error: false });
                   return "";
-                }, "", refresh)
+                }, "", () => {
+                  refresh();
+                  loadEvals();
+                })
               }
             >
               Jump
@@ -348,6 +373,23 @@ export default function DemoPanel({ snap, baseUrl, onClose }: { snap: StateSnaps
             Lands at 09:00 of that day; the catch-up builds every night, question and card up to it. Forward only.
             {info?.companion ? "" : " This scenario has no companion (no plan to seek by step)."}
           </span>
+        </Control>
+
+        <Control title="Latest evaluations" hint="each Standing card's newest evaluation and what the noise budget did with it">
+          <button type="button" className={`${btn} bg-neutral-900 text-neutral-300`} onClick={loadEvals}>
+            {evals ? "Refresh" : "Show"}
+          </button>
+          {evals && evals.length === 0 && <span className="text-sm text-neutral-400">No evaluation yet.</span>}
+          {evals?.map((e) => (
+            <div key={e.kind} className="text-sm flex flex-col gap-0.5 border-t border-neutral-800 pt-2">
+              <span className="text-neutral-200">
+                {e.kind.replace(/_/g, " ")} · <span className={e.status === "red" ? "text-red-400" : e.status === "amber" ? "text-amber-300" : e.status === "green" ? "text-emerald-400" : "text-neutral-400"}>{e.status || "—"}</span>
+                {e.budget ? ` · ${BUDGET[e.budget] ?? e.budget}` : ""}
+                {e.sent ? " · sent" : ""}
+              </span>
+              {e.headline && <span className="text-neutral-400">{e.headline}</span>}
+            </div>
+          ))}
         </Control>
 
         <Control title="Irin Brain only" hint="cards change confidence labels, never blank a row">
