@@ -285,3 +285,17 @@ def test_a_plain_script_from_the_device_is_sealed_at_rest_and_opens_for_the_hold
     assert c.get(f"/v0/hub/claim/{cid}/script", headers=h1).json() == {"steps": STEPS}
     bad = {**body, "listing_id": "LQ", "script": {"steps": STEPS, "phone": "555"}}
     assert c.post("/v0/hub/listing", json=bad, headers=SRC).status_code == 422
+
+
+def test_buddy_line_rides_cards_to_the_buddy_only(c):
+    buddy_id, watcher = pair(c, "1c" * 16)
+    doctor_id, _ = pair(c, "1d" * 16, peer_kind="doctor")
+    env = {"recipient_id": buddy_id, "sender_id": "irin-test", "nonce": b64(b"n" * 24), "ciphertext": b64(b"c" * 40),
+           "source": "irin_bedside", "kind": "buddy_line", "program": "buddy", "is_demo": True,
+           "card_id": "bl-2020-01-01"}
+    assert c.post("/v0/cards", json=env, headers=SRC).status_code == 200
+    assert c.post("/v0/cards", json={**env, "ciphertext": b64(b"d" * 40)}, headers=SRC).status_code == 200  # replaced
+    assert c.post("/v0/cards", json={**env, "recipient_id": doctor_id}, headers=SRC).status_code == 409
+    assert c.post("/v0/cards", json={**env, "recipient_id": doctor_id, "program": None}, headers=SRC).status_code == 409
+    inbox = c.get(f"/v0/inbox/{buddy_id}", headers=watcher).json()
+    assert [(m["kind"], m["card_id"], m["ciphertext"]) for m in inbox] == [("buddy_line", "bl-2020-01-01", b64(b"d" * 40))]

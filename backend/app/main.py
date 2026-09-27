@@ -312,7 +312,10 @@ def _checkin_status() -> dict:
 
 def _evaluate_after_ledger(record: NightRecord) -> None:
     """The morning evaluation runs right after the ledger row is written (the
-    plan's 07:05), never before it: the ledger job is its trigger."""
+    plan's 07:05), never before it: the ledger job is its trigger. B5: the
+    buddy morning line is built from the same row."""
+    if runtime.buddy is not None:
+        runtime.buddy.on_night(record)
     if runtime.standing is None:
         return
     _schedule(_evaluate_night(record.night_date))

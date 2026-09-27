@@ -463,3 +463,107 @@ def test_demo_buddy_rung_stages_presence_and_a_held_low(monkeypatch):
         finally:
             main.runtime.outputs.hal.set_presence_for_test(None)
             main.runtime.datasource = main.make_datasource(main.runtime.mode)  # no overlay or pause leaks
+
+
+# --- B5: the buddy lines ---
+
+from datetime import date, timedelta  # noqa: E402
+from types import SimpleNamespace  # noqa: E402
+
+from app.rounds import narrative  # noqa: E402
+
+NIGHT = date(2019, 12, 31)  # the night T0 (03:00) belongs to, keyed by its evening like the ledger
+
+
+def _record(coverage=95.0, demo=True):
+    return SimpleNamespace(night_date=NIGHT, window_start=datetime(2019, 12, 31, 22, 0),
+                           window_end=datetime(2020, 1, 1, 7, 0), coverage_pct=coverage, is_demo=demo)
+
+
+def _no_model(monkeypatch):
+    """NARRATIVE_BACKEND=template (conftest): no link may be called."""
+    for name in ("_call_backboard", "_call_meta", "_call_anthropic"):
+        monkeypatch.setattr(narrative, name, lambda *a, **kw: pytest.fail("a model link was called"))
+
+
+def _lines(rig):
+    return [(env, rig.open_card(env)) for env in rig.relay.cards if env["kind"] == "buddy_line"]
+
+
+def test_b5_morning_line_after_a_quiet_night_is_the_template_sealed_to_the_buddy(rig, monkeypatch):
+    _no_model(monkeypatch)
+    rig.rung.on_night(_record())
+    rig.drain()
+    quiet = narrative._buddy_line_template({"kind": "all_quiet"}, {})
+    assert rig.rung.state()["morning_line"] == quiet
+    [(env, payload)] = _lines(rig)  # the demo buddy only: never the doctor, never the real-world buddy
+    assert env["recipient_id"] == "buddy-demo" and env["program"] == "buddy" and env["is_demo"] is True
+    assert env["card_id"] == "bl-2019-12-31"
+    assert payload == {"line": quiet, "kind": "buddy_line", "night_date": "2019-12-31"}
+
+
+def test_b5_close_out_after_a_resolved_episode_broadcast_sealed_and_kept_for_the_morning(rig, monkeypatch):
+    _no_model(monkeypatch)
+    rig.feed(61.7)
+    rig.advance(10.5, present=True)
+    set_treating(rig.rung)
+    handle_calls(rig.rung, [{"listing_id": "hl-x", "claim_id": "c1", "at": "t"}], rig.hal, lambda: rig.eng.state, 0.8)
+    call_at = [e for _, e in store.select_buddy_event_rows() if e["kind"] == "call"][0]["at"]
+    rig.feed(80)
+    rig.feed(95)  # recovery closes the episode
+    while rig.pending:
+        rig.drain()
+    h = datetime.fromisoformat(call_at)
+    line = f"Chris's okay. Your call at {h.hour % 12 or 12}:{h.minute:02d} got through. Chris treated and recovered."
+    assert rig.rung.state()["morning_line"] == line
+    listing_id = rig.alerts[0]["listing"]["listing_id"]
+    assert {"listing_id": listing_id, "event": "resolved", "line": line} in rig.updates
+    [(env, payload)] = _lines(rig)
+    assert env["recipient_id"] == "buddy-demo" and payload["line"] == line and payload["night_date"] == "2019-12-31"
+    text = json.dumps(payload) + json.dumps([u for u in rig.updates if "line" in u])
+    assert "61.7" not in text and "80" not in text and "95" not in text and "mg" not in text.lower()
+    # the next ledger row keeps the close-out as that night's line, re-sent under the same card_id
+    rig.rung.on_night(_record())
+    rig.drain()
+    assert rig.rung.state()["morning_line"] == line
+    assert {env["card_id"] for env, _ in _lines(rig)} == {"bl-2019-12-31"}
+
+
+def test_b5_a_night_with_an_alert_but_no_close_out_never_says_okay(rig, monkeypatch):
+    _no_model(monkeypatch)
+    rig.feed(62)
+    rig.advance(10.5, present=True)
+    rig.rung.reset()  # a mode switch is not a resolution: no close-out
+    rig.drain()
+    assert not any("line" in u for u in rig.updates) and rig.rung.morning is None
+    rig.rung.on_night(_record())
+    rig.drain()
+    assert "okay" not in rig.rung.state()["morning_line"] and "quiet" not in rig.rung.state()["morning_line"].lower()
+
+
+@pytest.mark.parametrize("coverage,expected", [(0.0, rung_mod.NO_DATA_LINE), (60.0, rung_mod.PARTIAL_LINE)])
+def test_b5_a_night_irin_could_not_see_is_never_told_as_fine(rig, monkeypatch, coverage, expected):
+    _no_model(monkeypatch)
+    rig.rung.on_night(_record(coverage))
+    rig.drain()
+    assert rig.rung.state()["morning_line"] == expected
+    assert "fine" not in expected and "all quiet" not in expected.lower()
+
+
+def test_b5_demo_lines_never_reach_a_real_pairing_and_live_lines_only_the_live_buddy(rig, monkeypatch):
+    _no_model(monkeypatch)
+    rig.rung.on_night(_record(demo=True))
+    rig.drain()
+    rig.demo = False
+    rig.rung.on_night(_record(demo=False))
+    rig.drain()
+    assert [(env["recipient_id"], env["is_demo"]) for env in rig.relay.cards if env["kind"] == "buddy_line"] == [
+        ("buddy-demo", True), ("buddy-real", False)]
+
+
+def test_b5_no_line_is_sent_without_have_buddy(rig, monkeypatch):
+    _no_model(monkeypatch)
+    rig.eng.settings.night_buddy.have_buddy = False
+    rig.rung.on_night(_record())
+    rig.drain()
+    assert _lines(rig) == [] and rig.rung.state()["morning_line"] is not None

@@ -35,6 +35,20 @@ is sealed anyway. After each buddy's envelope is stored, a best-effort POST
 {RELAY_URL}/v0/buddy/notify (X-Source-Key) asks the relay to send the
 WhatsApp text and clip; it is spawned, so nothing waits on it.
 
+B5: the buddy lines. When an episode that fired the rung resolves (ack or
+recovery; a reset is not a resolution), the close-out line ("Chris's okay.
+Your call at 3:12 got through. Chris treated and recovered.") is written by
+narrative.generate("buddy_line") in a worker thread from the episode's buddy
+events only (counts and clock times, a first name, never a glucose value),
+broadcast as hub_update {listing_id, event: "resolved", line}, and kept as
+the morning line. After each night's ledger row (on_night), the morning line
+is the close-out when the night had one, else built from the night's events:
+"all quiet" when nothing reached the rung; a night Irin could not see
+(coverage under 85%) gets a fixed line that never calls it quiet or fine.
+Each line is sealed {line, kind: "buddy_line", night_date} to every paired
+buddy of the same world, exactly as the alert (a demo line only to a demo
+pairing, invariant 18), card_id bl-<night_date>, so a re-send replaces it.
+
 ADDITIVE ONLY (invariant 13): the rung observes alarm.py and never calls into
 it; nothing here delays, quiets, or gates a local alarm. Time is clock.py's.
 Network sends are handed to `spawn` so the engine's observer call and the
@@ -48,7 +62,7 @@ import json
 import logging
 import os
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Any, Awaitable, Callable
 
 import httpx
@@ -58,7 +72,8 @@ from ..alarm import Transition
 from ..clock import clock
 from ..config import config
 from ..contracts import AlarmState, BuddyAlert, HubListing, Pairing, Reading, Settings
-from ..rounds import crypto
+from ..rounds import crypto, narrative
+from ..windows import parse_hhmm
 
 log = logging.getLogger("irin.buddy.rung")
 
@@ -78,6 +93,9 @@ LEVEL2_READINGS = 2
 FULL_STATES = ("active", "rearmed")
 EPISODE_STATES = ("active", "acknowledged", "rearmed")
 EMERGENCY_TEXT = "emergency contact alerted (simulated)"
+MIN_COVERAGE_PCT = 85.0  # under this a night is never told as quiet (invariant 9's stale night)
+NO_DATA_LINE = "Irin had no data last night, so it can't say how the night went."
+PARTIAL_LINE = "Irin missed part of last night, so it can't call the night quiet; nothing reached the buddy rung while it could see."
 AUDIO_TIMEOUT_S = 3.0  # the most the clip may hold back the sealed alert (invariant 13)
 NOTIFY_TIMEOUT_S = 10.0  # spawned: nothing waits on it
 
@@ -154,6 +172,7 @@ class BuddyRung:
     l2_start: datetime | None = None
     l2_run: int = 0
     calls_seen: set = field(default_factory=set)
+    morning: dict | None = None  # B5: {line, kind, night_date}, the snapshot's morning_line
     _trigger: str | None = None
 
     # --- the observer (alarm.py calls observers bare: nothing here may reach the engine) ---
@@ -363,8 +382,11 @@ class BuddyRung:
         if listing_id is not None:
             self.spawn(self.post_hub("resolve", {"listing_id": listing_id, "outcome": outcome}))
         self.treating = None
-        self._update({"listing_id": payload["listing"]["listing_id"] if payload else listing_id,
-                      "event": "resolved", "outcome": outcome})
+        listing_id = payload["listing"]["listing_id"] if payload else listing_id
+        self._update({"listing_id": listing_id, "event": "resolved", "outcome": outcome})
+        if outcome in ("acknowledged", "recovered"):
+            self.spawn(self._close_out(self.event_id, outcome == "recovered", listing_id,
+                                       self._night_of(clock.now()), self.is_demo()))
 
     def _fire_emergency(self, now: datetime) -> None:
         self.emergency = {"at": now.isoformat(), "text": EMERGENCY_TEXT, "event_id": self.event_id,
@@ -378,6 +400,104 @@ class BuddyRung:
                 self.on_update(payload)
             except Exception:
                 log.exception("hub_update observer failed")
+
+    # --- B5: the buddy lines ---
+
+    def _night_of(self, at: datetime) -> date:
+        """The night an instant belongs to, keyed by its evening date like the ledger."""
+        start = parse_hhmm(self.settings.night_window_start)
+        return at.date() - timedelta(days=1) if at.time() < start and start > parse_hhmm(
+            self.settings.night_window_end) else at.date()
+
+    @staticmethod
+    def _events() -> list[dict]:
+        return [e for _, e in store.select_buddy_event_rows(0, 100_000)]
+
+    @staticmethod
+    def _hhmm(iso: str | None) -> str | None:
+        try:
+            return datetime.fromisoformat(iso).strftime("%H:%M") if iso else None
+        except ValueError:
+            return None
+
+    def _line_inputs(self, events: list[dict], recovered: bool) -> tuple[dict, dict]:
+        """(context, metrics) for a close-out: a first name, counts, clock times; never a glucose value."""
+        calls = [e for e in events if e.get("kind") == "call"]
+        treating = [e for e in events if e.get("kind") == "treating"]
+        metrics = {"alerts": sum(e.get("kind") == "alert" for e in events), "calls": len(calls)}
+        if calls:
+            metrics["call_at"] = self._hhmm(calls[0].get("at"))
+        if treating:
+            metrics["treated_at"] = self._hhmm(treating[0].get("at"))
+        if recovered:
+            metrics["recovered_at"] = clock.now().strftime("%H:%M")
+        context = {"kind": "close_out", "name": self.first_name(), "treated": bool(treating), "recovered": recovered,
+                   "scope": {"kind": "buddy", "scope_id": self.device_id}}
+        return context, {k: v for k, v in metrics.items() if v is not None}
+
+    async def _close_out(self, event_id: str | None, recovered: bool, listing_id: str | None, night: date,
+                         demo: bool) -> None:
+        try:
+            events = [e for e in await asyncio.to_thread(self._events) if e.get("event_id") == event_id]
+            context, metrics = self._line_inputs(events, recovered)
+            line = await asyncio.to_thread(narrative.generate, "buddy_line", context, metrics)
+        except Exception:
+            log.exception("buddy close-out line failed")
+            return
+        self.morning = {"line": line, "kind": "close_out", "night_date": night.isoformat()}
+        self._update({"listing_id": listing_id, "event": "resolved", "line": line})
+        await self._deliver_line(dict(self.morning), demo)
+
+    def on_night(self, record: Any) -> None:
+        """After the night's ledger row (main.py's on_record, from a worker thread): the morning line."""
+        try:
+            self.spawn(self._morning_line(record))
+        except Exception:
+            log.exception("buddy morning line not scheduled")
+
+    async def _morning_line(self, record: Any) -> None:
+        try:
+            night, demo = record.night_date, bool(record.is_demo)
+            if self.morning is not None and self.morning["night_date"] == night.isoformat() \
+                    and self.morning["kind"] == "close_out":
+                line = self.morning["line"]  # the close-out stands as that night's line
+            else:
+                events = [e for e in self._events() if bool(e.get("is_demo")) == demo and e.get("at")
+                          and record.window_start <= datetime.fromisoformat(e["at"]) <= record.window_end]
+                if (record.coverage_pct or 0) <= 0:
+                    line = NO_DATA_LINE
+                elif any(e.get("kind") == "alert" for e in events):
+                    context, metrics = self._line_inputs(events, False)  # never "okay" from stored rows alone
+                    line = await asyncio.to_thread(narrative.generate, "buddy_line", context, metrics)
+                elif record.coverage_pct < MIN_COVERAGE_PCT:
+                    line = PARTIAL_LINE
+                else:
+                    line = await asyncio.to_thread(narrative.generate, "buddy_line", {
+                        "kind": "all_quiet", "name": self.first_name(),
+                        "scope": {"kind": "buddy", "scope_id": self.device_id}}, {"alerts": 0, "calls": 0})
+            self.morning = {"line": line, "kind": "morning", "night_date": night.isoformat()}
+        except Exception:
+            log.exception("buddy morning line failed")
+            return
+        await self._deliver_line(dict(self.morning), demo)
+
+    async def _deliver_line(self, morning: dict, demo: bool) -> int:
+        """Sealed {line, kind: buddy_line, night_date} to every paired buddy of this world."""
+        if not self.settings.night_buddy.have_buddy:
+            return 0
+        payload = {"line": morning["line"], "kind": "buddy_line", "night_date": morning["night_date"]}
+        sent = 0
+        for p in self.recipients(demo):
+            if p.peer_kind != "buddy" or p.is_demo != demo:
+                continue
+            sealed = crypto.seal(json.dumps(payload), p.doctor_pk)
+            env = {"recipient_id": p.doctor_id, "sender_id": self.device_id, "nonce": sealed["nonce"],
+                   "ciphertext": sealed["ciphertext"], "source": "irin_brain" if self.brain_only() else "irin_bedside",
+                   "kind": "buddy_line", "program": "buddy", "is_demo": demo,
+                   "card_id": f"bl-{morning['night_date']}"}
+            if await self.post_card(env):
+                sent += 1
+        return sent
 
     # --- the snapshot ---
 
@@ -399,5 +519,5 @@ class BuddyRung:
             link = self.link()
         except Exception:
             link = None
-        return {"link": link, "open_alert": self.alert, "treating": self.current_treating(), "morning_line": None,
+        return {"link": link, "open_alert": self.alert, "treating": self.current_treating(), "morning_line": self.morning["line"] if self.morning else None,
                 "emergency": self.emergency}
