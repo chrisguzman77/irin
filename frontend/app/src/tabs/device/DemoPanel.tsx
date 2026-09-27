@@ -66,6 +66,7 @@ export default function DemoPanel({ snap, baseUrl, onClose }: { snap: StateSnaps
   const [injectValue, setInjectValue] = useState("55");
   const [seekStep, setSeekStep] = useState("2");
   const [seekDay, setSeekDay] = useState("8");
+  const [seekDate, setSeekDate] = useState("");
   const mode = snap?.mode;
   const demo = mode === "replay";
 
@@ -134,7 +135,8 @@ export default function DemoPanel({ snap, baseUrl, onClose }: { snap: StateSnaps
   const stepN = seekStep === "" ? null : Number(seekStep);
   const dayN = Number(seekDay);
   const seekOk =
-    seekDay !== "" && Number.isInteger(dayN) && dayN >= 1 && (stepN === null || (Number.isInteger(stepN) && stepN >= 1));
+    /^\d{4}-\d{2}-\d{2}$/.test(seekDate) ||
+    (seekDay !== "" && Number.isInteger(dayN) && dayN >= 1 && (stepN === null || (Number.isInteger(stepN) && stepN >= 1)));
 
   return (
     <section className="flex flex-col gap-4">
@@ -286,7 +288,7 @@ export default function DemoPanel({ snap, baseUrl, onClose }: { snap: StateSnaps
           </div>
         </Control>
 
-        <Control title="Jump to step N day D" hint="the step-2 check appears at step 2 day 8; clear the step for day D of the scenario">
+        <Control title="Jump to step N day D, or to a date" hint="the step-2 check appears at step 2 day 8; clear the step for day D of the scenario; a date wins">
           <div className="flex gap-2 items-center">
             <span className="text-neutral-400 text-sm">step</span>
             <input
@@ -314,7 +316,10 @@ export default function DemoPanel({ snap, baseUrl, onClose }: { snap: StateSnaps
               className={`${btn} flex-1 bg-white text-black`}
               onClick={() =>
                 run(async () => {
-                  const r = await seek(baseUrl, stepN === null ? { day: dayN } : { step: stepN, day: dayN });
+                  const r = await seek(
+                    baseUrl,
+                    seekDate ? { date: seekDate } : stepN === null ? { day: dayN } : { step: stepN, day: dayN },
+                  );
                   if (!r.ok) return r.reason;
                   setMsg({ text: seekText(r.body), error: false });
                   return "";
@@ -323,6 +328,21 @@ export default function DemoPanel({ snap, baseUrl, onClose }: { snap: StateSnaps
             >
               Jump
             </button>
+          </div>
+          <div className="flex gap-2 items-center">
+            <span className="text-neutral-400 text-sm">or date</span>
+            <input
+              aria-label="Seek date"
+              className="flex-1 bg-neutral-900 border border-neutral-700 rounded-lg px-2 py-2 text-white"
+              type="date"
+              value={seekDate}
+              onChange={(e) => setSeekDate(e.target.value)}
+            />
+            {seekDate && (
+              <button type="button" className="text-sm text-neutral-400 underline" onClick={() => setSeekDate("")}>
+                clear
+              </button>
+            )}
           </div>
           <span className="text-xs text-neutral-500">
             Lands at 09:00 of that day; the catch-up builds every night, question and card up to it. Forward only.

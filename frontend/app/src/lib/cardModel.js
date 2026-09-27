@@ -64,6 +64,15 @@ const METRIC = {
   rise_median_clean: ["Median overnight rise (clean nights)", (v) => `${signed(v)} mg/dL`],
   same_direction_share: ["Rose in the same direction", (v) => `${Math.round(v * 100)}%`],
   near_misses: ["Near-misses", num],
+  near_misses_clean: ["Near-misses on clean nights", num],
+  before_nights: ["Nights before the change", num],
+  before_clean_nights: ["Clean nights before the change", num],
+  before_rise_median: ["Median overnight rise before", (v) => `${signed(v)} mg/dL`],
+  after7_clean_nights: ["Clean nights, days 1-7 after", num],
+  after7_rise_median: ["Median overnight rise, days 1-7 after", (v) => `${signed(v)} mg/dL`],
+  after14_clean_nights: ["Clean nights, days 1-14 after", num],
+  after14_rise_median: ["Median overnight rise, days 1-14 after", (v) => `${signed(v)} mg/dL`],
+  rise_change: ["Change in median rise since the change", (v) => `${signed(v)} mg/dL`],
   escalated_warnings: ["Escalated warnings", num],
   rearms: ["Re-armed alarms", num],
   median_ack_min: ["Median time to acknowledge", (v) => `${num(v)} min`],
@@ -78,9 +87,11 @@ const METRIC = {
       ? `${signed(v)} mg/dL (${num(m.window_low_point)} vs ${num(m.baseline_low_point)})`
       : `${signed(v)} mg/dL`],
   baseline_nights: ["Baseline nights", num],
+  baseline_thin: ["Thin baseline (under 5 nights)", (v) => (v ? "yes" : "no")],
   coverage_pct: ["Sensor coverage", pct1],
   tbr_pct: ["Time below range", pct1],
   ketone_risk_episodes: ["Ketone-risk episodes", num],
+  level2_lows: ["Level 2 lows (under 54)", num],
 };
 
 function generic(v) {
