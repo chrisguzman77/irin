@@ -49,6 +49,7 @@ const state = {
   familyStories: [],   // FamilyStory list of the latest night (snapshot family_story_status + updates)
   doctorMessages: [],  // pending DoctorMessage list (snapshot pending_doctor_messages + updates)
   doctorName: null,    // the one paired doctor's display name (irinDoctorName of pairing_state)
+  doctorSenders: {},   // message_id -> that message's own doctor_display_name (e.g. the simulated Spark)
   doctorMsg: "",
   doctorAsking: null,  // message_id the keypad is open for
   pairing: {},         // pairing_state (snapshot + pairing_state messages)
@@ -127,6 +128,7 @@ function onMessage(msg) {
       state.presence = p.presence || null;
       state.familyStories = Array.isArray(p.family_story_status) ? p.family_story_status : [];
       state.doctorMessages = Array.isArray(p.pending_doctor_messages) ? p.pending_doctor_messages : [];
+      loadDoctorSenders();
       setPairing(p.pairing_state);
       state.planState = p.plan_state || {};
       state.activePlan = p.active_plan || null;
@@ -153,6 +155,8 @@ function onMessage(msg) {
       const m = p.message || p;
       if (m && typeof m.message_id === "string" && (m.status || "pending") === "pending")
         state.doctorMessages = state.doctorMessages.filter((x) => x.message_id !== m.message_id).concat([m]);
+      if (m && typeof m.message_id === "string" && typeof p.doctor_display_name === "string" && p.doctor_display_name.trim())
+        state.doctorSenders[m.message_id] = p.doctor_display_name.trim();
       break;
     }
     case "doctor_message_resolved": {
@@ -378,6 +382,29 @@ function updateIdle() {
 
 // --- doctor-message takeover (R4, invariant 8) ---
 
+// Each pending message's own sender name (GET /api/rounds/messages carries
+// doctor_display_name per message; the snapshot's DoctorMessage has none).
+// A read only, with the kiosk's cached PIN if there is one: it never prompts,
+// and without it the paired-doctor rule names the sender.
+async function loadDoctorSenders() {
+  const pin = cachedPin();
+  if (!pin || !state.doctorMessages.length) return;
+  try {
+    const res = await fetch("/api/rounds/messages", { headers: { "X-PIN": pin }, cache: "no-store" });
+    if (!res.ok) return;
+    const docs = await res.json();
+    if (!Array.isArray(docs)) return;
+    for (const d of docs) {
+      const id = d && d.message && d.message.message_id;
+      if (typeof id === "string" && typeof d.doctor_display_name === "string" && d.doctor_display_name.trim())
+        state.doctorSenders[id] = d.doctor_display_name.trim();
+    }
+    renderDoctor();
+  } catch {
+    /* the paired-doctor rule stays */
+  }
+}
+
 // The oldest pending message, echoed in plain words (doctor-echo.js). Confirm
 // and Decline are fresh-PIN verbs: the keypad always opens (postFresh). The
 // takeover never confirms or closes on its own: it goes away only when the
@@ -387,7 +414,7 @@ function renderDoctor() {
   const m = state.doctorMessages[0];
   box.classList.toggle("hidden", !m);
   if (!m) return;
-  const e = window.irinDoctorEcho(m, state.doctorName);
+  const e = window.irinDoctorEcho(m, state.doctorSenders[m.message_id] || state.doctorName);
   const n = state.doctorMessages.length;
   $("doctor-count").textContent = n > 1 ? `1 of ${n} messages` : "";
   $("doctor-who").textContent = `${e.who}:`;
