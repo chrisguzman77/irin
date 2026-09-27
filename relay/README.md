@@ -26,7 +26,7 @@ separate Irin Cloud service (`cloud/`). Storage is MongoDB Atlas
 | nonce | crypto_box nonce, base64 |
 | ciphertext | the sealed payload, base64; the relay never opens it |
 | source | irin_bedside \| irin_brain |
-| kind | the card kind, or buddy_alert, or the doctor-message kind |
+| kind | the card kind, or buddy_alert / buddy_line, or the doctor-message kind |
 | program | standing \| step_watch (cards); absent or buddy for kind buddy_alert |
 | is_demo | outside the ciphertext; must match the pairing's is_demo or the relay rejects it |
 
@@ -45,7 +45,8 @@ separate Irin Cloud service (`cloud/`). Storage is MongoDB Atlas
 - `POST /v0/resources/request` {doctor_id, category, brand} (bearer; doctor_id must be the bearer's own, 403 otherwise) -> {request_id, status: handed_off, category, brand, banner, shared_fields: [category, brand]}: the only thing a pharma-side system would ever see; no patient field, no card id, no number. Categories (the same tokens a card's `resource_categories` carries): glucagon_access, gi_side_effect_education, copay_savings, samples_next_pen, bridge_supply, prior_auth_hub, ask_msl; a card with an empty list (off-label use) offers no handoff. `GET /v0/resources` (bearer) lists the doctor's own handoffs, newest first. The banner the inbox shows on the handoff screen is the response's `banner`: "No patient data shared with any manufacturer".
 - `GET /v0/log`: the \"what Impiricus sees\" view (routes, device and peer ids, kinds, timestamps, sizes, ciphertext prefixes; never a plaintext field, and no card or message ids).
 - Hub (B3): `POST /v0/hub/listing`, `GET /v0/hub/list`, `POST /v0/hub/claim`, `GET /v0/hub/claim/{id}/script`, `POST /v0/hub/call`, `POST /v0/hub/treating`, `POST /v0/hub/resolve`, `GET /v0/hub/audit`. Shapes in "Hub (B3)" below.
-- Buddy alerts (B3) need no route of their own: the device posts a sealed envelope to `POST /v0/cards` with `kind: "buddy_alert"`, `program` absent or `"buddy"`, and `recipient_id` = the buddy pairing's doctor_id (a pairing with `peer_kind: buddy`); the watcher page reads it from `GET /v0/inbox/{peer_id}` with its bearer. A buddy pairing accepts buddy_alert and nothing else, and a doctor pairing never accepts buddy_alert (409); `program: buddy` on any other kind, or `standing`/`step_watch` on a buddy_alert, is 422.
+- Buddy alerts (B3) need no route of their own: the device posts a sealed envelope to `POST /v0/cards` with `kind: "buddy_alert"`, `program` absent or `"buddy"`, and `recipient_id` = the buddy pairing's doctor_id (a pairing with `peer_kind: buddy`); the watcher page reads it from `GET /v0/inbox/{peer_id}` with its bearer. A buddy pairing accepts buddy_alert and buddy_line and nothing else, and a doctor pairing never accepts either (409); `program: buddy` on any other kind, or `standing`/`step_watch` on a buddy kind, is 422.
+- `kind: "buddy_line"` (B5; program `buddy` or absent) is the second envelope kind a buddy pairing accepts: a sealed `{line, kind: "buddy_line", night_date}` (the morning "all quiet" line or the episode close-out; a first name, counts and clock times, never a glucose value), `card_id: "bl-<night_date>"` so a re-send replaces it.
 - Timestamps: every timestamp the relay returns is ISO 8601 with an explicit offset (`+00:00`; the Mongo client is tz_aware).
 - Buddy directory (B3+): `POST /v0/users`, `GET /v0/users/search?username=`, `POST /v0/match`, `POST /v0/match/{id}/accept | decline`.
 
