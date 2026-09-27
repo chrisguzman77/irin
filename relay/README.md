@@ -56,8 +56,9 @@ separate Irin Cloud service (`cloud/`). Storage is MongoDB Atlas
   - `POST /v0/match/{match_id}/pair_link` (X-Source-Key of an accepted side) `{pair_url}` -> `{stored: true}`: the device's buddy pairing link (`qr_url` from the Pi's `POST /api/pair/start {peer_kind: "buddy"}`), handed to the other side.
   - The device poll `GET /v0/device/{device_id}/messages` gains `matches: [{match_id, first_name, status, pair_url | null}]` for this device's user (keep every existing key unchanged).
   - Every directory change is written to `/v0/log` with ids and kinds only.
+  - Decided at build time (b4cc81c): candidates = CGM-verified, `be_watcher` on, same is_demo (no timezone or language pre-filter, so mirrors and a zero-overlap candidate still score); hours_covered = average covered hours per night over the week (0-10, one decimal), a user's FIRST timezone is home, offsets read now; an availability row whose end is not after its start runs past midnight; mirror uses the wrap-around offset difference; `user_bearer` is stable per source key (hash stored); usernames 3-30 chars starting with a letter, search = case-insensitive prefix, max 20, lists users with have_buddy or be_watcher on; `POST /v0/match` 403 when the requester is unverified or have_buddy is off, search 403 when unverified; accepting a declined match or declining an accepted one is 409; an accepted pair is never re-offered; `pair_link` before both accept is 409, from a device outside the match 404; in the poll, `pair_url` is the OTHER side's link.
 
-Pairing, cards, inbox, messages, the device poll, resolutions, and the log are live (R6); resources are live (R13); the hub is live (B3); the WhatsApp channel is live (B4+); the owner pairing, Spark, and directory routes are 501 stubs naming their step.
+Pairing, cards, inbox, messages, the device poll, resolutions, and the log are live (R6); resources are live (R13); the hub is live (B3); the WhatsApp channel is live (B4+); the buddy directory is live (B3+, relay/directory.py); the owner pairing and Spark routes are 501 stubs naming their step.
 
 ## Hub (B3)
 
