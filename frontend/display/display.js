@@ -303,6 +303,9 @@ function render() {
   $("night-trend").textContent = $("morning-trend").textContent = arrow;
   const now = state.piClock ?? (r ? toMs(r.timestamp) : null);
   $("night-clock").textContent = now === null ? "--:--" : hhmm(now);
+  // top-right clock: the Pi's time, blank until the Pi's clock has synced (no
+  // RTC battery: an unsynced wall clock is untrusted and is never shown as the time)
+  $("topclock").textContent = now === null || !state.clockSynced ? "" : hhmm(now);
   const pred = predictionText();
   for (const id of ["prediction", "night-prediction"]) {
     $(id).textContent = pred ?? "";
