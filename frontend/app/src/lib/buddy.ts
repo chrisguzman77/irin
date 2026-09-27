@@ -7,12 +7,13 @@ import type { StateSnapshot } from "./contracts";
 // defensively) plus treating_set {since, expires_at}. No glucose value, place,
 // or phone number is ever shown here (invariant 15).
 
+/** buddy_state.link = {first_name, mode, peer_id} (backend/app/buddy/rung.py) */
 export interface BuddyLink {
-  /** the pairing id, for POST /api/pair/{id}/revoke (peer_kind = buddy) */
-  id: string | null;
-  name: string;
+  /** the pairing id, for POST /api/pair/{peer_id}/revoke (peer_kind = buddy) */
+  peer_id: string | null;
+  first_name: string;
   /** twin: same sleep hours; mirror: awake while the other sleeps */
-  kind: "twin" | "mirror" | null;
+  mode: "twin" | "mirror" | null;
 }
 export interface Treating {
   since: string | null;
@@ -24,6 +25,8 @@ export interface BuddyState {
   openAlert: Record<string, unknown> | null;
   treating: Treating | null;
   morningLine: string | null;
+  /** the T+20 emergency-script step fired: {at, text} */
+  emergency: { at: string | null; text: string } | null;
 }
 
 const str = (v: unknown): string | null => (typeof v === "string" && v ? v : null);
@@ -33,31 +36,52 @@ const obj = (v: unknown): Record<string, unknown> | null =>
 export function readBuddyState(snap: StateSnapshot | null): BuddyState {
   const b = obj(snap?.buddy_state) ?? {};
   const l = obj(b.link);
-  const kind = str(l?.kind) ?? str(l?.match_kind) ?? str(l?.match);
+  const mode = str(l?.mode);
   const t = obj(b.treating);
+  const em = obj(b.emergency);
   return {
     link: l
       ? {
-          id: str(l.peer_id) ?? str(l.buddy_id) ?? str(l.doctor_id) ?? str(l.id),
-          name: str(l.name) ?? str(l.display_name) ?? str(l.doctor_display_name) ?? "your buddy",
-          kind: kind === "twin" || kind === "mirror" ? kind : null,
+          peer_id: str(l.peer_id),
+          first_name: str(l.first_name) ?? "your buddy",
+          mode: mode === "twin" || mode === "mirror" ? mode : null,
         }
       : null,
     openAlert: b.open_alert ? (obj(b.open_alert) ?? {}) : null,
     treating: t ? { since: str(t.since), expires_at: str(t.expires_at) } : null,
     morningLine: str(b.morning_line),
+    emergency: em && str(em.text) ? { at: str(em.at), text: str(em.text)! } : null,
   };
 }
 
-/** treating_set {since, expires_at} lands in the snapshot's buddy_state. */
-export function applyTreatingSet(snap: StateSnapshot, payload: Record<string, unknown>): StateSnapshot {
-  return { ...snap, buddy_state: { ...(snap.buddy_state ?? {}), treating: payload } };
+/** The buddy WS messages, folded into the snapshot's buddy_state:
+ * buddy_alert (payload = open_alert), treating_set {since, expires_at}, and
+ * hub_update {event: resolved | emergency | call, ...}. */
+export function applyBuddyMessage(snap: StateSnapshot, type: string, p: Record<string, unknown>): StateSnapshot {
+  const b = { ...(snap.buddy_state ?? {}) };
+  if (type === "buddy_alert") b.open_alert = p;
+  else if (type === "treating_set") b.treating = p;
+  else if (type === "hub_update") {
+    if (p.event === "resolved") {
+      b.open_alert = null;
+      b.treating = null;
+      b.emergency = null;
+      b.last_call = null;
+    } else if (p.event === "emergency") b.emergency = { at: p.at ?? null, text: p.text };
+    else if (p.event === "call") b.last_call = { chimed: p.chimed === true };
+    else return snap;
+  } else return snap;
+  return { ...snap, buddy_state: b };
 }
+
+/** hub_update "call" since the alert opened (this page's own note, not a Pi field). */
+export const buddyCalled = (snap: StateSnapshot | null) => !!obj(snap?.buddy_state)?.last_call;
 
 /** The ONE press (invariant 17): no confirmation step before or after. */
 export async function postTreating(base: string): Promise<{ ok: true } | { ok: false; reason: string }> {
   const res = await deviceFetch(base, "/api/buddy/treating", { method: "POST" });
   if (res.ok) return { ok: true };
+  if (res.status === 409) return { ok: false, reason: "No buddy alert is open any more." };
   let detail = "";
   try {
     const b = await res.json();

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { PinRejected } from "../lib/api";
-import { readBuddyState } from "../lib/buddy";
+import { hhmm, readBuddyState } from "../lib/buddy";
 import type { Settings } from "../lib/contracts";
 import { useDevice } from "../lib/device";
 import { revokePairing } from "../lib/pairing";
@@ -174,13 +174,13 @@ function BuddyCard({ state, base }: { state: ReturnType<typeof readBuddyState>; 
   const [ask, setAsk] = useState(false);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
-  const { link, morningLine } = state;
+  const { link, morningLine, emergency } = state;
   const revoke = async () => {
-    if (!link?.id || busy) return;
+    if (!link?.peer_id || busy) return;
     setBusy(true);
     try {
-      const r = await revokePairing(base, link.id);
-      setMsg(r.ok ? `Buddy pairing with ${link.name} ended. Keys are deleted on both sides.` : r.reason);
+      const r = await revokePairing(base, link.peer_id);
+      setMsg(r.ok ? `Buddy pairing with ${link.first_name} ended. Keys are deleted on both sides.` : r.reason);
     } catch (e) {
       if (!(e instanceof PinRejected)) setMsg("Could not reach your Irin.");
     } finally {
@@ -193,13 +193,13 @@ function BuddyCard({ state, base }: { state: ReturnType<typeof readBuddyState>; 
       {link ? (
         <>
           <div className="flex items-center gap-2">
-            <span className="text-lg font-semibold">{link.name}</span>
-            {link.kind && (
+            <span className="text-lg font-semibold">{link.first_name}</span>
+            {link.mode && (
               <span className="text-xs rounded-full border border-sky-600 text-sky-200 px-2 py-0.5">
-                {link.kind === "twin" ? "twin: same sleep hours" : "mirror: awake while you sleep"}
+                {link.mode === "twin" ? "twin: same sleep hours" : "mirror: awake while you sleep"}
               </span>
             )}
-            {link.id && !ask && (
+            {link.peer_id && !ask && (
               <button type="button" className="ml-auto text-sm text-red-300 underline" onClick={() => setAsk(true)}>
                 Revoke
               </button>
@@ -207,7 +207,7 @@ function BuddyCard({ state, base }: { state: ReturnType<typeof readBuddyState>; 
           </div>
           {ask && (
             <div className="rounded-lg bg-neutral-900 p-3 flex flex-col gap-2">
-              <p className="text-sm">End the buddy pairing with {link.name}? They stop being alerted now. To pair again you start over.</p>
+              <p className="text-sm">End the buddy pairing with {link.first_name}? They stop being alerted now. To pair again you start over.</p>
               <div className="flex gap-2">
                 <button type="button" className="flex-1 rounded-lg bg-neutral-800 py-2" onClick={() => setAsk(false)}>
                   Keep
@@ -221,6 +221,12 @@ function BuddyCard({ state, base }: { state: ReturnType<typeof readBuddyState>; 
         </>
       ) : (
         <p className="text-sm text-neutral-400">No buddy paired yet.</p>
+      )}
+      {emergency && (
+        <p className="text-sm text-red-300">
+          {emergency.at ? `${hhmm(emergency.at)}: ` : ""}
+          {emergency.text}
+        </p>
       )}
       {morningLine && <p className="text-sm text-neutral-200 border-l-2 border-sky-500 pl-3">{morningLine}</p>}
       {msg && <p role="status" className="text-sm text-amber-300">{msg}</p>}
