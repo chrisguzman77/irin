@@ -127,7 +127,8 @@ def _basal(conn, dev, start, end):
 
 
 def _sensor(conn, dev, start, end):
-    s0 = datetime.combine(start.date(), datetime.min.time())
+    first = conn.execute("SELECT min(time) AS t FROM readings WHERE device_id = %s", (dev,)).fetchone()["t"]
+    s0 = datetime.combine(max(start, first).date(), datetime.min.time())   # days before the device existed are not gaps
     s1 = datetime.combine(end.date() + timedelta(days=1), datetime.min.time())
     rows = conn.execute(
         "WITH b AS ("

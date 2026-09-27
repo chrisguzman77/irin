@@ -190,6 +190,7 @@ def test_shapes_the_charts_draw(client):
     assert len(g("basal")) == 7
     sensor = g("sensor")
     assert all(0 <= s["coverage_pct"] <= 100 for s in sensor) and any(s["gap_minutes"] > 0 for s in sensor)
+    assert sensor[0]["day"] == "2020-01-01"                          # starts at the first reading, not 60 days of fake gaps
 
 
 def test_nights_dashboard_equals_nights_py(client):
@@ -322,3 +323,17 @@ def test_forwarded_rows_draw_through_ingest(client, seeded, monkeypatch):
     assert sum(w["alerts_unconfirmed"] for w in bd["rows"]) == 1
     real = client.get("/v1/dash/step_watch?days=60", headers=OWNER).json()
     assert real["plan"]["plan_id"] != "e2e-plan"                       # demo never drawn as the real device
+
+
+def test_refresh_stops_behind_the_devices_local_clock(seeded):
+    """006: timestamps are naive local (UTC-4/-5) but end_offset counts from UTC now(); every
+    aggregate's policy must stop at least 6 h back so the real-time union draws fresh readings."""
+    import psycopg
+
+    schema = seeded.split("search_path%3D", 1)[1].split("%2C", 1)[0]
+    with psycopg.connect(seeded) as conn:
+        rows = conn.execute(
+            "SELECT hypertable_name, (config->>'end_offset')::interval FROM timescaledb_information.jobs"
+            " WHERE hypertable_schema = %s AND proc_name = 'policy_refresh_continuous_aggregate'", (schema,)).fetchall()
+    assert {r[0] for r in rows} == {"daily_stats", "overnight_profile", "hourly_heatmap", "alarms_weekly"}
+    assert all(r[1] >= timedelta(hours=6) for r in rows), rows
