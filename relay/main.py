@@ -19,6 +19,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
+import directory
 import hub
 import notify
 import relay_api
@@ -67,6 +68,7 @@ async def health() -> dict:
 app.include_router(relay_api.router)  # R6: pairing, cards, inbox, messages, device poll, resolutions, log; R13: resources
 app.include_router(hub.router)  # B3: the hub
 app.include_router(notify.router)  # B4+: the WhatsApp channel (buddy number, notify)
+app.include_router(directory.router)  # B3+: the buddy directory and matching
 
 # --- owner pairing (R5+) ---
 @app.post("/v0/device/pairings")
@@ -79,15 +81,3 @@ async def device_unpair(): _stub("R5+ owner unpair")
 # --- Spark, resources, log (R10, R13) ---
 @app.post("/v0/spark/new_rx")
 async def spark_new_rx(): _stub("R10 simulated Spark offer (demo-only, RELAY_ADMIN_KEY)")
-
-# --- buddy directory (B3+) ---
-@app.post("/v0/users")
-async def users_create(): _stub("B3+ directory users")
-@app.get("/v0/users/search")
-async def users_search(username: str = ""): _stub("B3+ directory search")
-@app.post("/v0/match")
-async def match(): _stub("B3+ directory match")
-@app.post("/v0/match/{match_id}/accept")
-async def match_accept(match_id: str): _stub("B3+ directory accept")
-@app.post("/v0/match/{match_id}/decline")
-async def match_decline(match_id: str): _stub("B3+ directory decline")

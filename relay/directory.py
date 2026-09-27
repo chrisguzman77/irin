@@ -1,15 +1,344 @@
 """B3+: the buddy directory and matching. POST /v0/users, GET
-/v0/users/search, POST /v0/match, POST /v0/match/{id}/accept | decline. ONE
-aggregation pipeline: opted-in watchers with language overlap and a timezone
-in the requester's set; hours_covered (the requester's 22:00-08:00 sleep
-window in UTC intersected with the candidate's availability), mirror (UTC
-offset difference 10-14 h), shared_languages; score = hours_covered + 2 *
-mirror + shared_languages; sort, limit 3; declined candidates never return.
+/v0/users/search, POST /v0/match, POST /v0/match/{id}/accept | decline,
+POST /v0/match/{id}/pair_link, and the device poll's `matches` key. Plain
+Python over the store: candidates are CGM-verified watchers (be_watcher on)
+in the requester's pool (same is_demo); hours_covered (the requester's
+22:00-08:00 sleep window in UTC intersected with the candidate's
+availability, averaged per night), mirror (UTC offset difference 10-14 h),
+shared_languages; score = hours_covered + 2 * mirror + len(shared_languages);
+sort, limit 3; declined candidates never return.
 The introduction and why-this-match lines are narrative text (Muse) beside
-the match; the scorer never reads them and an LLM never picks the buddy."""
+the match; the scorer never reads them and an LLM never picks the buddy.
+
+Conventions the contract leaves open: a user's FIRST timezone is their home
+zone (availability is local to it; offsets are read at store.now(), so DST
+counts as of today); an availability row whose end is not after its start
+runs past midnight into the next day; weekday numbering never matters to the
+score because the requester's window is the same every night. Profiles and
+matches hold no glucose value, location, phone number or email (invariant
+15): the bodies forbid every field they do not name."""
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
+import re
+import secrets
+from datetime import datetime
+from typing import Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-def match(user_id: str) -> list:
-    raise NotImplementedError("B3+: directory matching")
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pymongo import ReturnDocument
+from pymongo.errors import DuplicateKeyError
+
+import store
+from relay_api import _rate_limit, require_source_key
+
+FORBIDDEN_FIELDS = ("mgdl", "mg_dl", "glucose", "location", "lat", "lon", "phone", "email", "number")
+WEEK = 7 * 1440
+NIGHT_START, NIGHT_LEN = 22 * 60, 10 * 60  # the requester's 22:00-08:00 local sleep window
+TOP_N = 3
+
+router = APIRouter(prefix="/v0")
+
+
+class _Strict(BaseModel):
+    """Any unnamed field is 422, and so is any field named like a glucose value or a contact detail."""
+    model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _no_forbidden_fields(cls, data):
+        if isinstance(data, dict):
+            bad = [k for k in data if any(w in str(k).lower() for w in FORBIDDEN_FIELDS)]
+            if bad:
+                raise ValueError(f"forbidden field(s) in the directory: {bad} (invariant 15)")
+        return data
+
+
+class Slot(_Strict):
+    weekday: int = Field(ge=0, le=6)
+    start: str = Field(pattern=r"^([01]\d|2[0-3]):[0-5]\d$")
+    end: str = Field(pattern=r"^(([01]\d|2[0-3]):[0-5]\d|24:00)$")
+
+
+class Optins(_Strict):
+    have_buddy: bool = False
+    be_watcher: bool = False
+    hub_watchable: bool = False
+    hub_volunteer: bool = False
+
+
+class UserIn(_Strict):
+    username: str = Field(pattern=r"^[A-Za-z][A-Za-z0-9_.\-]{2,29}$")  # starts with a letter: never a phone number or an email
+    first_name: str = Field(min_length=1, max_length=40, pattern=r"^[^\d@]{1,40}$")
+    languages: list[str] = Field(default_factory=list, max_length=10)
+    timezones: list[str] = Field(min_length=1, max_length=5)
+    availability: list[Slot] = Field(default_factory=list, max_length=100)
+    optins: Optins = Field(default_factory=Optins)
+    cgm_verified: bool = False
+    is_demo: bool = False
+
+    @field_validator("languages")
+    @classmethod
+    def _languages(cls, v: list[str]) -> list[str]:
+        if not all(re.fullmatch(r"[^\d@]{1,40}", x) for x in v):
+            raise ValueError("a language is 1-40 characters with no digit and no @")
+        return v
+
+    @field_validator("timezones")
+    @classmethod
+    def _timezones(cls, v: list[str]) -> list[str]:
+        for tz in v:
+            try:
+                ZoneInfo(tz)
+            except (ZoneInfoNotFoundError, ValueError):
+                raise ValueError(f"not an IANA timezone: {tz!r}")
+        return v
+
+
+class MatchIn(_Strict):
+    """`{}`: the requester is the bearer."""
+
+
+class PairLinkIn(_Strict):
+    pair_url: str = Field(pattern=r"^https?://\S{1,2000}$")
+
+
+# ---------------------------------------------------------------- auth
+
+
+def _user_bearer(source_key: str, user_id: str) -> str:
+    """Derived, so the same bearer comes back on every call and none is stored in the clear."""
+    mac = hmac.new(source_key.encode(), f"irin-user-bearer:{user_id}".encode(), hashlib.sha256).digest()
+    return base64.urlsafe_b64encode(mac).decode().rstrip("=")
+
+
+def require_user(authorization: str | None = Header(default=None)) -> dict:
+    _rate_limit("auth-attempts")
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(status_code=401, detail="bearer required")
+    user = store.db()["users"].find_one({"bearer_hash": store.bearer_hash(authorization.split(" ", 1)[1].strip())})
+    if user is None:
+        raise HTTPException(status_code=401, detail="bad user bearer")
+    _rate_limit(f"user:{user['user_id']}")
+    return user
+
+
+def _verified(user: dict) -> dict:
+    if not user.get("cgm_verified"):
+        raise HTTPException(status_code=403, detail="the directory is for CGM-verified accounts")
+    return user
+
+
+# ---------------------------------------------------------------- the scorer (deterministic)
+
+
+def _minutes(hhmm: str) -> int:
+    h, m = hhmm.split(":")
+    return int(h) * 60 + int(m)
+
+
+def _offset_min(user: dict, at: datetime) -> int:
+    return int(at.astimezone(ZoneInfo(user["timezones"][0])).utcoffset().total_seconds() // 60)
+
+
+def _utc_intervals(local: list[tuple[int, int]], offset: int) -> list[tuple[int, int]]:
+    """(start, length) in local minute-of-week -> [start, end) intervals in UTC minute-of-week, wraps split."""
+    out = []
+    for start, length in local:
+        s = (start - offset) % WEEK
+        if s + length <= WEEK:
+            out.append((s, s + length))
+        else:
+            out += [(s, WEEK), (0, s + length - WEEK)]
+    return out
+
+
+def _merge(iv: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    out: list[list[int]] = []
+    for s, e in sorted(iv):
+        if out and s <= out[-1][1]:
+            out[-1][1] = max(out[-1][1], e)
+        else:
+            out.append([s, e])
+    return [(s, e) for s, e in out]
+
+
+def _availability(user: dict) -> list[tuple[int, int]]:
+    rows = []
+    for a in user.get("availability", []):
+        s, e = _minutes(a["start"]), _minutes(a["end"])
+        rows.append((a["weekday"] * 1440 + s, (e - s) % 1440 or 1440))  # end <= start runs past midnight; equal = all day
+    return rows
+
+
+def score(req: dict, cand: dict, at: datetime) -> dict:
+    """The score parts from the requester's side: hours of the requester's
+    nights the candidate is awake for (average per night), mirror, shared languages."""
+    req_off, cand_off = _offset_min(req, at), _offset_min(cand, at)
+    nights = _utc_intervals([(d * 1440 + NIGHT_START, NIGHT_LEN) for d in range(7)], req_off)
+    awake = _merge(_utc_intervals(_availability(cand), cand_off))
+    covered = sum(max(0, min(e1, e2) - max(s1, s2)) for s1, e1 in nights for s2, e2 in awake)
+    hours = round(covered / 60 / 7, 1)
+    diff = abs(req_off - cand_off) % 1440
+    diff = min(diff, 1440 - diff)
+    mirror = 600 <= diff <= 840
+    theirs = {x.casefold() for x in cand.get("languages", [])}
+    shared = sorted({x for x in req.get("languages", []) if x.casefold() in theirs})
+    return {"score": round(hours + 2 * mirror + len(shared), 1), "hours_covered": hours, "mirror": mirror,
+            "shared_languages": shared}
+
+
+# ---------------------------------------------------------------- routes
+
+
+def _pair_key(a: str, b: str) -> str:
+    return ":".join(sorted((a, b)))
+
+
+def _other(m: dict, user_id: str) -> str:
+    return next(u for u in m["users"] if u != user_id)
+
+
+def _match_out(m: dict, me: dict, other: dict) -> dict:
+    return {"match_id": m["match_id"], "candidate_id": other["user_id"], "first_name": other["first_name"],
+            **score(me, other, store.now()), "status": m["status"]}
+
+
+@router.post("/users")
+async def users_upsert(req: UserIn, source_key: str = Depends(require_source_key)) -> dict:
+    """One user per source key (upsert); the bearer is derived, so it is the same on every call."""
+    key_hash = store.bearer_hash(source_key)
+    fields = {**req.model_dump(), "updated_at": store.now()}
+    doc = store.db()["users"].find_one_and_update(
+        {"source_key_hash": key_hash}, {"$set": fields,
+                                        "$setOnInsert": {"user_id": f"u-{secrets.token_hex(6)}", "created_at": store.now()}},
+        upsert=True, return_document=ReturnDocument.AFTER)
+    bearer = _user_bearer(source_key, doc["user_id"])
+    if doc.get("bearer_hash") != store.bearer_hash(bearer):
+        store.db()["users"].update_one({"_id": doc["_id"]}, {"$set": {"bearer_hash": store.bearer_hash(bearer)}})
+    store.audit("directory.user", user_id=doc["user_id"], is_demo=req.is_demo, cgm_verified=req.cgm_verified)
+    return {"user_id": doc["user_id"], "user_bearer": bearer}
+
+
+@router.get("/users/search")
+async def users_search(username: str = Query(min_length=1, max_length=30), user: dict = Depends(require_user)) -> list[dict]:
+    """Username prefix, case-insensitive; CGM-verified users who opted in to buddying or watching, same pool only."""
+    _verified(user)
+    rows = store.db()["users"].find({
+        "username": {"$regex": f"^{re.escape(username)}", "$options": "i"}, "cgm_verified": True,
+        "is_demo": user["is_demo"], "user_id": {"$ne": user["user_id"]},
+        "$or": [{"optins.have_buddy": True}, {"optins.be_watcher": True}]}).sort("username", 1).limit(20)
+    out = [{"user_id": r["user_id"], "username": r["username"], "first_name": r["first_name"],
+            "languages": r.get("languages", []), "be_watcher": r["optins"]["be_watcher"]} for r in rows]
+    store.audit("directory.search", user_id=user["user_id"], results=len(out))
+    return out
+
+
+@router.post("/match")
+async def match(body: MatchIn | None = None, user: dict = Depends(require_user)) -> list[dict]:
+    """Up to 3 offers, best first. Declined pairs never return; accepted pairs are already buddies."""
+    _verified(user)
+    if not user["optins"].get("have_buddy"):
+        raise HTTPException(status_code=403, detail="the have_buddy opt-in is off")
+    matches = store.db()["matches"]
+    closed = {_other(m, user["user_id"]) for m in matches.find({"users": user["user_id"],
+                                                                 "status": {"$in": ["declined", "accepted"]}})}
+    now = store.now()
+    cands = [c for c in store.db()["users"].find({"cgm_verified": True, "optins.be_watcher": True,
+                                                   "is_demo": user["is_demo"], "user_id": {"$ne": user["user_id"]}})
+             if c["user_id"] not in closed]
+    ranked = sorted(((score(user, c, now), c) for c in cands), key=lambda p: (-p[0]["score"], p[1]["user_id"]))[:TOP_N]
+    out = []
+    for parts, c in ranked:
+        key = _pair_key(user["user_id"], c["user_id"])
+        try:
+            m = matches.find_one_and_update(
+                {"pair_key": key}, {"$setOnInsert": {"match_id": f"m-{secrets.token_hex(6)}", "pair_key": key,
+                                                     "users": sorted([user["user_id"], c["user_id"]]), "accepted_by": [],
+                                                     "status": "offered", "pair_urls": {}, "is_demo": user["is_demo"],
+                                                     "created_at": now}},
+                upsert=True, return_document=ReturnDocument.AFTER)
+        except DuplicateKeyError:  # a concurrent offer of the same pair won the insert
+            m = matches.find_one({"pair_key": key})
+        if m["status"] != "offered":  # declined or accepted in the meantime
+            continue
+        out.append({"match_id": m["match_id"], "candidate_id": c["user_id"], "first_name": c["first_name"], **parts,
+                    "status": "offered"})
+    store.audit("directory.match", user_id=user["user_id"], match_ids=[o["match_id"] for o in out])
+    return out
+
+
+def _my_match(match_id: str, user: dict) -> tuple[dict, dict]:
+    m = store.db()["matches"].find_one({"match_id": match_id, "users": user["user_id"]})
+    if m is None:
+        raise HTTPException(status_code=404, detail="no such match")
+    other = store.db()["users"].find_one({"user_id": _other(m, user["user_id"])})
+    if other is None or other["is_demo"] != user["is_demo"]:
+        raise HTTPException(status_code=409, detail="the other side is no longer in your pool")
+    return m, other
+
+
+@router.post("/match/{match_id}/accept")
+async def match_accept(match_id: str, user: dict = Depends(require_user)) -> dict:
+    m, other = _my_match(match_id, _verified(user))
+    if m["status"] == "declined":
+        raise HTTPException(status_code=409, detail="match declined")
+    accepted_by = sorted(set(m["accepted_by"]) | {user["user_id"]})
+    status = "accepted" if set(accepted_by) == set(m["users"]) else "offered"
+    m = store.db()["matches"].find_one_and_update({"_id": m["_id"], "status": {"$ne": "declined"}},
+                                                  {"$set": {"accepted_by": accepted_by, "status": status}},
+                                                  return_document=ReturnDocument.AFTER)
+    if m is None:
+        raise HTTPException(status_code=409, detail="match declined")
+    store.audit("directory.accept", match_id=match_id, user_id=user["user_id"], status=status)
+    return _match_out(m, user, other)
+
+
+@router.post("/match/{match_id}/decline")
+async def match_decline(match_id: str, user: dict = Depends(require_user)) -> dict:
+    m, other = _my_match(match_id, user)
+    if m["status"] == "accepted":
+        raise HTTPException(status_code=409, detail="already accepted: revoke the pairing instead")
+    m = store.db()["matches"].find_one_and_update({"_id": m["_id"], "status": {"$ne": "accepted"}},
+                                                  {"$set": {"status": "declined", "declined_by": user["user_id"]}},
+                                                  return_document=ReturnDocument.AFTER)
+    if m is None:
+        raise HTTPException(status_code=409, detail="already accepted: revoke the pairing instead")
+    store.audit("directory.decline", match_id=match_id, user_id=user["user_id"])
+    return _match_out(m, user, other)
+
+
+@router.post("/match/{match_id}/pair_link")
+async def pair_link(match_id: str, req: PairLinkIn, source_key: str = Depends(require_source_key)) -> dict:
+    """The device's buddy pairing link, handed to the other side through its poll. Never logged."""
+    user = store.db()["users"].find_one({"source_key_hash": store.bearer_hash(source_key)})
+    if user is None:
+        raise HTTPException(status_code=404, detail="no such match")
+    m, _ = _my_match(match_id, user)
+    if m["status"] != "accepted":
+        raise HTTPException(status_code=409, detail="the match is not accepted by both sides")
+    store.db()["matches"].update_one({"_id": m["_id"]}, {"$set": {f"pair_urls.{user['user_id']}": req.pair_url}})
+    store.audit("directory.pair_link", match_id=match_id, user_id=user["user_id"])
+    return {"stored": True}
+
+
+def poll_matches(key_hash: str) -> list[dict]:
+    """The device poll's `matches`: this device's user's matches, with the OTHER side's pairing link."""
+    user = store.db()["users"].find_one({"source_key_hash": key_hash})
+    if user is None:
+        return []
+    rows = list(store.db()["matches"].find({"users": user["user_id"]}).sort("created_at", 1).limit(50))
+    names = {u["user_id"]: u["first_name"] for u in
+             store.db()["users"].find({"user_id": {"$in": [_other(m, user["user_id"]) for m in rows]}})}
+    out = []
+    for m in rows:
+        other = _other(m, user["user_id"])
+        if other in names:
+            out.append({"match_id": m["match_id"], "first_name": names[other], "status": m["status"],
+                        "pair_url": m.get("pair_urls", {}).get(other)})
+    return out
