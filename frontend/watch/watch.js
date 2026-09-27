@@ -641,6 +641,7 @@ function renderHub() {
   }
   const out = [];
   if (hubNote) out.push(el("p", "empty", hubNote));
+  if (alertMsg && !shown) out.push(el("p", "msg", alertMsg)); // a refused claim, said where it was tapped
   for (const e of rows) {
     const l = e.l, conf = l.confidence === "device_confirmed" ? "device_confirmed" : "unconfirmed";
     const mine = liveClaim(l.listing_id);
@@ -659,8 +660,10 @@ function renderHub() {
         btn.disabled = true;
         unlockAudio();
         const c = await claim(l.listing_id);
-        if (c) showAlert(l.listing_id);
-        else render();
+        if (c) return showAlert(l.listing_id);
+        render();
+        const said = alertMsg;
+        setTimeout(() => { if (alertMsg === said) { alertMsg = ""; renderHub(); } }, 8000);
       });
     } else if (l.status === "claimed" && mine) {
       what = `You have this until ${hhmm(ms(mine.claim.expires_at))}.`;
