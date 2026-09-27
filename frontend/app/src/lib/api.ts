@@ -1,5 +1,6 @@
 import { isFreshPath } from "./freshPin";
 import { clearPin, getPin } from "./usePin";
+import { clearOwnerPairing, getOwnerPairing } from "./owner";
 
 export class PinRejected extends Error {
   constructor() {
@@ -14,14 +15,26 @@ export class FreshPinRequired extends Error {
   }
 }
 
+/** A2: the Pi no longer recognizes this phone's pairing. */
+export class PairingRequired extends Error {
+  constructor() {
+    super("pair this phone with your Irin");
+  }
+}
+
 const MUTATING = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
-/** Every call to the Pi goes through here. Mutating calls carry X-PIN (and a
- * PIN-gated read with pinned: true); a 401 clears the stored code so the gate
- * asks again (A1). */
+/** Every call to the Pi goes through here. It carries the owner pairing's
+ * bearer (A2) on every method whenever one is stored. Mutating calls also
+ * carry X-PIN (and a PIN-gated read with pinned: true); a 401 whose detail
+ * says the pairing itself is gone clears the pairing (leaving the PIN
+ * alone), and any other 401 clears the stored code so the gate asks again
+ * (A1). */
 export async function deviceFetch(base: string, path: string, init: RequestInit & { pinned?: boolean } = {}): Promise<Response> {
   const method = (init.method ?? "GET").toUpperCase();
   const headers = new Headers(init.headers);
+  const owner = getOwnerPairing();
+  if (owner?.token) headers.set("Authorization", `Bearer ${owner.token}`);
   if (MUTATING.has(method)) {
     // never send the stored session code to a fresh-PIN verb (invariant 12);
     // if the Pi's list cannot be read, the Pi is unreachable and so is the verb
@@ -33,6 +46,16 @@ export async function deviceFetch(base: string, path: string, init: RequestInit 
   const { pinned: _, ...rest } = init;
   const res = await fetch(base + path, { ...rest, method, headers });
   if (res.status === 401) {
+    let detail: unknown;
+    try {
+      detail = (await res.clone().json())?.detail;
+    } catch {
+      /* no body */
+    }
+    if (detail === "pair this phone with your Irin") {
+      clearOwnerPairing();
+      throw new PairingRequired();
+    }
     clearPin(true);
     throw new PinRejected();
   }
