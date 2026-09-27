@@ -22,6 +22,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import directory
 import hub
 import notify
+import owner
 import relay_api
 import store
 
@@ -69,14 +70,7 @@ app.include_router(relay_api.router)  # R6: pairing, cards, inbox, messages, dev
 app.include_router(hub.router)  # B3: the hub
 app.include_router(notify.router)  # B4+: the WhatsApp channel (buddy number, notify)
 app.include_router(directory.router)  # B3+: the buddy directory and matching
-
-# --- owner pairing (R5+) ---
-@app.post("/v0/device/pairings")
-async def device_pairings(): _stub("R5+ owner pairing register")
-@app.post("/v0/device/pair")
-async def device_pair(): _stub("R5+ owner pairing redeem")
-@app.delete("/v0/device/pair")
-async def device_unpair(): _stub("R5+ owner unpair")
+app.include_router(owner.router)  # A2/R5+: owner pairing (phone app <-> this user's Pi)
 
 # --- Spark, resources, log (R10, R13) ---
 @app.post("/v0/spark/new_rx")

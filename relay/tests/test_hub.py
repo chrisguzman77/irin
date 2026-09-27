@@ -229,7 +229,7 @@ def test_call_reaches_the_device_poll_once(c):
     cid = c.post("/v0/hub/claim", json={"listing_id": "L1"}, headers=vol).json()["claim_id"]
     assert c.post("/v0/hub/call", json={"claim_id": cid}, headers=vol).json() == {"status": "ringing"}
     poll = c.get("/v0/device/irin-test/messages", headers=SRC).json()
-    assert set(poll) == {"messages", "pairings", "calls", "matches"}  # B3+ added matches
+    assert set(poll) == {"messages", "pairings", "calls", "matches", "owner"}  # B3+ added matches; A2 added owner
     assert [(x["listing_id"], x["claim_id"]) for x in poll["calls"]] == [("L1", cid)]
     assert poll["calls"][0]["at"].endswith("+00:00")
     assert c.get("/v0/device/irin-test/messages", headers=SRC).json()["calls"] == []  # delivered once

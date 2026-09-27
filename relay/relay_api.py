@@ -304,6 +304,7 @@ async def device_messages(device_id: str, source_key: str = Depends(require_sour
     """The Pi's poll: pending sealed messages, and the state of its pairings
     (so a revoke from the inbox reaches the device)."""
     import directory  # B3+; imported here because directory imports this module's auth helpers
+    import owner  # A2/R5+; imported here because owner imports this module's auth helpers
     key_hash = store.bearer_hash(source_key)
     pairings = list(store.db()["pairings"].find({"device_id": device_id, "source_key_hash": key_hash,
                                                  "status": {"$in": ["confirmed", "revoked"]}}))
@@ -318,7 +319,8 @@ async def device_messages(device_id: str, source_key: str = Depends(require_sour
             "pairings": [{"doctor_id": p["doctor_id"], "status": p["status"], "peer_kind": p["peer_kind"]}
                          for p in pairings if p.get("doctor_id")],
             "calls": [{"listing_id": c["listing_id"], "claim_id": c["claim_id"], "at": c["at"].isoformat()} for c in calls],
-            "matches": directory.poll_matches(key_hash)}  # B3+: this device's user's matches and the other side's pair_url
+            "matches": directory.poll_matches(key_hash),  # B3+: this device's user's matches and the other side's pair_url
+            "owner": owner.poll(device_id, key_hash)}  # A2/R5+: this device's current owner pairing
 
 
 @router.post("/messages/{message_id}/resolution")
