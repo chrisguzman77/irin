@@ -726,8 +726,8 @@ function renderMorning() {
   const s = morningReport();
   const pct = (v) => (v == null ? null : `${Number(v.toFixed(1))}%`); // matches the report's narrative
   $("tir-night").textContent = s ? (pct(s.tir_pct) ?? "—") : "—";
-  setStat("night-low", s ? s.low_mgdl : null, s && s.low_at ? `at ${s.low_at}` : "");
-  setStat("night-high", s ? s.high_mgdl : null, s && s.high_at ? `at ${s.high_at}` : "");
+  setStat("night-low", s ? s.low_mgdl : null, s && s.low_at ? `at ${settingTime12(s.low_at)}` : "");
+  setStat("night-high", s ? s.high_mgdl : null, s && s.high_at ? `at ${settingTime12(s.high_at)}` : "");
   setStat("night-below", s ? pct(s.tbr_pct) : null, s && s.minutes_below_70 ? `${s.minutes_below_70} min` : "");
   setStat("night-above", s ? pct(s.tar_pct) : null, "");
   // ring: below (red) from the top, then in range (green), then above (amber)

@@ -112,7 +112,7 @@ body.mode-night.is-stale #night-glucose, body.mode-night.is-disconnected #night-
 body.mode-night.is-stale #night-glucose { text-decoration: line-through; }
 
 /* --- Morning: overnight summary (step 2) --- */
-#morning { height: 100vh; box-sizing: border-box; padding: 8vh 4vw 3vh; display: flex; flex-direction: column; }
+#morning { height: 100vh; box-sizing: border-box; padding: 8vh 1.5vw 3vh; /* left edge = the logo's */ display: flex; flex-direction: column; }
 #morning-title { font-size: 4vh; color: var(--dim); text-transform: uppercase; letter-spacing: 0.08em; }
 #morning-body { flex: 1; display: flex; align-items: center; justify-content: space-around; gap: 4vw; min-height: 0; }
 #morning-ring-wrap { position: relative; height: min(55vh, 40vw); aspect-ratio: 1; }
