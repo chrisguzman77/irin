@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import type { Settings } from "../../lib/contracts";
 import { PinRejected } from "../../lib/api";
 import { ALARM_SOUNDS, applied, changedFields, saveSettings, validate } from "../../lib/settings";
+import DashboardToken from "./DashboardToken";
 import FamilySection from "./FamilySection";
 
 // Step 5: every device setting, drafted from the Pi's snapshot. Save sends
@@ -258,6 +259,7 @@ export default function SettingsForm({ current, baseUrl }: { current: Settings |
       </div>
     </form>
     <FamilySection current={current} baseUrl={baseUrl} />
+    <DashboardToken />
     <div className="h-28" aria-hidden />
     </>
   );

@@ -1,0 +1,252 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 800 600" preserveAspectRatio="xMidYMid slice">
+  <title>Leaf snowfall</title>
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2E2F29"/>
+      <stop offset="1" stop-color="#3A4234"/>
+    </linearGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="0.8" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <!-- small pointed leaf, white outline and vein -->
+    <g id="leafA" stroke="#ffffff" stroke-linejoin="round" stroke-linecap="round">
+      <path d="M0,-11 C7,-6 7,5 0,11 C-7,5 -7,-6 0,-11 Z" stroke-width="1.4"/>
+      <path d="M0,-7 L0,13" fill="none" stroke-width="0.9" stroke-opacity="0.85"/>
+    </g>
+    <!-- small round leaf -->
+    <g id="leafB" stroke="#ffffff" stroke-linejoin="round" stroke-linecap="round">
+      <path d="M0,-9 C8.5,-8 8.5,6 0,9 C-8.5,6 -8.5,-8 0,-9 Z" stroke-width="1.4"/>
+      <path d="M0,-6 L0,11" fill="none" stroke-width="0.9" stroke-opacity="0.85"/>
+    </g>
+  </defs>
+
+  <style>
+    .fall  { animation-name: fall; animation-timing-function: linear; animation-iteration-count: infinite; }
+    .melt  { animation-timing-function: ease-in-out; animation-iteration-count: infinite;
+              transform-box: fill-box; transform-origin: center; }
+    .speck { animation-timing-function: ease-out; animation-iteration-count: infinite; opacity: 0; fill-opacity: 0.8; }
+    .sway  { animation-name: sway; animation-timing-function: ease-in-out; animation-iteration-count: infinite; animation-direction: alternate; }
+    .spin  { animation-name: spin; animation-timing-function: ease-in-out; animation-iteration-count: infinite; animation-direction: alternate;
+              transform-box: fill-box; transform-origin: center; }
+
+    @keyframes fall {
+      from { transform: translateY(-30px); }
+      to   { transform: translateY(630px); }
+    }
+    @keyframes meltA {
+      0%   { opacity: 0; transform: scale(0.6); }
+      6%   { opacity: 1; transform: scale(1); }
+      49%  { opacity: 1; transform: scale(1); }
+      55%  { opacity: 0; transform: scale(0.15); }
+      100% { opacity: 0; transform: scale(0.15); }
+    }
+    @keyframes burstA0 {
+      0%, 54% { opacity: 0; transform: translate(0px, 0px); }
+      55%  { opacity: 1; transform: translate(0px, 0px); }
+      60% { opacity: 0; transform: translate(-0.8px, -4.6px); }
+      100% { opacity: 0; transform: translate(-0.8px, -4.6px); }
+    }
+    @keyframes burstA1 {
+      0%, 54% { opacity: 0; transform: translate(0px, 0px); }
+      55%  { opacity: 1; transform: translate(0px, 0px); }
+      60% { opacity: 0; transform: translate(7.1px, 1.4px); }
+      100% { opacity: 0; transform: translate(7.1px, 1.4px); }
+    }
+    @keyframes burstA2 {
+      0%, 54% { opacity: 0; transform: translate(0px, 0px); }
+      55%  { opacity: 1; transform: translate(0px, 0px); }
+      60% { opacity: 0; transform: translate(4.8px, 10.0px); }
+      100% { opacity: 0; transform: translate(4.8px, 10.0px); }
+    }
+    @keyframes burstA3 {
+      0%, 54% { opacity: 0; transform: translate(0px, 0px); }
+      55%  { opacity: 1; transform: translate(0px, 0px); }
+      60% { opacity: 0; transform: translate(-3.1px, 11.5px); }
+      100% { opacity: 0; transform: translate(-3.1px, 11.5px); }
+    }
+    @keyframes burstA4 {
+      0%, 54% { opacity: 0; transform: translate(0px, 0px); }
+      55%  { opacity: 1; transform: translate(0px, 0px); }
+      60% { opacity: 0; transform: translate(-8.7px, 2.8px); }
+      100% { opacity: 0; transform: translate(-8.7px, 2.8px); }
+    }
+    @keyframes meltB {
+      0%   { opacity: 0; transform: scale(0.6); }
+      6%   { opacity: 1; transform: scale(1); }
+      69%  { opacity: 1; transform: scale(1); }
+      75%  { opacity: 0; transform: scale(0.15); }
+      100% { opacity: 0; transform: scale(0.15); }
+    }
+    @keyframes burstB0 {
+      0%, 74% { opacity: 0; transform: translate(0px, 0px); }
+      75%  { opacity: 1; transform: translate(0px, 0px); }
+      80% { opacity: 0; transform: translate(-0.8px, -4.6px); }
+      100% { opacity: 0; transform: translate(-0.8px, -4.6px); }
+    }
+    @keyframes burstB1 {
+      0%, 74% { opacity: 0; transform: translate(0px, 0px); }
+      75%  { opacity: 1; transform: translate(0px, 0px); }
+      80% { opacity: 0; transform: translate(7.1px, 1.4px); }
+      100% { opacity: 0; transform: translate(7.1px, 1.4px); }
+    }
+    @keyframes burstB2 {
+      0%, 74% { opacity: 0; transform: translate(0px, 0px); }
+      75%  { opacity: 1; transform: translate(0px, 0px); }
+      80% { opacity: 0; transform: translate(4.8px, 10.0px); }
+      100% { opacity: 0; transform: translate(4.8px, 10.0px); }
+    }
+    @keyframes burstB3 {
+      0%, 74% { opacity: 0; transform: translate(0px, 0px); }
+      75%  { opacity: 1; transform: translate(0px, 0px); }
+      80% { opacity: 0; transform: translate(-3.1px, 11.5px); }
+      100% { opacity: 0; transform: translate(-3.1px, 11.5px); }
+    }
+    @keyframes burstB4 {
+      0%, 74% { opacity: 0; transform: translate(0px, 0px); }
+      75%  { opacity: 1; transform: translate(0px, 0px); }
+      80% { opacity: 0; transform: translate(-8.7px, 2.8px); }
+      100% { opacity: 0; transform: translate(-8.7px, 2.8px); }
+    }
+    @keyframes meltC {
+      0%   { opacity: 0; transform: scale(0.6); }
+      6%   { opacity: 1; transform: scale(1); }
+      89%  { opacity: 1; transform: scale(1); }
+      95%  { opacity: 0; transform: scale(0.15); }
+      100% { opacity: 0; transform: scale(0.15); }
+    }
+    @keyframes burstC0 {
+      0%, 94% { opacity: 0; transform: translate(0px, 0px); }
+      95%  { opacity: 1; transform: translate(0px, 0px); }
+      100% { opacity: 0; transform: translate(-0.8px, -4.6px); }
+      100% { opacity: 0; transform: translate(-0.8px, -4.6px); }
+    }
+    @keyframes burstC1 {
+      0%, 94% { opacity: 0; transform: translate(0px, 0px); }
+      95%  { opacity: 1; transform: translate(0px, 0px); }
+      100% { opacity: 0; transform: translate(7.1px, 1.4px); }
+      100% { opacity: 0; transform: translate(7.1px, 1.4px); }
+    }
+    @keyframes burstC2 {
+      0%, 94% { opacity: 0; transform: translate(0px, 0px); }
+      95%  { opacity: 1; transform: translate(0px, 0px); }
+      100% { opacity: 0; transform: translate(4.8px, 10.0px); }
+      100% { opacity: 0; transform: translate(4.8px, 10.0px); }
+    }
+    @keyframes burstC3 {
+      0%, 94% { opacity: 0; transform: translate(0px, 0px); }
+      95%  { opacity: 1; transform: translate(0px, 0px); }
+      100% { opacity: 0; transform: translate(-3.1px, 11.5px); }
+      100% { opacity: 0; transform: translate(-3.1px, 11.5px); }
+    }
+    @keyframes burstC4 {
+      0%, 94% { opacity: 0; transform: translate(0px, 0px); }
+      95%  { opacity: 1; transform: translate(0px, 0px); }
+      100% { opacity: 0; transform: translate(-8.7px, 2.8px); }
+      100% { opacity: 0; transform: translate(-8.7px, 2.8px); }
+    }
+    @keyframes sway {
+      from { transform: translateX(-22px); }
+      to   { transform: translateX(22px); }
+    }
+    @keyframes spin {
+      from { transform: rotate(-20deg); }
+      to   { transform: rotate(24deg); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .fall, .melt, .speck, .sway, .spin { animation-play-state: paused; }
+    }
+  </style>
+
+  <!-- transparent: the page draws the dusk background so the leaves can fly off on their own -->
+  <g filter="url(#glow)">
+  <g class="fall" style="animation-duration:17.2s;animation-delay:-15.1s"><g class="sway" style="animation-duration:5.3s">
+    <g class="melt" style="animation-name:meltC;animation-duration:17.2s;animation-delay:-15.1s"><g class="spin" style="animation-duration:4.1s"><use xlink:href="#leafA" href="#leafA" transform="translate(394 0) scale(0.94)" fill="#7fb069"/></g></g>
+    <circle cx="394" cy="0" r="1.6" fill="#7fb069" class="speck" style="animation-name:burstC0;animation-duration:17.2s;animation-delay:-15.1s"/><circle cx="394" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstC1;animation-duration:17.2s;animation-delay:-15.1s"/><circle cx="394" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstC2;animation-duration:17.2s;animation-delay:-15.1s"/><circle cx="394" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstC3;animation-duration:17.2s;animation-delay:-15.1s"/><circle cx="394" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstC4;animation-duration:17.2s;animation-delay:-15.1s"/>
+  </g></g>
+  <g class="fall" style="animation-duration:18.5s;animation-delay:-2.8s"><g class="sway" style="animation-duration:4.8s">
+    <g class="melt" style="animation-name:meltC;animation-duration:18.5s;animation-delay:-2.8s"><g class="spin" style="animation-duration:3.7s"><use xlink:href="#leafA" href="#leafA" transform="translate(311 0) scale(1.11)" fill="#4f8a5b"/></g></g>
+    <circle cx="311" cy="0" r="1.6" fill="#4f8a5b" class="speck" style="animation-name:burstC0;animation-duration:18.5s;animation-delay:-2.8s"/><circle cx="311" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstC1;animation-duration:18.5s;animation-delay:-2.8s"/><circle cx="311" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstC2;animation-duration:18.5s;animation-delay:-2.8s"/><circle cx="311" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstC3;animation-duration:18.5s;animation-delay:-2.8s"/><circle cx="311" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstC4;animation-duration:18.5s;animation-delay:-2.8s"/>
+  </g></g>
+  <g class="fall" style="animation-duration:18.9s;animation-delay:-6.4s"><g class="sway" style="animation-duration:4.5s">
+    <g class="melt" style="animation-name:meltA;animation-duration:18.9s;animation-delay:-6.4s"><g class="spin" style="animation-duration:4.5s"><use xlink:href="#leafB" href="#leafB" transform="translate(749 0) scale(1.18)" fill="#7fb069"/></g></g>
+    <circle cx="749" cy="0" r="1.6" fill="#7fb069" class="speck" style="animation-name:burstA0;animation-duration:18.9s;animation-delay:-6.4s"/><circle cx="749" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstA1;animation-duration:18.9s;animation-delay:-6.4s"/><circle cx="749" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstA2;animation-duration:18.9s;animation-delay:-6.4s"/><circle cx="749" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstA3;animation-duration:18.9s;animation-delay:-6.4s"/><circle cx="749" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstA4;animation-duration:18.9s;animation-delay:-6.4s"/>
+  </g></g>
+  <g class="fall" style="animation-duration:16.8s;animation-delay:-11.2s"><g class="sway" style="animation-duration:3.9s">
+    <g class="melt" style="animation-name:meltC;animation-duration:16.8s;animation-delay:-11.2s"><g class="spin" style="animation-duration:4.9s"><use xlink:href="#leafB" href="#leafB" transform="translate(7 0) scale(0.92)" fill="#6a994e"/></g></g>
+    <circle cx="7" cy="0" r="1.6" fill="#6a994e" class="speck" style="animation-name:burstC0;animation-duration:16.8s;animation-delay:-11.2s"/><circle cx="7" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstC1;animation-duration:16.8s;animation-delay:-11.2s"/><circle cx="7" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstC2;animation-duration:16.8s;animation-delay:-11.2s"/><circle cx="7" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstC3;animation-duration:16.8s;animation-delay:-11.2s"/><circle cx="7" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstC4;animation-duration:16.8s;animation-delay:-11.2s"/>
+  </g></g>
+  <g class="fall" style="animation-duration:18.0s;animation-delay:-0.4s"><g class="sway" style="animation-duration:4.7s">
+    <g class="melt" style="animation-name:meltA;animation-duration:18.0s;animation-delay:-0.4s"><g class="spin" style="animation-duration:3.9s"><use xlink:href="#leafA" href="#leafA" transform="translate(407 0) scale(0.85)" fill="#b8e0a0"/></g></g>
+    <circle cx="407" cy="0" r="1.6" fill="#b8e0a0" class="speck" style="animation-name:burstA0;animation-duration:18.0s;animation-delay:-0.4s"/><circle cx="407" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstA1;animation-duration:18.0s;animation-delay:-0.4s"/><circle cx="407" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstA2;animation-duration:18.0s;animation-delay:-0.4s"/><circle cx="407" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstA3;animation-duration:18.0s;animation-delay:-0.4s"/><circle cx="407" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstA4;animation-duration:18.0s;animation-delay:-0.4s"/>
+  </g></g>
+  <g class="fall" style="animation-duration:15.7s;animation-delay:-11.6s"><g class="sway" style="animation-duration:4.6s">
+    <g class="melt" style="animation-name:meltA;animation-duration:15.7s;animation-delay:-11.6s"><g class="spin" style="animation-duration:5.3s"><use xlink:href="#leafB" href="#leafB" transform="translate(711 0) scale(0.95)" fill="#7fb069"/></g></g>
+    <circle cx="711" cy="0" r="1.6" fill="#7fb069" class="speck" style="animation-name:burstA0;animation-duration:15.7s;animation-delay:-11.6s"/><circle cx="711" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstA1;animation-duration:15.7s;animation-delay:-11.6s"/><circle cx="711" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstA2;animation-duration:15.7s;animation-delay:-11.6s"/><circle cx="711" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstA3;animation-duration:15.7s;animation-delay:-11.6s"/><circle cx="711" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstA4;animation-duration:15.7s;animation-delay:-11.6s"/>
+  </g></g>
+  <g class="fall" style="animation-duration:17.3s;animation-delay:-15.3s"><g class="sway" style="animation-duration:5.4s">
+    <g class="melt" style="animation-name:meltB;animation-duration:17.3s;animation-delay:-15.3s"><g class="spin" style="animation-duration:5.2s"><use xlink:href="#leafB" href="#leafB" transform="translate(779 0) scale(1.19)" fill="#93c47d"/></g></g>
+    <circle cx="779" cy="0" r="1.6" fill="#93c47d" class="speck" style="animation-name:burstB0;animation-duration:17.3s;animation-delay:-15.3s"/><circle cx="779" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstB1;animation-duration:17.3s;animation-delay:-15.3s"/><circle cx="779" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstB2;animation-duration:17.3s;animation-delay:-15.3s"/><circle cx="779" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstB3;animation-duration:17.3s;animation-delay:-15.3s"/><circle cx="779" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstB4;animation-duration:17.3s;animation-delay:-15.3s"/>
+  </g></g>
+  <g class="fall" style="animation-duration:18.1s;animation-delay:-6.9s"><g class="sway" style="animation-duration:4.3s">
+    <g class="melt" style="animation-name:meltC;animation-duration:18.1s;animation-delay:-6.9s"><g class="spin" style="animation-duration:3.7s"><use xlink:href="#leafA" href="#leafA" transform="translate(136 0) scale(0.86)" fill="#a7c957"/></g></g>
+    <circle cx="136" cy="0" r="1.6" fill="#a7c957" class="speck" style="animation-name:burstC0;animation-duration:18.1s;animation-delay:-6.9s"/><circle cx="136" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstC1;animation-duration:18.1s;animation-delay:-6.9s"/><circle cx="136" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstC2;animation-duration:18.1s;animation-delay:-6.9s"/><circle cx="136" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstC3;animation-duration:18.1s;animation-delay:-6.9s"/><circle cx="136" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstC4;animation-duration:18.1s;animation-delay:-6.9s"/>
+  </g></g>
+  <g class="fall" style="animation-duration:16.9s;animation-delay:-10.0s"><g class="sway" style="animation-duration:4.3s">
+    <g class="melt" style="animation-name:meltB;animation-duration:16.9s;animation-delay:-10.0s"><g class="spin" style="animation-duration:3.6s"><use xlink:href="#leafB" href="#leafB" transform="translate(154 0) scale(1.02)" fill="#4f8a5b"/></g></g>
+    <circle cx="154" cy="0" r="1.6" fill="#4f8a5b" class="speck" style="animation-name:burstB0;animation-duration:16.9s;animation-delay:-10.0s"/><circle cx="154" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstB1;animation-duration:16.9s;animation-delay:-10.0s"/><circle cx="154" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstB2;animation-duration:16.9s;animation-delay:-10.0s"/><circle cx="154" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstB3;animation-duration:16.9s;animation-delay:-10.0s"/><circle cx="154" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstB4;animation-duration:16.9s;animation-delay:-10.0s"/>
+  </g></g>
+  <g class="fall" style="animation-duration:15.9s;animation-delay:-2.0s"><g class="sway" style="animation-duration:5.5s">
+    <g class="melt" style="animation-name:meltC;animation-duration:15.9s;animation-delay:-2.0s"><g class="spin" style="animation-duration:5.3s"><use xlink:href="#leafA" href="#leafA" transform="translate(595 0) scale(1.11)" fill="#b8e0a0"/></g></g>
+    <circle cx="595" cy="0" r="1.6" fill="#b8e0a0" class="speck" style="animation-name:burstC0;animation-duration:15.9s;animation-delay:-2.0s"/><circle cx="595" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstC1;animation-duration:15.9s;animation-delay:-2.0s"/><circle cx="595" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstC2;animation-duration:15.9s;animation-delay:-2.0s"/><circle cx="595" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstC3;animation-duration:15.9s;animation-delay:-2.0s"/><circle cx="595" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstC4;animation-duration:15.9s;animation-delay:-2.0s"/>
+  </g></g>
+  <g class="fall" style="animation-duration:16.4s;animation-delay:-6.5s"><g class="sway" style="animation-duration:4.0s">
+    <g class="melt" style="animation-name:meltA;animation-duration:16.4s;animation-delay:-6.5s"><g class="spin" style="animation-duration:4.7s"><use xlink:href="#leafA" href="#leafA" transform="translate(518 0) scale(1.19)" fill="#a7c957"/></g></g>
+    <circle cx="518" cy="0" r="1.6" fill="#a7c957" class="speck" style="animation-name:burstA0;animation-duration:16.4s;animation-delay:-6.5s"/><circle cx="518" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstA1;animation-duration:16.4s;animation-delay:-6.5s"/><circle cx="518" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstA2;animation-duration:16.4s;animation-delay:-6.5s"/><circle cx="518" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstA3;animation-duration:16.4s;animation-delay:-6.5s"/><circle cx="518" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstA4;animation-duration:16.4s;animation-delay:-6.5s"/>
+  </g></g>
+  <g class="fall" style="animation-duration:16.6s;animation-delay:-1.8s"><g class="sway" style="animation-duration:5.0s">
+    <g class="melt" style="animation-name:meltA;animation-duration:16.6s;animation-delay:-1.8s"><g class="spin" style="animation-duration:3.8s"><use xlink:href="#leafA" href="#leafA" transform="translate(343 0) scale(1.18)" fill="#4f8a5b"/></g></g>
+    <circle cx="343" cy="0" r="1.6" fill="#4f8a5b" class="speck" style="animation-name:burstA0;animation-duration:16.6s;animation-delay:-1.8s"/><circle cx="343" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstA1;animation-duration:16.6s;animation-delay:-1.8s"/><circle cx="343" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstA2;animation-duration:16.6s;animation-delay:-1.8s"/><circle cx="343" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstA3;animation-duration:16.6s;animation-delay:-1.8s"/><circle cx="343" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstA4;animation-duration:16.6s;animation-delay:-1.8s"/>
+  </g></g>
+  <g class="fall" style="animation-duration:17.7s;animation-delay:-1.2s"><g class="sway" style="animation-duration:4.2s">
+    <g class="melt" style="animation-name:meltC;animation-duration:17.7s;animation-delay:-1.2s"><g class="spin" style="animation-duration:4.3s"><use xlink:href="#leafB" href="#leafB" transform="translate(284 0) scale(0.91)" fill="#6a994e"/></g></g>
+    <circle cx="284" cy="0" r="1.6" fill="#6a994e" class="speck" style="animation-name:burstC0;animation-duration:17.7s;animation-delay:-1.2s"/><circle cx="284" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstC1;animation-duration:17.7s;animation-delay:-1.2s"/><circle cx="284" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstC2;animation-duration:17.7s;animation-delay:-1.2s"/><circle cx="284" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstC3;animation-duration:17.7s;animation-delay:-1.2s"/><circle cx="284" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstC4;animation-duration:17.7s;animation-delay:-1.2s"/>
+  </g></g>
+  <g class="fall" style="animation-duration:14.7s;animation-delay:-12.5s"><g class="sway" style="animation-duration:5.8s">
+    <g class="melt" style="animation-name:meltA;animation-duration:14.7s;animation-delay:-12.5s"><g class="spin" style="animation-duration:4.4s"><use xlink:href="#leafB" href="#leafB" transform="translate(193 0) scale(0.81)" fill="#6a994e"/></g></g>
+    <circle cx="193" cy="0" r="1.6" fill="#6a994e" class="speck" style="animation-name:burstA0;animation-duration:14.7s;animation-delay:-12.5s"/><circle cx="193" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstA1;animation-duration:14.7s;animation-delay:-12.5s"/><circle cx="193" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstA2;animation-duration:14.7s;animation-delay:-12.5s"/><circle cx="193" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstA3;animation-duration:14.7s;animation-delay:-12.5s"/><circle cx="193" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstA4;animation-duration:14.7s;animation-delay:-12.5s"/>
+  </g></g>
+  <g class="fall" style="animation-duration:18.5s;animation-delay:-13.7s"><g class="sway" style="animation-duration:4.8s">
+    <g class="melt" style="animation-name:meltC;animation-duration:18.5s;animation-delay:-13.7s"><g class="spin" style="animation-duration:4.8s"><use xlink:href="#leafA" href="#leafA" transform="translate(464 0) scale(0.91)" fill="#a7c957"/></g></g>
+    <circle cx="464" cy="0" r="1.6" fill="#a7c957" class="speck" style="animation-name:burstC0;animation-duration:18.5s;animation-delay:-13.7s"/><circle cx="464" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstC1;animation-duration:18.5s;animation-delay:-13.7s"/><circle cx="464" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstC2;animation-duration:18.5s;animation-delay:-13.7s"/><circle cx="464" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstC3;animation-duration:18.5s;animation-delay:-13.7s"/><circle cx="464" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstC4;animation-duration:18.5s;animation-delay:-13.7s"/>
+  </g></g>
+  <g class="fall" style="animation-duration:18.1s;animation-delay:-16.5s"><g class="sway" style="animation-duration:5.3s">
+    <g class="melt" style="animation-name:meltB;animation-duration:18.1s;animation-delay:-16.5s"><g class="spin" style="animation-duration:4.1s"><use xlink:href="#leafA" href="#leafA" transform="translate(486 0) scale(0.98)" fill="#93c47d"/></g></g>
+    <circle cx="486" cy="0" r="1.6" fill="#93c47d" class="speck" style="animation-name:burstB0;animation-duration:18.1s;animation-delay:-16.5s"/><circle cx="486" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstB1;animation-duration:18.1s;animation-delay:-16.5s"/><circle cx="486" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstB2;animation-duration:18.1s;animation-delay:-16.5s"/><circle cx="486" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstB3;animation-duration:18.1s;animation-delay:-16.5s"/><circle cx="486" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstB4;animation-duration:18.1s;animation-delay:-16.5s"/>
+  </g></g>
+  <g class="fall" style="animation-duration:19.4s;animation-delay:-6.9s"><g class="sway" style="animation-duration:4.2s">
+    <g class="melt" style="animation-name:meltA;animation-duration:19.4s;animation-delay:-6.9s"><g class="spin" style="animation-duration:4.6s"><use xlink:href="#leafB" href="#leafB" transform="translate(554 0) scale(1.03)" fill="#93c47d"/></g></g>
+    <circle cx="554" cy="0" r="1.6" fill="#93c47d" class="speck" style="animation-name:burstA0;animation-duration:19.4s;animation-delay:-6.9s"/><circle cx="554" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstA1;animation-duration:19.4s;animation-delay:-6.9s"/><circle cx="554" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstA2;animation-duration:19.4s;animation-delay:-6.9s"/><circle cx="554" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstA3;animation-duration:19.4s;animation-delay:-6.9s"/><circle cx="554" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstA4;animation-duration:19.4s;animation-delay:-6.9s"/>
+  </g></g>
+  <g class="fall" style="animation-duration:18.7s;animation-delay:-14.2s"><g class="sway" style="animation-duration:4.2s">
+    <g class="melt" style="animation-name:meltA;animation-duration:18.7s;animation-delay:-14.2s"><g class="spin" style="animation-duration:4.0s"><use xlink:href="#leafB" href="#leafB" transform="translate(240 0) scale(0.84)" fill="#93c47d"/></g></g>
+    <circle cx="240" cy="0" r="1.6" fill="#93c47d" class="speck" style="animation-name:burstA0;animation-duration:18.7s;animation-delay:-14.2s"/><circle cx="240" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstA1;animation-duration:18.7s;animation-delay:-14.2s"/><circle cx="240" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstA2;animation-duration:18.7s;animation-delay:-14.2s"/><circle cx="240" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstA3;animation-duration:18.7s;animation-delay:-14.2s"/><circle cx="240" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstA4;animation-duration:18.7s;animation-delay:-14.2s"/>
+  </g></g>
+  <g class="fall" style="animation-duration:17.0s;animation-delay:-12.4s"><g class="sway" style="animation-duration:5.8s">
+    <g class="melt" style="animation-name:meltA;animation-duration:17.0s;animation-delay:-12.4s"><g class="spin" style="animation-duration:5.0s"><use xlink:href="#leafB" href="#leafB" transform="translate(44 0) scale(1.06)" fill="#6a994e"/></g></g>
+    <circle cx="44" cy="0" r="1.6" fill="#6a994e" class="speck" style="animation-name:burstA0;animation-duration:17.0s;animation-delay:-12.4s"/><circle cx="44" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstA1;animation-duration:17.0s;animation-delay:-12.4s"/><circle cx="44" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstA2;animation-duration:17.0s;animation-delay:-12.4s"/><circle cx="44" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstA3;animation-duration:17.0s;animation-delay:-12.4s"/><circle cx="44" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstA4;animation-duration:17.0s;animation-delay:-12.4s"/>
+  </g></g>
+  <g class="fall" style="animation-duration:19.7s;animation-delay:-8.8s"><g class="sway" style="animation-duration:5.7s">
+    <g class="melt" style="animation-name:meltA;animation-duration:19.7s;animation-delay:-8.8s"><g class="spin" style="animation-duration:5.4s"><use xlink:href="#leafB" href="#leafB" transform="translate(665 0) scale(0.8)" fill="#7fb069"/></g></g>
+    <circle cx="665" cy="0" r="1.6" fill="#7fb069" class="speck" style="animation-name:burstA0;animation-duration:19.7s;animation-delay:-8.8s"/><circle cx="665" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstA1;animation-duration:19.7s;animation-delay:-8.8s"/><circle cx="665" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstA2;animation-duration:19.7s;animation-delay:-8.8s"/><circle cx="665" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstA3;animation-duration:19.7s;animation-delay:-8.8s"/><circle cx="665" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstA4;animation-duration:19.7s;animation-delay:-8.8s"/>
+  </g></g>
+  <g class="fall" style="animation-duration:16.8s;animation-delay:-5.7s"><g class="sway" style="animation-duration:4.8s">
+    <g class="melt" style="animation-name:meltC;animation-duration:16.8s;animation-delay:-5.7s"><g class="spin" style="animation-duration:5.4s"><use xlink:href="#leafA" href="#leafA" transform="translate(89 0) scale(0.9)" fill="#b8e0a0"/></g></g>
+    <circle cx="89" cy="0" r="1.6" fill="#b8e0a0" class="speck" style="animation-name:burstC0;animation-duration:16.8s;animation-delay:-5.7s"/><circle cx="89" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstC1;animation-duration:16.8s;animation-delay:-5.7s"/><circle cx="89" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstC2;animation-duration:16.8s;animation-delay:-5.7s"/><circle cx="89" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstC3;animation-duration:16.8s;animation-delay:-5.7s"/><circle cx="89" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstC4;animation-duration:16.8s;animation-delay:-5.7s"/>
+  </g></g>
+  <g class="fall" style="animation-duration:17.9s;animation-delay:-14.9s"><g class="sway" style="animation-duration:4.0s">
+    <g class="melt" style="animation-name:meltA;animation-duration:17.9s;animation-delay:-14.9s"><g class="spin" style="animation-duration:4.3s"><use xlink:href="#leafA" href="#leafA" transform="translate(644 0) scale(0.95)" fill="#b8e0a0"/></g></g>
+    <circle cx="644" cy="0" r="1.6" fill="#b8e0a0" class="speck" style="animation-name:burstA0;animation-duration:17.9s;animation-delay:-14.9s"/><circle cx="644" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstA1;animation-duration:17.9s;animation-delay:-14.9s"/><circle cx="644" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstA2;animation-duration:17.9s;animation-delay:-14.9s"/><circle cx="644" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstA3;animation-duration:17.9s;animation-delay:-14.9s"/><circle cx="644" cy="0" r="1.3" fill="#ffffff" class="speck" style="animation-name:burstA4;animation-duration:17.9s;animation-delay:-14.9s"/>
+  </g></g>
+  </g>
+</svg>

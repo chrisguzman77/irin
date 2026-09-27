@@ -17,6 +17,9 @@ const GAP_MIN = 15;            // don't join points across a gap this long (matc
 const DISCONNECT_BANNER_MS = 15000;
 const TARGET_LOW = 70;         // time-in-range band, consensus 70-180 mg/dL
 const TARGET_HIGH = 180;
+const LINE_IN = "#EFEEEA";     // graph line in range (70-180): brand Off-white
+const LINE_HIGH = "#ffd60a";   // graph line above range: yellow
+const LINE_LOW = "#ff3b30";    // graph line below range: red
 const POLL_MS = 5000;          // the Pi's clock and display mode, polled (at 60x replay: 5 clock-min)
 const MODES = ["detail", "night", "morning"];
 
@@ -41,12 +44,17 @@ const state = {
   piDate: null,        // "YYYY-MM-DD" of the Pi's clock, to match a report's night_date
   report: null,        // MorningReport (GET /api/reports/latest), fetched in morning mode
   alarm: { state: "idle", trigger_type: null },  // AlarmState
-  basalNudge: "none",
-  familyStories: [],
+  presence: null,      // PresenceState (snapshot presence + presence_change): drives the idle screen
+  basalNudge: "none",  // the scheduler's basal nudge level: none | visual | email
+  familyStories: [],   // FamilyStory list of the latest night (snapshot family_story_status + updates)
   doctorMessages: [],  // pending DoctorMessage list (snapshot pending_doctor_messages + updates)
-  doctorName: null,    // the paired doctor's display name (snapshot pairing_state)
+  doctorName: null,    // the one paired doctor's display name (irinDoctorName of pairing_state)
+  doctorSenders: {},   // message_id -> that message's own doctor_display_name (e.g. the simulated Spark)
   doctorMsg: "",
-  doctorAsking: null,  // message_id the keypad is open for   // FamilyStory list of the latest night (snapshot family_story_status + updates)  // the scheduler's basal nudge level: none | visual | email
+  doctorAsking: null,  // message_id the keypad is open for
+  pairing: {},         // pairing_state (snapshot + pairing_state messages)
+  planState: {},       // Step Watch plan_state (snapshot + plan_state messages); {active: false} = no watch
+  activePlan: null,    // the snapshot's active_plan (TitrationPlan), for the fallback in renderWatch
   ackMsg: "",
 };
 
@@ -117,9 +125,13 @@ function onMessage(msg) {
       state.forecast = p.forecast || null;
       state.forecastNote = "";
       state.alarm = p.alarm || { state: "idle", trigger_type: null };
+      state.presence = p.presence || null;
       state.familyStories = Array.isArray(p.family_story_status) ? p.family_story_status : [];
       state.doctorMessages = Array.isArray(p.pending_doctor_messages) ? p.pending_doctor_messages : [];
-      state.doctorName = (p.pairing_state && p.pairing_state.doctor_display_name) || null;
+      loadDoctorSenders();
+      setPairing(p.pairing_state);
+      state.planState = p.plan_state || {};
+      state.activePlan = p.active_plan || null;
       if (p.latest_reading) addReading(p.latest_reading);
       else state.latest = null;
       backfillHistory();
@@ -143,6 +155,8 @@ function onMessage(msg) {
       const m = p.message || p;
       if (m && typeof m.message_id === "string" && (m.status || "pending") === "pending")
         state.doctorMessages = state.doctorMessages.filter((x) => x.message_id !== m.message_id).concat([m]);
+      if (m && typeof m.message_id === "string" && typeof p.doctor_display_name === "string" && p.doctor_display_name.trim())
+        state.doctorSenders[m.message_id] = p.doctor_display_name.trim();
       break;
     }
     case "doctor_message_resolved": {
@@ -158,6 +172,15 @@ function onMessage(msg) {
       break;
     case "settings_change":
       state.settings = p.settings || p;
+      break;
+    case "pairing_state":
+      setPairing(p);
+      break;
+    case "plan_state":
+      state.planState = p || {};
+      break;
+    case "presence_change":
+      state.presence = p;
       break;
     default:
       return; // other types belong to later steps; the hub's echo replies have no type
@@ -233,6 +256,20 @@ const screenMode = () => (state.clockSynced ? state.displayMode : "detail");
 
 const isDisconnected = () => !state.connected && Date.now() - state.downSince > DISCONNECT_BANNER_MS;
 
+// The 30-min prediction, shown as TEXT under the current number and as the
+// DOTTED graph line, in one colour. forecast_v1 is a 20th-percentile forecast
+// ("how low it could plausibly get"), so the words say "could be as low as",
+// never a bare "predicted". It updates on every forecast_update (each new
+// reading, ~5 min) and, like the dotted line, only on fresh data (invariant 1).
+const PREDICTION_COLOR = "#B1D2BD";
+
+function predictionText() {
+  const r = state.latest;
+  const fc = state.forecast;
+  if (!fc || !r || r.is_stale || isDisconnected() || fc.predicted_mgdl == null) return null;
+  return `could be as low as ${Math.round(fc.predicted_mgdl)} in ${fc.horizon_min ?? 30} min`;
+}
+
 function render() {
   const r = state.latest;
   const stale = !r || r.is_stale;
@@ -266,6 +303,11 @@ function render() {
   $("night-trend").textContent = $("morning-trend").textContent = arrow;
   const now = state.piClock ?? (r ? toMs(r.timestamp) : null);
   $("night-clock").textContent = now === null ? "--:--" : hhmm(now);
+  const pred = predictionText();
+  for (const id of ["prediction", "night-prediction"]) {
+    $(id).textContent = pred ?? "";
+    $(id).classList.toggle("hidden", pred === null);
+  }
   if (mode === "morning") renderMorning();
 
   if (r) {
@@ -280,11 +322,88 @@ function render() {
   // IOB, last dose, and today's TIR are not in the snapshot yet (contracts
   // request to Chris, see journal); the tiles stay "—" until they are.
   renderAlarm(num, arrow);
+  renderWatch();
+  renderPair();
   renderDoctor();
   if (mode === "detail") drawGraph();
+  updateIdle();
+}
+
+// --- idle screen ---
+// Shown only while the Pi's presence is Away (nobody in the radar's range for
+// AWAY_AFTER_MIN; never at night, backend rule) AND nothing needs a person:
+// any alarm state other than idle (warning, low, acknowledged, re-armed,
+// stale, high) or a reading below the low threshold keeps the normal screen.
+// Waking because someone is back plays the 2 s leaves-up sequence; waking
+// because of an alarm or a low is instant (the alarm takeover is above it
+// anyway). It only reads state and sends nothing.
+const WAKE_MS = 2000;
+let idleShown = false;
+let wakeTimer = null;
+
+function needsPerson() {
+  const a = state.alarm || {};
+  if (a.state && a.state !== "idle") return true;
+  const r = state.latest;
+  const low = (state.settings && Number(state.settings.low_threshold)) || 70;
+  return !!(r && typeof r.glucose_mgdl === "number" && r.glucose_mgdl < low); // stale or not
+}
+
+function isIdle() {
+  const pr = state.presence;
+  return !!pr && pr.mode === "away" && !needsPerson();
+}
+
+function updateIdle() {
+  const el = $("idle");
+  if (isIdle()) {
+    if (wakeTimer) { clearTimeout(wakeTimer); wakeTimer = null; } // left again mid-wake
+    el.classList.remove("waking", "instant");
+    el.classList.add("on");
+    idleShown = true;
+    return;
+  }
+  if (needsPerson() && (idleShown || wakeTimer)) { // alarm or low: gone now, no animation
+    if (wakeTimer) { clearTimeout(wakeTimer); wakeTimer = null; }
+    el.classList.add("instant");
+    el.classList.remove("on", "waking");
+    idleShown = false;
+    return;
+  }
+  if (!idleShown) return;
+  idleShown = false; // someone is back: leaves sweep up, then the main screen
+  el.classList.remove("instant");
+  el.classList.add("waking");
+  wakeTimer = setTimeout(() => {
+    wakeTimer = null;
+    el.classList.remove("on", "waking");
+  }, WAKE_MS);
 }
 
 // --- doctor-message takeover (R4, invariant 8) ---
+
+// Each pending message's own sender name (GET /api/rounds/messages carries
+// doctor_display_name per message; the snapshot's DoctorMessage has none).
+// A read only, with the kiosk's cached PIN if there is one: it never prompts,
+// and without it the paired-doctor rule names the sender.
+async function loadDoctorSenders() {
+  const pin = cachedPin();
+  if (!pin || !state.doctorMessages.length) return;
+  try {
+    const res = await fetch("/api/rounds/messages", { headers: { "X-PIN": pin }, cache: "no-store" });
+    if (!res.ok) return;
+    const docs = await res.json();
+    if (!Array.isArray(docs)) return;
+    for (const d of docs) {
+      const id = d && d.message && d.message.message_id;
+      if (typeof id === "string" && typeof d.doctor_display_name === "string" && d.doctor_display_name.trim())
+        state.doctorSenders[id] = d.doctor_display_name.trim();
+    }
+    renderDoctor();
+  } catch {
+    /* the paired-doctor rule stays */
+  }
+}
 
 // The oldest pending message, echoed in plain words (doctor-echo.js). Confirm
 // and Decline are fresh-PIN verbs: the keypad always opens (postFresh). The
@@ -295,7 +414,7 @@ function renderDoctor() {
   const m = state.doctorMessages[0];
   box.classList.toggle("hidden", !m);
   if (!m) return;
-  const e = window.irinDoctorEcho(m, state.doctorName);
+  const e = window.irinDoctorEcho(m, state.doctorSenders[m.message_id] || state.doctorName);
   const n = state.doctorMessages.length;
   $("doctor-count").textContent = n > 1 ? `1 of ${n} messages` : "";
   $("doctor-who").textContent = `${e.who}:`;
@@ -323,6 +442,190 @@ async function answerDoctor(verb) {
   if (res.cancelled) return;
   state.doctorMsg = res.ok ? "sent — waiting for your Irin" : res.reason;
   render();
+}
+
+// --- Step Watch strip (R1): where the watch is, as a glance; the app carries every input ---
+
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const dayLabel = (iso) => { const [, m, d] = String(iso).slice(0, 10).split("-").map(Number); return m ? `${MONTHS[m - 1]} ${d}` : ""; };
+// While the snapshot does not carry plan_state (contracts.StateSnapshot has no
+// such field yet: FOR CHRIS), the strip applies the Pi's own step_watch rules to
+// the snapshot's active_plan on the Pi's date: the current step is the latest
+// planned_start on or before today, day 1 is its planned start, the next step
+// is the earliest later one. A plan_state message always wins.
+function planFromActive(plan, today) {
+  if (!plan || plan.status !== "active" || !today || !Array.isArray(plan.steps)) return {};
+  const started = plan.steps.filter((s) => s.planned_start <= today).sort((a, b) => a.planned_start.localeCompare(b.planned_start));
+  const later = plan.steps.filter((s) => s.planned_start > today).sort((a, b) => a.planned_start.localeCompare(b.planned_start));
+  const cur = started[started.length - 1];
+  const utc = (iso) => { const [y, m, d] = iso.slice(0, 10).split("-").map(Number); return Date.UTC(y, m - 1, d); };
+  const days = (a, b) => Math.round((utc(a) - utc(b)) / 86400000);
+  return { active: true, drug_label: plan.drug_label, dose_label: cur ? cur.dose_label : null,
+    day_in_step: cur ? days(today, cur.planned_start) + 1 : null, next_step_on: later[0] ? later[0].planned_start : null };
+}
+function renderWatch() {
+  const w = typeof (state.planState || {}).active === "boolean" ? state.planState : planFromActive(state.activePlan, state.piDate);
+  const on = w.active === true && typeof w.dose_label === "string";
+  $("watch-strip").classList.toggle("hidden", !on);
+  if (!on) return;
+  const parts = [`Step Watch · ${w.drug_label || ""} ${w.dose_label}`.replace(/\s+/g, " ")];
+  if (typeof w.day_in_step === "number") parts.push(`day ${w.day_in_step}`);
+  if (w.next_step_on) parts.push(`next step ${dayLabel(w.next_step_on)}`);
+  $("watch-strip").textContent = parts.join(" · ");
+}
+
+// --- Share with my doctor (R1): the QR screen ---
+
+// POST /api/pair/start (PIN from the keypad) answers with the QR URL; only
+// the screen that started a pairing can draw its QR (pairing_state never
+// carries the token). The Pi learns that the doctor's browser joined only
+// when asked (GET /api/pair/status), so this screen polls while its QR is
+// up, with the PIN typed for Start, held in memory for this one pairing
+// (never the cached ack PIN, never stored). Confirm is a fresh-PIN verb: the
+// keypad opens every time (postFresh). Nothing is shared until Confirm.
+const PAIR_POLL_MS = 3000;
+const pair = { open: false, qr: null, pin: null, deadline: 0, msg: "", timer: null, busy: false };
+
+function setPairing(ps) {
+  const before = state.pairing.status;
+  state.pairing = ps && typeof ps === "object" ? ps : {};
+  state.doctorName = window.irinDoctorName(state.pairing);
+  const now = state.pairing.status;
+  if (now === "awaiting_confirm" && before !== "awaiting_confirm") pair.open = true; // the doctor joined: show the code here too
+  if (now !== "awaiting_scan" && now !== "awaiting_confirm" && pair.qr) endQr(""); // confirmed, expired, or the mode changed
+}
+
+function endQr(msg) {
+  clearInterval(pair.timer);
+  pair.timer = null;
+  pair.qr = null;
+  pair.pin = null;
+  pair.msg = msg;
+}
+
+async function pollPair() {
+  if (!pair.pin) return;
+  if (Date.now() > pair.deadline) {
+    endQr("The code expired. Start again when the doctor is ready.");
+    return render();
+  }
+  try {
+    const res = await fetch("/api/pair/status", { headers: { "X-PIN": pair.pin }, cache: "no-store" });
+    if (res.status === 401) endQr("PIN not accepted");
+    else if (res.ok) setPairing(await res.json());
+  } catch { /* the next poll tries again */ }
+  render();
+}
+
+async function startPairing() {
+  if (pair.busy) return;
+  const pin = await promptPin("Enter PIN to share with your doctor");
+  if (!pin) return;
+  pair.busy = true;
+  pair.msg = "starting…";
+  render();
+  try {
+    const res = await fetch("/api/pair/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-PIN": pin },
+      body: JSON.stringify({ peer_kind: "doctor" }),
+    });
+    if (res.status === 401) { pair.msg = "PIN not accepted"; return; }
+    if (!res.ok) {
+      const b = await res.json().catch(() => null);
+      pair.msg = `could not start: ${(b && typeof b.detail === "string" && b.detail) || `the device refused (${res.status})`}`;
+      return;
+    }
+    const b = await res.json();
+    endQr("");
+    pair.qr = { url: b.qr_url, demo: !!b.is_demo };
+    pair.pin = pin;
+    pair.deadline = Date.now() + (Number(b.expires_in_s) || 600) * 1000;
+    pair.timer = setInterval(pollPair, PAIR_POLL_MS);
+    pollPair();
+  } catch {
+    pair.msg = "could not reach the device";
+  } finally {
+    pair.busy = false;
+    render();
+  }
+}
+
+async function confirmPairing() {
+  if (pair.busy) return;
+  pair.busy = true;
+  pair.msg = "confirming…"; // shown once the keypad closes: the Pi asks the relay before it answers
+  render();
+  try {
+    const res = await postFresh("/api/pair/confirm", undefined, "Enter PIN to confirm sharing");
+    if (res.cancelled) { pair.msg = ""; return; }
+    pair.msg = res.ok ? `Now sharing with ${(res.value && res.value.doctor_display_name) || "your doctor"}` : res.reason;
+  } finally {
+    pair.busy = false;
+    render();
+  }
+}
+
+// The QR as SVG: one path, a dark square per module, 4-module quiet zone.
+function qrSvg(text) {
+  const q = window.qrcode(0, "M");
+  q.addData(text);
+  q.make();
+  const n = q.getModuleCount(), m = 4;
+  let d = "";
+  for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) if (q.isDark(r, c)) d += `M${c + m} ${r + m}h1v1h-1z`;
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("viewBox", `0 0 ${n + 2 * m} ${n + 2 * m}`);
+  svg.setAttribute("shape-rendering", "crispEdges");
+  svg.setAttribute("role", "img");
+  svg.setAttribute("aria-label", "pairing QR code");
+  const path = document.createElementNS(ns, "path");
+  path.setAttribute("d", d);
+  path.setAttribute("fill", "#000");
+  svg.append(path);
+  return svg;
+}
+
+let pairQrDrawn = null; // the URL the SVG on screen encodes
+function renderPair() {
+  $("pair").classList.toggle("hidden", !pair.open);
+  if (!pair.open) return;
+  const ps = state.pairing || {};
+  const status = ps.status || "idle";
+  const sharing = (Array.isArray(ps.pairings) ? ps.pairings : []).filter((p) => p && p.status === "paired");
+  $("pair-list").textContent = sharing.length
+    ? "Sharing with " + sharing.map((p) => p.doctor_display_name + (p.is_demo ? " (DEMO)" : "")).join(", ")
+    : "Not sharing with anyone yet";
+
+  const showQr = status === "awaiting_scan" && !!pair.qr;
+  $("pair-qr").classList.toggle("hidden", !showQr);
+  if (showQr && pairQrDrawn !== pair.qr.url) {
+    $("pair-qr").replaceChildren(qrSvg(pair.qr.url));
+    pairQrDrawn = pair.qr.url;
+  }
+  if (!showQr) { $("pair-qr").replaceChildren(); pairQrDrawn = null; }
+
+  const joined = status === "awaiting_confirm" && typeof ps.code4 === "string";
+  $("pair-code").classList.toggle("hidden", !joined);
+  $("pair-code").textContent = joined ? ps.code4 : "";
+  $("pair-confirm").classList.toggle("hidden", !joined);
+  $("pair-start").classList.toggle("hidden", status !== "idle");
+  $("pair-start").disabled = $("pair-confirm").disabled = pair.busy;
+
+  let text = "";
+  if (joined) {
+    const who = ps.doctor_display_name || "The doctor";
+    text = `${who}'s screen should show this same code. Confirm only if it matches: nothing is shared until you do.`;
+  } else if (showQr) {
+    const left = Math.max(0, Math.round((pair.deadline - Date.now()) / 1000));
+    text = `Scan with the doctor's phone or computer. The code works once, for ${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")} more.`;
+    if (pair.qr.demo) text += " Demo pairing: it receives demo cards only.";
+  } else if (status === "awaiting_scan") {
+    text = "A pairing was started in the app: scan the code shown on the phone.";
+  }
+  $("pair-text").textContent = text;
+  $("pair-msg").textContent = pair.msg;
 }
 
 // --- morning (step 2 numbers, from the step 11 report) ---
@@ -497,7 +800,10 @@ async function postFresh(path, body, title = "Enter PIN to confirm") {
       body: body === undefined ? undefined : JSON.stringify(body),
     });
     if (res.status === 401) return { ok: false, badPin: true, reason: "PIN not accepted" };
-    if (!res.ok) return { ok: false, status: res.status, reason: `the device refused (${res.status})` };
+    if (!res.ok) {
+      const b = await res.json().catch(() => null);
+      return { ok: false, status: res.status, reason: (b && typeof b.detail === "string" && b.detail) || `the device refused (${res.status})` };
+    }
     return { ok: true, value: await res.json().catch(() => null) };
   } catch {
     return { ok: false, reason: "could not reach the device" };
@@ -569,7 +875,7 @@ function drawGraph() {
   const y = (v) => padT + (1 - (Math.min(Math.max(v, yMin), yMax) - yMin) / (yMax - yMin)) * plotH;
 
   // target band
-  ctx.fillStyle = "rgba(60, 180, 110, 0.14)";
+  ctx.fillStyle = "rgba(125, 155, 110, 0.20)";  // target band: brand Sage
   ctx.fillRect(padL, y(TARGET_HIGH), plotW, y(TARGET_LOW) - y(TARGET_HIGH));
 
   // y gridlines
@@ -577,16 +883,16 @@ function drawGraph() {
   ctx.textAlign = "right";
   ctx.textBaseline = "middle";
   for (const v of [TARGET_LOW, TARGET_HIGH, 250].filter((v) => v < yMax)) {
-    ctx.strokeStyle = v === TARGET_LOW ? "rgba(255,59,48,0.5)" : "#262626";
+    ctx.strokeStyle = v === TARGET_LOW ? "rgba(255,59,48,0.5)" : "#4A4C41";
     ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(padL, y(v)); ctx.lineTo(padL + plotW, y(v)); ctx.stroke();
-    ctx.fillStyle = "#777";
+    ctx.fillStyle = "#A9AA9E";
     ctx.fillText(String(v), padL - fs * 0.4, y(v));
   }
 
   if (!r) {
     ctx.textAlign = "center";
-    ctx.fillStyle = "#555";
+    ctx.fillStyle = "#8C8D82";
     ctx.fillText("waiting for readings", padL + plotW / 2, padT + plotH / 2);
     return;
   }
@@ -594,48 +900,63 @@ function drawGraph() {
   // x labels: every hour, Pi clock
   ctx.textAlign = "center";
   ctx.textBaseline = "top";
-  ctx.fillStyle = "#777";
+  ctx.fillStyle = "#A9AA9E";
   const hour = 3600000;
   for (let t = Math.ceil(tStart / hour) * hour; t <= tEnd; t += hour) {
-    ctx.strokeStyle = "#1a1a1a";
+    ctx.strokeStyle = "#3A3B33";
     ctx.beginPath(); ctx.moveTo(x(t), padT); ctx.lineTo(x(t), padT + plotH); ctx.stroke();
     ctx.fillText(hhmm(t), x(t), padT + plotH + fs * 0.4);
   }
 
   // "now" divider between history and forecast
   const tNow = toMs(r.timestamp);
-  ctx.strokeStyle = "#333";
+  ctx.strokeStyle = "#5C5E52";
   ctx.setLineDash([2, 4]);
   ctx.beginPath(); ctx.moveTo(x(tNow), padT); ctx.lineTo(x(tNow), padT + plotH); ctx.stroke();
   ctx.setLineDash([]);
 
-  // history line, broken across gaps
-  const lineColor = dim ? "#777" : "#e8e8e8";
-  ctx.strokeStyle = lineColor;
+  // history line, broken across gaps, no point markers (George, stepping in for
+  // Justin): the line itself is colored by range, white in 70-180, YELLOW above,
+  // RED below, switching exactly where it crosses 70 or 180 (each segment is
+  // split at the crossing, so a colour never bleeds past the threshold). Stale
+  // or disconnected data stays all grey (invariant 1: never drawn as live).
   ctx.lineWidth = Math.max(2, fs * 0.18);
   ctx.lineJoin = "round";
-  ctx.beginPath();
+  ctx.lineCap = "round";
+  const rangeColor = (v) => (dim ? "#777" : v < TARGET_LOW ? LINE_LOW : v > TARGET_HIGH ? LINE_HIGH : LINE_IN);
+  const piece = (t0, v0, t1, v1) => {
+    ctx.strokeStyle = rangeColor((v0 + v1) / 2);
+    ctx.beginPath(); ctx.moveTo(x(t0), y(v0)); ctx.lineTo(x(t1), y(v1)); ctx.stroke();
+  };
   let prev = null;
   for (const p of pts) {
-    if (!prev || p.t - prev.t > GAP_MIN * 60000) ctx.moveTo(x(p.t), y(p.mgdl));
-    else ctx.lineTo(x(p.t), y(p.mgdl));
+    if (prev && p.t - prev.t <= GAP_MIN * 60000) {
+      // the times (in order) where this segment crosses 70 or 180
+      const cuts = [TARGET_LOW, TARGET_HIGH]
+        .filter((th) => (prev.mgdl - th) * (p.mgdl - th) < 0)
+        .map((th) => prev.t + ((th - prev.mgdl) / (p.mgdl - prev.mgdl)) * (p.t - prev.t))
+        .sort((a, b) => a - b);
+      let t0 = prev.t, v0 = prev.mgdl;
+      for (const tc of cuts) {
+        const vc = prev.mgdl + ((tc - prev.t) / (p.t - prev.t)) * (p.mgdl - prev.mgdl);
+        piece(t0, v0, tc, vc);
+        t0 = tc; v0 = vc;
+      }
+      piece(t0, v0, p.t, p.mgdl);
+    } else {
+      // the first reading of a run (after a gap, or the very first) gets a cap
+      // in its range colour, so a lone reading between two gaps still shows
+      ctx.strokeStyle = rangeColor(p.mgdl);
+      ctx.beginPath(); ctx.moveTo(x(p.t), y(p.mgdl)); ctx.lineTo(x(p.t) + 0.1, y(p.mgdl)); ctx.stroke();
+    }
     prev = p;
   }
-  ctx.stroke();
-
-  // points colored by range
-  const dot = Math.max(2.5, fs * 0.22);
-  for (const p of pts) {
-    ctx.fillStyle = dim ? "#777"
-      : p.mgdl < TARGET_LOW ? "#ff3b30"
-      : p.mgdl > TARGET_HIGH ? "#ffb000" : "#e8e8e8";
-    ctx.beginPath(); ctx.arc(x(p.t), y(p.mgdl), dot, 0, Math.PI * 2); ctx.fill();
-  }
+  ctx.lineCap = "butt";
 
   // DOTTED forecast: latest reading -> predicted value at +horizon
   if (fc) {
     const ft = toMs(fc.timestamp) + fc.horizon_min * 60000;
-    ctx.strokeStyle = fc.predicted_mgdl < TARGET_LOW ? "#ff3b30" : "#9ab";
+    ctx.strokeStyle = PREDICTION_COLOR;  // the same colour as the prediction text under the number
     ctx.lineWidth = Math.max(2, fs * 0.18);
     ctx.lineCap = "round";
     ctx.setLineDash([0.1, fs * 0.55]);
@@ -647,7 +968,7 @@ function drawGraph() {
   if (!fc && state.forecastNote && !dim) {
     ctx.textAlign = "right";
     ctx.textBaseline = "top";
-    ctx.fillStyle = "#999";
+    ctx.fillStyle = "#A9AA9E";
     ctx.font = `${Math.round(fs * 0.85)}px system-ui, sans-serif`;
     ctx.fillText(state.forecastNote, padL + plotW, padT);
   }
@@ -659,6 +980,12 @@ window.addEventListener("resize", drawGraph);
 $("alarm-ack").addEventListener("click", onAckTap);
 $("doctor-confirm").addEventListener("click", () => answerDoctor("confirm"));
 $("doctor-decline").addEventListener("click", () => answerDoctor("decline"));
+$("share-open").addEventListener("click", () => { pair.open = true; pair.msg = ""; render(); });
+$("pair-close").addEventListener("click", () => { pair.open = false; endQr(""); render(); });
+$("pair-start").addEventListener("click", startPairing);
+$("pair-confirm").addEventListener("click", confirmPairing);
+// the QR countdown ticks without a message arriving
+setInterval(() => { if (pair.qr) render(); }, 1000);
 render();
 connect();
 pollDevice();

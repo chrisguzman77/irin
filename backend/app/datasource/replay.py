@@ -95,7 +95,17 @@ class ReplayDataSource(DataSource):
         return [self._to_reading(r) for r in self._available(now) if r[0] >= since]
 
     async def seek(self, to: datetime) -> None:
-        """R12: bulk-load readings up to `to`, advance clock.py to `to`, and let
-        the engine's idempotent catch-up generate every card that should exist
-        by then. Seeking twice never duplicates a card."""
-        raise NotImplementedError("R12: replay seek")
+        """R12: jump the clock to `to`. Every CSV row up to `to` is available at
+        once (the feed reads rows by the clock, so nothing is loaded twice), the
+        pause is lifted, and the engine's catch-up (rounds/catchup.py) generates
+        every card that should exist by then. Seeking twice never duplicates a
+        card. `to` must lie inside the scenario."""
+        if not (self.rows[0][0] <= to <= self.rows[-1][0]):
+            raise ValueError(f"seek target {to.isoformat()} is outside the scenario "
+                             f"({self.rows[0][0].isoformat()} to {self.rows[-1][0].isoformat()})")
+        self._paused_at = None
+        clock.set(speed=self.speed, start=to)
+
+    @property
+    def span(self) -> tuple[datetime, datetime]:
+        return self.rows[0][0], self.rows[-1][0]

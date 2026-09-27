@@ -5,12 +5,14 @@ and plans, R7 cards, R5 pairings, R9 doctor_messages, F3 family_stories)."""
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import date, datetime
 from pathlib import Path
 
 from .config import config
-from .contracts import AlarmEvent, FamilyStory, LowEvent, MorningReport, NightRecord, PresenceState, Reading, Treatment
+from .contracts import (AlarmEvent, FamilyStory, LowEvent, LowEventRecall, MorningReport, NightRecord, Pairing,
+                        PresenceState, Reading, SignalCard, SymptomCheck, TitrationPlan, Treatment)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS readings (
@@ -24,15 +26,17 @@ CREATE TABLE IF NOT EXISTS alarm_events (event_id TEXT PRIMARY KEY, json TEXT NO
 CREATE TABLE IF NOT EXISTS night_records (night_date TEXT PRIMARY KEY, json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS low_events (low_event_id TEXT PRIMARY KEY, json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS low_event_recalls (low_event_id TEXT PRIMARY KEY, json TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS symptom_checks (date TEXT PRIMARY KEY, json TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS symptom_checks (date TEXT NOT NULL, is_demo INTEGER NOT NULL, json TEXT NOT NULL, PRIMARY KEY (date, is_demo));
 CREATE TABLE IF NOT EXISTS cards (card_id TEXT PRIMARY KEY, json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS plans (plan_id TEXT PRIMARY KEY, json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS pairings (id INTEGER PRIMARY KEY AUTOINCREMENT, json TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS peer_pairings (doctor_id TEXT PRIMARY KEY, json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS doctor_messages (message_id TEXT PRIMARY KEY, json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS family_stories (story_id TEXT PRIMARY KEY, json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS reports (night_date TEXT PRIMARY KEY, json TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS presence_transitions (since TEXT PRIMARY KEY, json TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS buddy_events (id INTEGER PRIMARY KEY AUTOINCREMENT, json TEXT NOT NULL);
 """
 
 
@@ -44,6 +48,9 @@ def connect(path: str | Path | None = None) -> sqlite3.Connection:
 
 def init_db(path: str | Path | None = None) -> None:
     with connect(path) as conn:
+        cols = [r["name"] for r in conn.execute("PRAGMA table_info(symptom_checks)").fetchall()]
+        if cols and "is_demo" not in cols:  # the R10 work-in-progress table was keyed by date alone; it never left the branch
+            conn.execute("DROP TABLE symptom_checks")
         conn.executescript(SCHEMA)
         # columns added after the first Pi database was created (ALTER is idempotent by try)
         try:
@@ -193,6 +200,28 @@ def select_reading_rows(after_rowid: int, limit: int, conn: sqlite3.Connection |
                                 "source": r["source"], "is_stale": bool(r["is_stale"]), "is_demo": False}) for r in rows]
 
 
+FORWARDED_JSON_TABLES = ("alarm_events", "low_events", "night_records", "plans", "symptom_checks", "buddy_events")
+
+
+def select_json_rows(table: str, after_rowid: int, limit: int, conn: sqlite3.Connection | None = None) -> list[tuple[int, dict]]:
+    """The forwarder's reader for the JSON-document tables: rows past a rowid,
+    oldest first. INSERT OR REPLACE gives a rebuilt row a new rowid, so a
+    re-coded night or an updated plan is forwarded again and upserted."""
+    if table not in FORWARDED_JSON_TABLES:
+        raise ValueError(f"not a forwarded table: {table}")
+    own = conn is None
+    conn = conn or connect()
+    try:
+        rows = conn.execute(f"SELECT rowid AS rid, json FROM {table} WHERE rowid > ? ORDER BY rowid LIMIT ?",
+                            (after_rowid, limit)).fetchall()
+    except sqlite3.OperationalError:  # a table a later step creates (buddy_events) is simply empty until then
+        rows = []
+    finally:
+        if own:
+            conn.close()
+    return [(int(r["rid"]), json.loads(r["json"])) for r in rows]
+
+
 def select_treatment_rows(after_rowid: int, limit: int, conn: sqlite3.Connection | None = None) -> list[tuple[int, dict]]:
     own = conn is None
     conn = conn or connect()
@@ -203,6 +232,31 @@ def select_treatment_rows(after_rowid: int, limit: int, conn: sqlite3.Connection
     return [(int(r["rid"]), {"timestamp": r["timestamp"], "kind": r["kind"], "insulin_units": r["insulin_units"],
                                 "carbs_g": r["carbs_g"], "dose_label": r["dose_label"], "text": r["text"],
                                 "confirmed": bool(r["confirmed"]), "is_demo": bool(r["is_demo"])}) for r in rows]
+
+
+# --- Night Buddy (B2/B4): alert, call, treating, resolved, emergency; append-only,
+# read in insertion order by the cloud forwarder like the readings ---
+
+
+def insert_buddy_event(event: dict, conn: sqlite3.Connection | None = None) -> None:
+    """{event_id, kind, at, confidence, is_demo}: never a glucose value."""
+    own = conn is None
+    conn = conn or connect()
+    with conn:
+        conn.execute("INSERT INTO buddy_events (json) VALUES (?)", (json.dumps(event),))
+    if own:
+        conn.close()
+
+
+def select_buddy_event_rows(after_rowid: int = 0, limit: int = 500,
+                            conn: sqlite3.Connection | None = None) -> list[tuple[int, dict]]:
+    own = conn is None
+    conn = conn or connect()
+    rows = conn.execute("SELECT id, json FROM buddy_events WHERE id > ? ORDER BY id LIMIT ?",
+                        (after_rowid, limit)).fetchall()
+    if own:
+        conn.close()
+    return [(int(r["id"]), json.loads(r["json"])) for r in rows]
 
 
 # --- Family Story (F3): one row per story, replaced on status change ---
@@ -340,6 +394,15 @@ def upsert_low_event(event: LowEvent, conn: sqlite3.Connection | None = None) ->
         conn.close()
 
 
+def select_low_event(low_event_id: str, conn: sqlite3.Connection | None = None) -> LowEvent | None:
+    own = conn is None
+    conn = conn or connect()
+    r = conn.execute("SELECT json FROM low_events WHERE low_event_id = ?", (low_event_id,)).fetchone()
+    if own:
+        conn.close()
+    return LowEvent.model_validate_json(r["json"]) if r else None
+
+
 def replace_low_events(night_date: date, events: list[LowEvent], conn: sqlite3.Connection | None = None) -> None:
     """One transaction: the night's previous rows go, the new set is written."""
     own = conn is None
@@ -365,3 +428,204 @@ def select_low_events(since: date, until: date | None = None, conn: sqlite3.Conn
     events = [e for e in events if since <= e.night_date <= (until or date.max)]
     events.sort(key=lambda e: e.started_at)
     return events
+
+
+# --- pairings (R5): one row per peer, replaced on confirm and revoke ---
+
+
+def upsert_pairing(pairing: Pairing, conn: sqlite3.Connection | None = None) -> None:
+    own = conn is None
+    conn = conn or connect()
+    with conn:
+        conn.execute("INSERT OR REPLACE INTO peer_pairings VALUES (?, ?)", (pairing.doctor_id, pairing.model_dump_json()))
+    if own:
+        conn.close()
+
+
+def select_pairings(conn: sqlite3.Connection | None = None) -> list[Pairing]:
+    own = conn is None
+    conn = conn or connect()
+    rows = conn.execute("SELECT json FROM peer_pairings ORDER BY doctor_id").fetchall()
+    if own:
+        conn.close()
+    return [Pairing.model_validate_json(r["json"]) for r in rows]
+
+
+# --- cards (R7): one row per card_id with its delivery status; a re-evaluation replaces it ---
+
+
+def upsert_card(card: SignalCard, status: str = "unsent", recipients: list[str] | None = None,
+                event_key: str | None = None, conn: sqlite3.Connection | None = None) -> None:
+    own = conn is None
+    conn = conn or connect()
+    doc = {"card": card.model_dump(mode="json"), "status": status, "recipients": list(recipients or []),
+           "stored_at": card.generated_at.isoformat(), "event_key": event_key}
+    with conn:
+        conn.execute("INSERT OR REPLACE INTO cards VALUES (?, ?)", (card.card_id, json.dumps(doc)))
+    if own:
+        conn.close()
+
+
+def select_cards(limit: int = 100, conn: sqlite3.Connection | None = None) -> list[dict]:
+    """Newest first: {card, status, recipients, stored_at}."""
+    own = conn is None
+    conn = conn or connect()
+    rows = conn.execute("SELECT json FROM cards").fetchall()
+    if own:
+        conn.close()
+    docs = [json.loads(r["json"]) for r in rows]
+    docs.sort(key=lambda d: d["stored_at"], reverse=True)
+    return docs[:limit]
+
+
+# --- morning recall answers (R11 writes them; R8 reads them: empty until then) ---
+
+
+def upsert_recall(recall: LowEventRecall, conn: sqlite3.Connection | None = None) -> None:
+    own = conn is None
+    conn = conn or connect()
+    with conn:
+        conn.execute("INSERT OR REPLACE INTO low_event_recalls VALUES (?, ?)", (recall.low_event_id, recall.model_dump_json()))
+    if own:
+        conn.close()
+
+
+DEMO_JSON_TABLES = {"alarm_events": "event_id", "night_records": "night_date", "low_events": "low_event_id",
+                    "low_event_recalls": "low_event_id", "plans": "plan_id", "doctor_messages": "message_id"}
+
+
+def clear_demo_world(conn: sqlite3.Connection | None = None) -> dict[str, int]:
+    """R12: a DIFFERENT scenario starts from an empty demo world. Deletes every
+    is_demo row (nights, low events, questions, alarm episodes, plans, doctor
+    messages, cards, check-ins, demo-logged treatments) and the demo kv keys.
+    Live rows are never touched."""
+    own = conn is None
+    conn = conn or connect()
+    n: dict[str, int] = {}
+    with conn:
+        for table, key in DEMO_JSON_TABLES.items():
+            ids = [r[key] for r in conn.execute(f"SELECT {key}, json FROM {table}").fetchall()
+                   if json.loads(r["json"]).get("is_demo")]
+            conn.executemany(f"DELETE FROM {table} WHERE {key} = ?", [(i,) for i in ids])
+            n[table] = len(ids)
+        ids = [r["card_id"] for r in conn.execute("SELECT card_id, json FROM cards").fetchall()
+               if json.loads(r["json"]).get("card", {}).get("is_demo")]
+        conn.executemany("DELETE FROM cards WHERE card_id = ?", [(i,) for i in ids])
+        n["cards"] = len(ids)
+        n["symptom_checks"] = conn.execute("DELETE FROM symptom_checks WHERE is_demo = 1").rowcount
+        n["treatments"] = conn.execute("DELETE FROM treatments WHERE is_demo = 1").rowcount
+        conn.execute("DELETE FROM kv WHERE key LIKE 'step_watch:green:%' OR key LIKE '%:demo'")
+    if own:
+        conn.close()
+    return n
+
+
+def select_recall(low_event_id: str, conn: sqlite3.Connection | None = None) -> LowEventRecall | None:
+    own = conn is None
+    conn = conn or connect()
+    r = conn.execute("SELECT json FROM low_event_recalls WHERE low_event_id = ?", (low_event_id,)).fetchone()
+    if own:
+        conn.close()
+    return LowEventRecall.model_validate_json(r["json"]) if r else None
+
+
+def delete_recall(low_event_id: str, conn: sqlite3.Connection | None = None) -> None:
+    own = conn is None
+    conn = conn or connect()
+    with conn:
+        conn.execute("DELETE FROM low_event_recalls WHERE low_event_id = ?", (low_event_id,))
+    if own:
+        conn.close()
+
+
+def select_recalls(since: date, conn: sqlite3.Connection | None = None) -> list[LowEventRecall]:
+    own = conn is None
+    conn = conn or connect()
+    rows = conn.execute("SELECT json FROM low_event_recalls").fetchall()
+    if own:
+        conn.close()
+    recalls = [LowEventRecall.model_validate_json(r["json"]) for r in rows]
+    return [r for r in recalls if r.asked_at.date() >= since]
+
+
+# --- doctor messages (R9): {message: DoctorMessage json, sender_id, is_demo, received_at, expires_at, resolved_at?} ---
+
+
+def upsert_doctor_message(doc: dict, conn: sqlite3.Connection | None = None) -> None:
+    own = conn is None
+    conn = conn or connect()
+    with conn:
+        conn.execute("INSERT OR REPLACE INTO doctor_messages VALUES (?, ?)", (doc["message"]["message_id"], json.dumps(doc)))
+    if own:
+        conn.close()
+
+
+def select_doctor_message(message_id: str, conn: sqlite3.Connection | None = None) -> dict | None:
+    own = conn is None
+    conn = conn or connect()
+    r = conn.execute("SELECT json FROM doctor_messages WHERE message_id = ?", (message_id,)).fetchone()
+    if own:
+        conn.close()
+    return json.loads(r["json"]) if r else None
+
+
+def select_doctor_messages(limit: int = 200, conn: sqlite3.Connection | None = None) -> list[dict]:
+    """Newest first."""
+    own = conn is None
+    conn = conn or connect()
+    rows = conn.execute("SELECT json FROM doctor_messages").fetchall()
+    if own:
+        conn.close()
+    docs = [json.loads(r["json"]) for r in rows]
+    docs.sort(key=lambda d: d["received_at"], reverse=True)
+    return docs[:limit]
+
+
+# --- Step Watch (R10): plans and the daily stomach check-in ---
+
+
+def upsert_plan(plan: TitrationPlan, conn: sqlite3.Connection | None = None) -> None:
+    own = conn is None
+    conn = conn or connect()
+    with conn:
+        conn.execute("INSERT OR REPLACE INTO plans VALUES (?, ?)", (plan.plan_id, plan.model_dump_json()))
+    if own:
+        conn.close()
+
+
+def select_plans(conn: sqlite3.Connection | None = None) -> list[TitrationPlan]:
+    own = conn is None
+    conn = conn or connect()
+    rows = conn.execute("SELECT json FROM plans").fetchall()
+    if own:
+        conn.close()
+    return [TitrationPlan.model_validate_json(r["json"]) for r in rows]
+
+
+def upsert_symptom_check(check: SymptomCheck, conn: sqlite3.Connection | None = None) -> None:
+    own = conn is None
+    conn = conn or connect()
+    with conn:
+        conn.execute("INSERT OR REPLACE INTO symptom_checks VALUES (?, ?, ?)",
+                     (check.date.isoformat(), int(check.is_demo), check.model_dump_json()))
+    if own:
+        conn.close()
+
+
+def select_symptom_check(day: date, is_demo: bool, conn: sqlite3.Connection | None = None) -> SymptomCheck | None:
+    own = conn is None
+    conn = conn or connect()
+    r = conn.execute("SELECT json FROM symptom_checks WHERE date = ? AND is_demo = ?", (day.isoformat(), int(is_demo))).fetchone()
+    if own:
+        conn.close()
+    return SymptomCheck.model_validate_json(r["json"]) if r else None
+
+
+def select_symptom_checks(since: date, until: date, is_demo: bool, conn: sqlite3.Connection | None = None) -> list[SymptomCheck]:
+    own = conn is None
+    conn = conn or connect()
+    rows = conn.execute("SELECT json FROM symptom_checks WHERE date >= ? AND date <= ? AND is_demo = ? ORDER BY date",
+                        (since.isoformat(), until.isoformat(), int(is_demo))).fetchall()
+    if own:
+        conn.close()
+    return [SymptomCheck.model_validate_json(r["json"]) for r in rows]

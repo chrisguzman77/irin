@@ -35,6 +35,15 @@ def _bool(value: str) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _positive(value: str | None, default: float, floor: float) -> float:
+    """A finite float >= floor, else the default (a typo never yields 0 or NaN)."""
+    try:
+        x = float(value) if value not in (None, "") else default
+    except ValueError:
+        return default
+    return x if x == x and x != float("inf") and x >= floor else default
+
+
 @dataclass
 class Config:
     IRIN_HW: str = "mock"  # mock | real
@@ -69,6 +78,10 @@ class Config:
     ELEVENLABS_VOICE_DEVICE: str = ""
     ELEVENLABS_VOICE_ALERT: str = ""
     IRIN_DB: str = str(BACKEND_DIR / "irin.db")
+    # Presence (Away gates room outputs only, invariant 6). Defaults are the
+    # spec's; the Pi may shorten them for testing the idle screen.
+    AWAY_AFTER_MIN: float = 15.0  # sustained daytime absence before Away (never at night)
+    PRESENCE_SAMPLE_SECONDS: float = 30.0  # wall seconds between raw radar samples (30 = the alarm tick)
 
     @property
     def scenario_path(self) -> Path:
@@ -118,6 +131,8 @@ def load_config() -> Config:
         ELEVENLABS_VOICE_DEVICE=env.get("ELEVENLABS_VOICE_DEVICE", ""),
         ELEVENLABS_VOICE_ALERT=env.get("ELEVENLABS_VOICE_ALERT", ""),
         IRIN_DB=env.get("IRIN_DB", str(BACKEND_DIR / "irin.db")),
+        AWAY_AFTER_MIN=_positive(env.get("AWAY_AFTER_MIN"), 15.0, floor=0.5),
+        PRESENCE_SAMPLE_SECONDS=_positive(env.get("PRESENCE_SAMPLE_SECONDS"), 30.0, floor=0.5),
     )
 
 

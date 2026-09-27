@@ -74,8 +74,7 @@ def test_unreachable_cloud_keeps_the_cursors_and_never_raises(db):
     cache(0, 5, 10)
     cloud = Cloud(fail="down")
     f = make(cloud)
-    assert asyncio.run(f.tick()) is False and f.failures == 1 and f.cursors == {"readings": 0, "treatments": 0,
-                                                                                 "alarm_events": 0, "low_events": 0}
+    assert asyncio.run(f.tick()) is False and f.failures == 1 and all(v == 0 for v in f.cursors.values())
     cloud.fail = "503"
     assert asyncio.run(f.tick()) is False and f.failures == 2 and store.get_kv("forward_rowid:readings") is None
     cloud.fail = None  # the cloud comes back: everything since the cursor goes in one batch
@@ -211,3 +210,33 @@ def test_app_exposes_forwarder_state_and_stays_disabled_in_tests():
         assert run is main.runtime.datasource and rows and rows[0]["source"] == "replay"
         later_run, later = main._replay_rows(datetime.fromisoformat(rows[-1]["timestamp"]))
         assert later_run is run and later == []
+
+
+def test_alarm_low_night_plan_and_checkin_rows_are_forwarded_and_a_rebuild_is_sent_again(db):
+    """C5: every JSON-document table the dashboards draw from rides the same batch,
+    with its world; a rebuilt night (INSERT OR REPLACE, a new rowid) is forwarded again."""
+    from datetime import date
+
+    from app.contracts import AlarmEvent, NightRecord, SymptomCheck, TitrationPlan, TitrationStep
+    from app.forward import from_config
+
+    d = date(2020, 1, 1)
+    night = NightRecord(night_date=d, window_start=datetime(2020, 1, 1, 22), window_end=datetime(2020, 1, 2, 7),
+                        coverage_pct=95.0, reason_codes=["clean"], code_source="inferred", low_point_mgdl=98.0, is_demo=True)
+    store.upsert_night_record(night)
+    store.upsert_alarm_event(AlarmEvent(event_id="ae-1", tier="predicted_low", started_at=datetime(2020, 1, 2, 2), is_demo=True))
+    store.upsert_plan(TitrationPlan(plan_id="p1", drug_class="gip_glp1", drug_label="tirzepatide", started_at=d, on_insulin=True,
+                                    steps=[TitrationStep(index=0, dose_label="2.5 mg", planned_start=d)], status="active", is_demo=True))
+    store.upsert_symptom_check(SymptomCheck(date=d, gi="rough", is_demo=True))
+    cloud = Cloud()
+    fw = from_config(lambda cursor: (None, []))
+    fw.cloud_url, fw.device_id, fw.device_token, fw.transport = "http://cloud.test", "irin-test", "tok", cloud.transport()
+    assert asyncio.run(fw.tick()) is True
+    [b] = cloud.batches
+    assert b["night_records"][0]["night_date"] == "2020-01-01" and b["night_records"][0]["is_demo"] is True
+    assert b["alarm_events"][0]["event_id"] == "ae-1" and b["plans"][0]["plan_id"] == "p1"
+    assert b["plans"][0]["steps"][0]["dose_label"] == "2.5 mg" and b["symptom_checks"][0]["gi"] == "rough"
+    assert b["buddy_events"] == []  # the table arrives with the Buddy tier; empty until then, never an error
+    assert asyncio.run(fw.tick()) is True and len(cloud.batches) == 1  # nothing new
+    store.upsert_night_record(night.model_copy(update={"reason_codes": ["late_meal"]}))  # a re-coded night
+    assert asyncio.run(fw.tick()) is True and cloud.batches[-1]["night_records"][0]["reason_codes"] == ["late_meal"]

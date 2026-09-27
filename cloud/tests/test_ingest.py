@@ -124,3 +124,37 @@ def test_unreachable_storage_is_503_so_the_pi_keeps_its_cursor(monkeypatch):
     monkeypatch.setattr(ingest_mod, "TIGER_URI", "postgresql://postgres:postgres@127.0.0.1:1/irin?connect_timeout=1")
     with TestClient(app) as c:
         assert c.post("/v1/ingest", json=batch(), headers=H).status_code == 503
+
+
+def test_rounds_and_buddy_rows_upsert_under_the_right_device(scratch):
+    """C5: night_records, plans, symptom_checks and buddy_events from cloud/sql/005 (George's
+    column contract); a re-sent night replaces the stored one; demo rows under <device>-demo."""
+    import pathlib
+    import re
+
+    import psycopg
+
+    sql = (pathlib.Path(__file__).resolve().parents[1] / "sql" / "005_rounds_buddy.sql").read_text()
+    sql = re.sub(r"(?m)^SELECT create_hypertable.*$", "", sql)  # plain tables are enough for the contract
+    with psycopg.connect(scratch) as conn:
+        conn.execute(sql)
+    body = {"device_id": "irin-test-0001",
+            "night_records": [{"night_date": "2020-01-01", "window_start": "2020-01-01T22:00:00", "window_end": "2020-01-02T07:00:00",
+                               "coverage_pct": 95.0, "reason_codes": ["clean"], "code_source": "inferred", "low_point_mgdl": 98.0,
+                               "is_demo": True}],
+            "plans": [{"plan_id": "p1", "drug_class": "gip_glp1", "drug_label": "tirzepatide", "started_at": "2020-01-15",
+                       "steps": [{"index": 0, "dose_label": "2.5 mg", "planned_start": "2020-01-15"}], "status": "active", "is_demo": True}],
+            "symptom_checks": [{"date": "2020-01-16", "gi": "rough", "is_demo": True}],
+            "buddy_events": [{"event_id": "ba-1", "kind": "alert", "at": "2020-01-16T03:10:00", "confidence": "device_confirmed", "is_demo": True}]}
+    h = {"X-Device-Id": "irin-test-0001", "X-Device-Token": "tok-1234"}
+    with TestClient(app) as c:
+        r = c.post("/v1/ingest", json=body, headers=h)
+        assert r.status_code == 200, r.text
+        assert r.json()["stored"]["night_records"] == 1 and r.json()["stored"]["buddy_events"] == 1
+        body["night_records"][0]["reason_codes"] = ["late_meal"]
+        assert c.post("/v1/ingest", json=body, headers=h).status_code == 200
+    for table in ("night_records", "plans", "symptom_checks", "buddy_events"):
+        assert count(scratch, table, "irin-test-0001-demo") == 1 and count(scratch, table, "irin-test-0001") == 0, table
+    with psycopg.connect(scratch) as conn:
+        assert conn.execute("SELECT reason_codes FROM night_records").fetchone()[0] == ["late_meal"]
+        assert conn.execute("SELECT steps->0->>'dose_label' FROM plans").fetchone()[0] == "2.5 mg"

@@ -3,8 +3,10 @@ import type { components } from "../../types/pi";
 import { deviceFetch, PinRejected } from "../../lib/api";
 import type { StateSnapshot } from "../../lib/contracts";
 import {
-  basalNudge, injectLow, listScenarios, playScenario, setPaused, setSpeed, type ScenarioList,
+  basalNudge, buddyRung, injectLow, listScenarios, playScenario, seek, sendEvaluatedCard, setBrainOnly, setPaused, setSpeed,
+  sparkOffer, type ScenarioList, type SeekResult,
 } from "../../lib/demo";
+import { sendSampleCard, type SampleFixture } from "../../lib/cards";
 
 // Step 8: the demo panel, stagecraft reached from a small button, never a
 // main tab. The LIVE/DEMO switch drives POST /api/mode (PIN-gated); the
@@ -17,9 +19,30 @@ const SPEEDS = [1, 10, 60, 120] as const;
 const INJECT_MIN = 39;
 const INJECT_MAX = 401;
 
-// Sponsor controls that join the panel with their tiers (jump to step N day
-// D, send card, brain_only, Spark offer, start watch, buddy rung).
-const LATER_CONTROLS = ["Rounds and Night Buddy controls"];
+/** "Mar 22 09:00" from the Pi's naive local time, read as text */
+function clockText(iso: string | null | undefined): string {
+  if (!iso) return "";
+  const M = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  const [y, m, d] = iso.slice(0, 10).split("-").map(Number);
+  return y ? `${M[m - 1]} ${d} ${iso.slice(11, 16)}` : "";
+}
+
+/** The Pi's seek answer, in words. */
+function seekText(r: SeekResult): string {
+  const seeded = Object.entries(r.seeded ?? {})
+    .filter(([, n]) => n > 0)
+    .map(([k, n]) => `${n} ${k.replace(/_/g, " ")}`)
+    .join(", ");
+  return `Now at ${clockText(r.clock)} in ${r.scenario.replace(/_/g, " ")}: ${r.nights_built} nights built, ${
+    r.mornings_evaluated
+  } mornings evaluated${seeded ? `; seeded ${seeded}` : ""}.`;
+}
+
+const SEND_OUTCOME: Record<string, string> = {
+  sent: "Card sent to your paired doctor's inbox.",
+  unsent: "Card saved; the relay did not take it yet, your Irin will retry.",
+  no_recipient: "Card saved but not sent: no doctor is paired in demo mode. Pair one first.",
+};
 
 const btn = "rounded-lg px-3 py-2 font-semibold disabled:opacity-40";
 
@@ -41,6 +64,8 @@ export default function DemoPanel({ snap, baseUrl, onClose }: { snap: StateSnaps
   const [info, setInfo] = useState<ScenarioList | null>(null);
   const [picked, setPicked] = useState("");
   const [injectValue, setInjectValue] = useState("55");
+  const [seekStep, setSeekStep] = useState("2");
+  const [seekDay, setSeekDay] = useState("8");
   const mode = snap?.mode;
   const demo = mode === "replay";
 
@@ -67,7 +92,7 @@ export default function DemoPanel({ snap, baseUrl, onClose }: { snap: StateSnaps
       const err = await call();
       if (err) setMsg({ text: err, error: true });
       else {
-        setMsg({ text: done, error: false });
+        if (done) setMsg({ text: done, error: false }); // "" = the call set its own message
         after?.();
       }
     } catch (e) {
@@ -105,6 +130,11 @@ export default function DemoPanel({ snap, baseUrl, onClose }: { snap: StateSnaps
   const injectOk = injectValue !== "" && Number.isFinite(inject) && inject >= INJECT_MIN && inject <= INJECT_MAX;
   const speed = info?.speed;
   const paused = info?.paused ?? false; // the Pi's own answer (GET /api/demo/scenarios)
+  const brainOnly = info?.brain_only ?? false;
+  const stepN = seekStep === "" ? null : Number(seekStep);
+  const dayN = Number(seekDay);
+  const seekOk =
+    seekDay !== "" && Number.isInteger(dayN) && dayN >= 1 && (stepN === null || (Number.isInteger(stepN) && stepN >= 1));
 
   return (
     <section className="flex flex-col gap-4">
@@ -123,7 +153,9 @@ export default function DemoPanel({ snap, baseUrl, onClose }: { snap: StateSnaps
         {mode === undefined
           ? "Waiting for your Irin…"
           : demo
-            ? `Demo: replayed data, badged DEMO on every screen.${info?.current ? ` Playing ${info.current} at ${speed}×.` : ""}`
+            ? `Demo: replayed data, badged DEMO on every screen.${info?.current ? ` Playing ${info.current} at ${speed}×.` : ""}${
+                info?.clock ? ` Replay clock ${clockText(info.clock)}.` : ""
+              }`
             : "Live: real readings. Demo controls are off."}
       </p>
       {msg && (
@@ -229,12 +261,164 @@ export default function DemoPanel({ snap, baseUrl, onClose }: { snap: StateSnaps
           </button>
         </Control>
 
-        {LATER_CONTROLS.map((c) => (
-          <div key={c} className="flex items-center justify-between rounded-lg border border-neutral-800 px-3 py-3">
-            <span className="text-neutral-500">{c}</span>
-            <span className="text-xs text-neutral-600">arrive with their tiers</span>
+        <Control title="Send a card to the doctor" hint="a sample card, badged DEMO, sealed to the paired demo doctor">
+          <div className="flex gap-2">
+            {([
+              ["signal_card_standing", "Basal Check"],
+              ["signal_card_step", "Step check"],
+            ] as [SampleFixture, string][]).map(([f, label]) => (
+              <button
+                key={f}
+                type="button"
+                className={`${btn} flex-1 bg-neutral-900 text-neutral-200`}
+                onClick={() =>
+                  run(async () => {
+                    const r = await sendSampleCard(baseUrl, f);
+                    if (!r.ok) return r.reason;
+                    setMsg({ text: SEND_OUTCOME[r.status] ?? `Card ${r.status}.`, error: r.status === "no_recipient" });
+                    return "";
+                  }, "")
+                }
+              >
+                {label}
+              </button>
+            ))}
           </div>
-        ))}
+        </Control>
+
+        <Control title="Jump to step N day D" hint="the step-2 check appears at step 2 day 8; clear the step for day D of the scenario">
+          <div className="flex gap-2 items-center">
+            <span className="text-neutral-400 text-sm">step</span>
+            <input
+              aria-label="Plan step"
+              className="w-16 bg-neutral-900 border border-neutral-700 rounded-lg px-2 py-2 text-white"
+              type="number"
+              inputMode="numeric"
+              min={1}
+              value={seekStep}
+              onChange={(e) => setSeekStep(e.target.value)}
+            />
+            <span className="text-neutral-400 text-sm">day</span>
+            <input
+              aria-label="Day"
+              className="w-16 bg-neutral-900 border border-neutral-700 rounded-lg px-2 py-2 text-white"
+              type="number"
+              inputMode="numeric"
+              min={1}
+              value={seekDay}
+              onChange={(e) => setSeekDay(e.target.value)}
+            />
+            <button
+              type="button"
+              disabled={!seekOk}
+              className={`${btn} flex-1 bg-white text-black`}
+              onClick={() =>
+                run(async () => {
+                  const r = await seek(baseUrl, stepN === null ? { day: dayN } : { step: stepN, day: dayN });
+                  if (!r.ok) return r.reason;
+                  setMsg({ text: seekText(r.body), error: false });
+                  return "";
+                }, "", refresh)
+              }
+            >
+              Jump
+            </button>
+          </div>
+          <span className="text-xs text-neutral-500">
+            Lands at 09:00 of that day; the catch-up builds every night, question and card up to it. Forward only.
+            {info?.companion ? "" : " This scenario has no companion (no plan to seek by step)."}
+          </span>
+        </Control>
+
+        <Control title="Irin Brain only" hint="cards change confidence labels, never blank a row">
+          <button
+            type="button"
+            aria-pressed={brainOnly}
+            className={`${btn} ${brainOnly ? "bg-sky-300 text-black" : "bg-neutral-900 text-neutral-300"}`}
+            onClick={() =>
+              run(async () => {
+                const r = await setBrainOnly(baseUrl, !brainOnly);
+                if (!r.ok) return r.reason;
+                setMsg({
+                  text: r.body.brain_only
+                    ? "Brain only: presence, alarm hardware events and logged context are ignored."
+                    : "Bedside: every signal counts again.",
+                  error: false,
+                });
+                return "";
+              }, "", refresh)
+            }
+          >
+            {brainOnly ? "Brain only (tap for Bedside)" : "Bedside (tap for Brain only)"}
+          </button>
+        </Control>
+
+        <Control title="Send the real card" hint="today's card from the engine: Brain only, or Bedside and Brain side by side">
+          <div className="flex gap-2">
+            {(
+              [
+                ["brain", "Brain-only"],
+                ["both", "Bedside + Brain"],
+              ] as const
+            ).map(([m, label]) => (
+              <button
+                key={m}
+                type="button"
+                className={`${btn} flex-1 bg-neutral-900 text-neutral-200`}
+                onClick={() =>
+                  run(async () => {
+                    const r = await sendEvaluatedCard(baseUrl, m);
+                    if (!r.ok) return r.reason;
+                    const lines = r.body.cards.map(
+                      (c) => `${c.card_id.includes("brain") ? "Brain" : "Bedside"} ${c.kind.replace(/_/g, " ")}: ${SEND_OUTCOME[c.status] ?? c.status}`,
+                    );
+                    setMsg({ text: lines.join(" ") || "No card was due.", error: r.body.cards.some((c) => c.status === "no_recipient") });
+                    return "";
+                  }, "")
+                }
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </Control>
+
+        <Control title="Simulate a Spark offer" hint="Impiricus Spark (simulated) offers the scenario's plan">
+          <button
+            type="button"
+            className={`${btn} bg-neutral-900 text-neutral-200`}
+            onClick={() =>
+              run(async () => {
+                const r = await sparkOffer(baseUrl);
+                if (!r.ok) return r.reason;
+                setMsg({
+                  text: `Offer ${r.body.status} (plan ${r.body.plan_id}). Confirm it on the takeover with your code to start the watch.`,
+                  error: false,
+                });
+                return "";
+              }, "")
+            }
+          >
+            Simulate Spark offer
+          </button>
+        </Control>
+
+        <Control title="Trigger the buddy rung" hint="arrives with the Night Buddy tier">
+          <button
+            type="button"
+            className={`${btn} bg-neutral-900 text-neutral-200`}
+            onClick={() =>
+              run(async () => {
+                const r = await buddyRung(baseUrl);
+                if (!r.ok) return r.reason;
+                setMsg({ text: `Buddy rung: ${r.body.status}.`, error: false });
+                return "";
+              }, "")
+            }
+          >
+            Trigger buddy rung
+          </button>
+        </Control>
       </fieldset>
     </section>
   );
