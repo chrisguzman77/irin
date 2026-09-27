@@ -100,7 +100,7 @@ function Group({ title, note, tint, children }: { title: string; note?: string; 
  *  (one row); otherwise the inputs sit full width under the name. */
 function Control({ title, hint, side, children }: { title: string; hint?: string; side?: ReactNode; children?: ReactNode }) {
   return (
-    <div className="py-3 flex flex-col gap-2">
+    <div className="py-2.5 flex flex-col gap-2">
       <div className="flex items-center gap-3">
         <div className="flex flex-col flex-1 min-w-0">
           <span className="text-irin-cream font-medium">{title}</span>
@@ -202,13 +202,13 @@ export default function DemoPanel({ snap, baseUrl, onClose }: { snap: StateSnaps
     (seekDay !== "" && Number.isInteger(dayN) && dayN >= 1 && (stepN === null || (Number.isInteger(stepN) && stepN >= 1)));
 
   return (
-    <section className="flex flex-col gap-4 pb-24">
+    <section className="flex flex-col gap-3 pb-24">
       {/* hero: the mode switch on a leaf-to-ink wash with the brand wave under it */}
       <div className="rounded-3xl overflow-hidden border border-irin-line/60 bg-gradient-to-br from-irin-leaf/35 via-irin-surface to-irin-ink">
         <div className="px-4 pt-4 flex items-start justify-between gap-3">
           <div>
             <h2 className="text-xl font-semibold text-irin-cream">Demo panel</h2>
-            <p className="text-sm text-irin-sage">Stage controls for showing Irin with replayed nights.</p>
+            <p className="text-sm text-irin-sage">Replayed nights for showing Irin.</p>
           </div>
           <button type="button" onClick={onClose} className={secondary}>
             Close
@@ -219,25 +219,34 @@ export default function DemoPanel({ snap, baseUrl, onClose }: { snap: StateSnaps
             {seg("nightscout", "LIVE", "bg-gradient-to-r from-irin-leaf to-irin-mint text-irin-ink")}
             {seg("replay", "DEMO", "bg-amber-400 text-black")}
           </div>
-          <p className="text-sm text-irin-sage text-center">
-            {mode === undefined
-              ? "Waiting for your Irin…"
-              : demo
-                ? `Demo: replayed data, badged DEMO on every screen.${info?.current ? ` Playing ${info.current.replace(/_/g, " ")} at ${speed}×.` : ""}${
-                    info?.clock ? ` Replay clock ${clockText(info.clock)}.` : ""
-                  }`
-                : "Live: real readings. Demo controls are off."}
-          </p>
+          {mode === undefined ? (
+            <p className="text-sm text-irin-sage text-center">Waiting for your Irin…</p>
+          ) : demo ? (
+            <div className="flex flex-wrap justify-center gap-1.5 text-xs" aria-label="Demo status">
+              <span className="sr-only">Demo: replayed data, badged DEMO on every screen.</span>
+              {info?.current && (
+                <span className="rounded-full bg-irin-ink/70 border border-irin-leaf/40 px-2.5 py-1 text-irin-cream">
+                  Playing {info.current.replace(/_/g, " ")}
+                </span>
+              )}
+              {info?.current && <span className="rounded-full bg-irin-ink/70 border border-irin-leaf/40 px-2.5 py-1 text-irin-mint">{speed}×</span>}
+              {info?.clock && (
+                <span className="rounded-full bg-irin-ink/70 border border-irin-leaf/40 px-2.5 py-1 text-irin-sage">Clock {clockText(info.clock)}</span>
+              )}
+            </div>
+          ) : (
+            <p className="text-sm text-irin-sage text-center">Live: real readings. Demo controls are off.</p>
+          )}
         </div>
         <Wave />
       </div>
 
-      <fieldset disabled={!demo || busy} className={`flex flex-col gap-4 transition-opacity duration-300 ${demo ? "" : "opacity-40"}`}>
+      <fieldset disabled={!demo || busy} className={`flex flex-col gap-3 transition-opacity duration-300 ${demo ? "" : "opacity-40"}`}>
         <legend className="sr-only">{demo ? "Demo controls" : "Demo controls (demo mode only)"}</legend>
         {!demo && <p className="text-sm text-irin-sage text-center">Switch to DEMO to use the controls below.</p>}
 
-        <Group title="Playback" note="Choose a recorded night and control how it plays." tint="leaf">
-          <Control title="Scenario" hint="Plays from its first reading.">
+        <Group title="Playback" tint="leaf">
+          <Control title="Scenario" hint="Starts from the first reading.">
             <div className="flex gap-2">
               <select
                 aria-label="Scenario"
@@ -283,7 +292,7 @@ export default function DemoPanel({ snap, baseUrl, onClose }: { snap: StateSnaps
 
           <Control
             title="Sensor feed"
-            hint="While paused, the reading goes stale after 15 clock-minutes."
+            hint="Paused readings go stale after 15 clock-min."
             side={
               <button
                 type="button"
@@ -299,8 +308,8 @@ export default function DemoPanel({ snap, baseUrl, onClose }: { snap: StateSnaps
           />
         </Group>
 
-        <Group title="Show a moment" note="Make something happen right now." tint="mint">
-          <Control title="Inject a low" hint="One falling reading now; the scenario itself stays clean.">
+        <Group title="Show a moment" tint="mint">
+          <Control title="Inject a low" hint="One falling reading, now.">
             <div className="flex gap-2 items-center">
               <div className="flex items-center rounded-xl bg-irin-ink/80 border border-irin-leaf/30 pr-3 focus-within:border-irin-mint">
                 <input
@@ -329,7 +338,7 @@ export default function DemoPanel({ snap, baseUrl, onClose }: { snap: StateSnaps
 
           <Control
             title="Basal-time nudge"
-            hint="Sets basal time to 61 min ago; restored when you switch to live."
+            hint="Basal time → 61 min ago; reset on live."
             side={
               <button
                 type="button"
@@ -342,8 +351,8 @@ export default function DemoPanel({ snap, baseUrl, onClose }: { snap: StateSnaps
           />
         </Group>
 
-        <Group title="Doctor · Irin Rounds" note="Move through time and send cards to the paired demo doctor." tint="sage">
-          <Control title="Jump ahead" hint="Step 2 day 8 shows the step-2 check. Leave step empty for day D of the scenario. A date wins over both.">
+        <Group title="Doctor · Irin Rounds" tint="sage">
+          <Control title="Jump ahead" hint="Step 2 · day 8 is the step-2 check. Empty step = scenario day. A date wins.">
             <div className="grid grid-cols-2 gap-2">
               <label className="flex items-center gap-2 rounded-xl bg-irin-ink/80 border border-irin-leaf/30 px-3 focus-within:border-irin-mint">
                 <span className="text-irin-sage text-sm">Step</span>
@@ -409,8 +418,8 @@ export default function DemoPanel({ snap, baseUrl, onClose }: { snap: StateSnaps
               Jump
             </button>
             <span className="text-xs text-irin-sage">
-              Lands at 09:00 of that day; the catch-up builds every night, question and card up to it. Forward only.
-              {info?.companion ? "" : " This scenario has no companion (no plan to seek by step)."}
+              Lands 09:00 that day and builds every night, question and card up to it. Forward only.
+              {info?.companion ? "" : " No plan in this scenario, so step does nothing."}
             </span>
           </Control>
 
@@ -453,7 +462,7 @@ export default function DemoPanel({ snap, baseUrl, onClose }: { snap: StateSnaps
             }
           />
 
-          <Control title="Send the real card" hint="Today's card from the engine: Brain only, or Bedside and Brain side by side.">
+          <Control title="Send the real card" hint="Today's card from the engine.">
             <div className="grid grid-cols-2 gap-2">
               {(
                 [
@@ -483,7 +492,7 @@ export default function DemoPanel({ snap, baseUrl, onClose }: { snap: StateSnaps
             </div>
           </Control>
 
-          <Control title="Send a sample card" hint="A sample card, badged DEMO, sealed to the paired demo doctor.">
+          <Control title="Send a sample card" hint="A DEMO sample, sealed to the demo doctor.">
             <div className="grid grid-cols-2 gap-2">
               {([
                 ["signal_card_standing", "Basal Check"],
@@ -510,7 +519,7 @@ export default function DemoPanel({ snap, baseUrl, onClose }: { snap: StateSnaps
 
           <Control
             title="Simulate a Spark offer"
-            hint="Impiricus Spark (simulated) offers the scenario's plan; confirm it on the takeover."
+            hint="Simulated Impiricus offer; confirm on the takeover."
             side={
               <button
                 type="button"
@@ -534,7 +543,7 @@ export default function DemoPanel({ snap, baseUrl, onClose }: { snap: StateSnaps
 
           <Control
             title="Latest evaluations"
-            hint="Each Standing card's newest evaluation and what the noise budget did with it."
+            hint="Newest result per card and what the noise budget did."
             side={
               <button type="button" className={secondary} onClick={loadEvals}>
                 {evals ? "Refresh" : "Show"}
@@ -558,7 +567,7 @@ export default function DemoPanel({ snap, baseUrl, onClose }: { snap: StateSnaps
         <Group title="Night Buddy" tint="leaf">
           <Control
             title="Trigger the buddy rung"
-            hint="Alerts the paired buddy as if an alarm went unanswered."
+            hint="As if an alarm went unanswered."
             side={
               <button
                 type="button"
