@@ -263,20 +263,19 @@ async def audit(source_key: str = Depends(_source)) -> list[dict]:
 @router.get("/list")
 async def hub_list(volunteer: dict = Depends(_volunteer)) -> list[dict]:
     """Every unresolved listing in the volunteer's pool (demo or real),
-    urgency first, then device_confirmed before unconfirmed."""
-    rows = store.db()["hub_listings"].find({"status": {"$ne": "resolved"}, "is_demo": volunteer["is_demo"]})
+    urgency first, then device_confirmed before unconfirmed. Sample listings
+    (seed_buddies.py, v3) are shown only in the app's hub, badged there."""
+    rows = store.db()["hub_listings"].find({"status": {"$ne": "resolved"}, "is_demo": volunteer["is_demo"],
+                                            "sample": {"$ne": True}})
     rows = sorted(rows, key=lambda d: (-d["urgency"], d["confidence"] != "device_confirmed", d["created_at"]))
     return [_listing_out(d) for d in rows]
 
 
-@router.post("/claim")
-async def claim(req: ClaimIn, volunteer: dict = Depends(_volunteer)):
-    """An exclusive lease of HUB_LEASE_S; a second claim while it is live gets
-    409 with the holder's expiry."""
+def lease(d: dict, volunteer_id: str):
+    """Take the exclusive lease of HUB_LEASE_S on an open listing: the claim
+    doc, or a 409 JSONResponse with the live holder's expiry. Shared by the
+    watcher's claim and the app's (directory.py, v3)."""
     listings = store.db()["hub_listings"]
-    d = listings.find_one({"listing_id": req.listing_id, "is_demo": volunteer["is_demo"]})
-    if d is None:
-        raise HTTPException(status_code=404, detail="no such listing")
     now = store.now()
     now = now.replace(microsecond=now.microsecond // 1000 * 1000)  # Mongo keeps milliseconds: the 200 and a later 409 agree
     claim_id = secrets.token_hex(8)
@@ -287,13 +286,33 @@ async def claim(req: ClaimIn, volunteer: dict = Depends(_volunteer)):
         cur = listings.find_one({"_id": d["_id"]})
         return JSONResponse(status_code=409, content={"detail": f"listing is {cur['status']}",
                                                       "holder_expires_at": _iso(cur.get("claim_expires_at"))})
-    doc = {"claim_id": claim_id, "listing_id": req.listing_id, "volunteer_id": volunteer["doctor_id"], "claimed_at": now,
+    doc = {"claim_id": claim_id, "listing_id": d["listing_id"], "volunteer_id": volunteer_id, "claimed_at": now,
            "expires_at": expires, "actions": ["claim"], "outcome": None, "closed": False, "is_demo": d["is_demo"],
            "source_key_hash": d["source_key_hash"]}
     store.db()["hub_claims"].insert_one(doc)
-    store.audit("hub.claim", listing_id=req.listing_id, claim_id=claim_id, volunteer_id=volunteer["doctor_id"],
+    store.audit("hub.claim", listing_id=d["listing_id"], claim_id=claim_id, volunteer_id=volunteer_id,
                 is_demo=d["is_demo"])
-    return _claim_out(doc)
+    return doc
+
+
+def open_script(d: dict) -> list[str] | None:
+    """The listing's sealed script, opened (callers hand it only to the live claim-holder); None when it has none."""
+    if not d.get("script_ciphertext"):
+        return None
+    return json.loads(SecretBox(SCRIPT_KEY).decrypt(base64.b64decode(d["script_ciphertext"]),
+                                                    base64.b64decode(d["script_nonce"])))["steps"]
+
+
+@router.post("/claim")
+async def claim(req: ClaimIn, volunteer: dict = Depends(_volunteer)):
+    """An exclusive lease of HUB_LEASE_S; a second claim while it is live gets
+    409 with the holder's expiry. Sample listings (seed_buddies.py) are for the app's hub only."""
+    d = store.db()["hub_listings"].find_one({"listing_id": req.listing_id, "is_demo": volunteer["is_demo"],
+                                             "sample": {"$ne": True}})
+    if d is None:
+        raise HTTPException(status_code=404, detail="no such listing")
+    doc = lease(d, volunteer["doctor_id"])
+    return doc if isinstance(doc, JSONResponse) else _claim_out(doc)
 
 
 @router.get("/claim/{claim_id}/script")
@@ -301,10 +320,9 @@ async def script(claim_id: str, volunteer: dict = Depends(_volunteer)) -> dict:
     """The patient's own pre-written script: only the live claim-holder, only while the lease is live."""
     cl = _live_claim(claim_id, volunteer)
     d = store.db()["hub_listings"].find_one({"listing_id": cl["listing_id"]})
-    if not d or not d.get("script_ciphertext"):
+    steps = open_script(d) if d else None
+    if steps is None:
         raise HTTPException(status_code=404, detail="no script on this listing")
-    steps = json.loads(SecretBox(SCRIPT_KEY).decrypt(base64.b64decode(d["script_ciphertext"]),
-                                                     base64.b64decode(d["script_nonce"])))["steps"]
     store.db()["hub_claims"].update_one({"_id": cl["_id"]}, {"$push": {"actions": "script"}})
     store.audit("hub.script", listing_id=cl["listing_id"], claim_id=claim_id, volunteer_id=volunteer["doctor_id"])
     return {"steps": steps}
