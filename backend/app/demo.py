@@ -13,6 +13,7 @@ join this router at R12/R14/B5.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from datetime import date as date_type, datetime, time, timedelta
 from pathlib import Path
 from typing import Literal
@@ -181,21 +182,51 @@ async def send_fixture_card(req: SendCardRequest) -> dict:
     return await _runtime.cards.send(card)
 
 
-def _evaluated_card(brain: bool):
-    """One card from the real engine over the demo world, with brain_only set to
-    `brain` for this evaluation only and restored afterwards, even on error. The
-    evaluation is synchronous, so no other job sees the forced value. brain_only
-    changes confidence labels, never a value or a row. The card id carries the
-    source, so the pair sits side by side and neither replaces the morning's card."""
-    from .rounds import noise
-    from .rounds.cards import assemble
-    from .rounds.resources import categories_for
-    from .rounds.step_watch import current_step, due_kinds
-
-    night = clock.now().date() - timedelta(days=1)  # the night that just closed (its evening date)
+@contextmanager
+def _forced_brain_only(brain: bool):
+    """brain_only set to `brain` for one synchronous evaluation and restored
+    afterwards, even on error; no other job runs in between."""
     saved = config.IRIN_BRAIN_ONLY
     config.IRIN_BRAIN_ONLY = brain
     try:
+        yield
+    finally:
+        config.IRIN_BRAIN_ONLY = saved
+
+
+def _assemble(ev, extra: dict, brain: bool, is_demo: bool):
+    """The card an evaluation makes, its id carrying the source so a pair sits side
+    by side and neither replaces the stored card."""
+    from .rounds.cards import assemble
+    from .rounds.resources import categories_for
+
+    source = "irin_brain" if brain else "irin_bedside"
+    card = assemble(kind=ev.kind, status=ev.status, flags=ev.flags, metrics=ev.metrics, confidence=ev.confidence,
+                    headline=ev.headline, device_id=_runtime.cards.device_id, is_demo=is_demo, source=source,
+                    nights=ev.nights, resource_categories=categories_for(ev.kind, ev.flags), **extra)
+    return card.model_copy(update={"card_id": f"{card.card_id}:{source}"})
+
+
+def _step_extra(plan, ev) -> dict:
+    return dict(program="step_watch", period_start=ev.period_start, period_end=ev.period_end,
+                tolerance_days=ev.tolerance_days, plan_id=plan.plan_id, step_index=ev.step_index)
+
+
+def _standing_extra(ev, night: date_type) -> dict:
+    since, until = _runtime.standing.window(night)
+    return dict(program="standing", period_start=ev.period_start or since, period_end=ev.period_end or until,
+                excluded_counts=ev.excluded_counts)
+
+
+def _evaluated_card(brain: bool):
+    """One card from the real engine over the demo world, with brain_only set to
+    `brain` for this evaluation only and restored afterwards, even on error.
+    brain_only changes confidence labels, never a value or a row."""
+    from .rounds import noise
+    from .rounds.step_watch import current_step, due_kinds
+
+    night = clock.now().date() - timedelta(days=1)  # the night that just closed (its evening date)
+    with _forced_brain_only(brain):
         sw = _runtime.step_watch
         plan = sw.active_plan() if sw is not None else None
         if plan is not None:
@@ -208,22 +239,43 @@ def _evaluated_card(brain: bool):
             kind, step, window = due
             told = sw._told(noise.history_from_store(store.select_cards(limit=500)))
             ev = sw.evaluate(plan, kind, step, window, told)
-            extra = dict(program="step_watch", period_start=ev.period_start, period_end=ev.period_end,
-                         tolerance_days=ev.tolerance_days, plan_id=plan.plan_id, step_index=ev.step_index)
+            extra = _step_extra(plan, ev)
         else:
             if _runtime.standing is None:
                 raise HTTPException(status_code=409, detail="no engine to evaluate")
             ev = next(e for e in _runtime.standing.evaluations(night) if e.kind == "basal_check")
-            since, until = _runtime.standing.window(night)
-            extra = dict(program="standing", period_start=ev.period_start or since, period_end=ev.period_end or until,
-                         excluded_counts=ev.excluded_counts)
-        source = "irin_brain" if brain else "irin_bedside"
-        card = assemble(kind=ev.kind, status=ev.status, flags=ev.flags, metrics=ev.metrics, confidence=ev.confidence,
-                        headline=ev.headline, device_id=_runtime.cards.device_id, is_demo=True, source=source,
-                        nights=ev.nights, resource_categories=categories_for(ev.kind, ev.flags), **extra)
-    finally:
-        config.IRIN_BRAIN_ONLY = saved
-    return card.model_copy(update={"card_id": f"{card.card_id}:{source}"})
+            extra = _standing_extra(ev, night)
+        return _assemble(ev, extra, brain, is_demo=True)
+
+
+def brain_twin(card: dict):
+    """R14(c) for GET /api/rounds/cards/compare: a stored bedside card's kind
+    re-evaluated for the card's own window with brain_only on (restored even on
+    error), with the same is_demo. Never sent, sealed, or stored. None when the
+    window cannot be re-evaluated: its plan or step is gone, or the kind is not
+    due for that window (a Basal Check straddling a dose change)."""
+    from .rounds import noise
+
+    start, end = date_type.fromisoformat(card["period_start"]), date_type.fromisoformat(card["period_end"])
+    with _forced_brain_only(True):
+        if card["program"] == "step_watch":
+            sw = _runtime.step_watch
+            plan = next((p for p in store.select_plans() if p.plan_id == card.get("plan_id")), None) if sw else None
+            step = next((s for s in plan.steps if s.index == card.get("step_index")), None) if plan else None
+            if step is None:
+                return None
+            # a safety card is the red itself; a check keeps the reds already told as flags, as when it was sent
+            told = None if card["kind"] == "safety" else sw._told(noise.history_from_store(store.select_cards(limit=500)))
+            ev = sw.evaluate(plan, card["kind"], step, (start, end), told)
+            extra = _step_extra(plan, ev)
+        else:
+            if _runtime.standing is None:
+                return None
+            ev = next((e for e in _runtime.standing.evaluations(end) if e.kind == card["kind"]), None)
+            if ev is None:
+                return None
+            extra = _standing_extra(ev, end)
+        return _assemble(ev, extra, brain=True, is_demo=card["is_demo"])
 
 
 # --- R12: the seek and the sponsor-tier controls (demo-only, PIN) ---
