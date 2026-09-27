@@ -95,6 +95,7 @@ body.is-stale #glucose { text-decoration: line-through; text-decoration-thicknes
 #night { height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; }
 body.mode-night { background: var(--bg-night); }
 #night-clock { font-size: min(26vw, 45vh); font-weight: 300; color: #4A4B42; font-variant-numeric: tabular-nums; line-height: 1; }
+#night-clock .ampm { font-size: 0.3em; margin-left: 0.12em; letter-spacing: 0.02em; }
 #night-reading { display: flex; align-items: center; gap: 1.2vw; margin-top: 3vh; color: #8C8D82; }
 #night-glucose { font-size: min(9vw, 16vh); font-weight: 800; font-variant-numeric: tabular-nums;
   font-family: "Nunito Irin", system-ui, -apple-system, "Segoe UI", sans-serif; font-synthesis: none; }
