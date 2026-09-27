@@ -50,9 +50,9 @@ body.mode-night #logo-night { display: block; }
   font-family: "Nunito Irin", system-ui, -apple-system, "Segoe UI", sans-serif; font-synthesis: none; }
 body.mode-night #topclock { display: none; }
 
-#flags { position: fixed; top: 1.5vh; left: calc(1.5vw + 12.4vh + 1.2vw); right: calc(1.5vw + 24vh); display: flex; gap: 1vw;
+#flags { position: fixed; top: 1.5vh; left: calc(1.5vw + 12.4vh + 1.2vw); right: calc(1.5vw + 24vh); display: flex; align-items: center; gap: 1vw;
   flex-wrap: wrap; z-index: 25; pointer-events: none; } /* above the alarm takeover: DEMO is on every screen */
-.flag { font-weight: 800; padding: 0.6vh 1.2vw; border-radius: 3px; font-size: 2.2vh; letter-spacing: 0.04em; }
+.flag { display: inline-flex; align-items: center; box-sizing: border-box; height: 5vh; font-weight: 800; padding: 0 1.2vw; border-radius: 3px; font-size: 2.2vh; letter-spacing: 0.04em; white-space: nowrap; }
 .flag-demo { background: var(--amber); color: #000; font-size: 3vh; }
 .flag-clock { background: var(--line); color: var(--fg); border: 1px solid var(--grey); }
 .flag-stale { background: var(--grey); color: #000; }
@@ -64,7 +64,7 @@ body.mode-night #topclock { display: none; }
   grid-template-areas: "now graph" "tiles tiles"; }
 
 #now { grid-area: now; display: flex; flex-direction: column; justify-content: center; align-items: center; }
-#reading { display: flex; align-items: center; gap: 1.5vw; line-height: 1; }
+#reading { position: relative; display: flex; align-items: center; line-height: 1; }
 #glucose { font-size: min(12.5vw, 34vh); font-weight: 800; font-variant-numeric: tabular-nums;
   font-family: "Nunito Irin", system-ui, -apple-system, "Segoe UI", sans-serif; font-synthesis: none; }
 #trend { font-size: min(10vw, 18vh); color: #D6D5CE; }
@@ -103,7 +103,7 @@ body.is-stale #glucose { text-decoration: line-through; text-decoration-thicknes
 body.mode-night { background: var(--bg-night); }
 #night-clock { font-size: min(26vw, 45vh); font-weight: 300; color: #4A4B42; font-variant-numeric: tabular-nums; line-height: 1; }
 #night-clock .ampm { font-size: 0.3em; margin-left: 0.12em; letter-spacing: 0.02em; }
-#night-reading { display: flex; align-items: center; gap: 1.2vw; margin-top: 3vh; color: #8C8D82; }
+#night-reading { position: relative; display: flex; align-items: center; margin-top: 3vh; color: #8C8D82; }
 #night-glucose { font-size: min(9vw, 16vh); font-weight: 800; font-variant-numeric: tabular-nums;
   font-family: "Nunito Irin", system-ui, -apple-system, "Segoe UI", sans-serif; font-synthesis: none; }
 #night-trend { font-size: min(5vw, 9vh); }
@@ -200,8 +200,8 @@ body.is-demo #idle #idle-logo { display: block; }
 
 #alarm { position: fixed; inset: 0; z-index: 20; display: flex; flex-direction: column;
   align-items: center; justify-content: center; gap: 2vh; color: #000; }
-#alarm-title { font-size: 7vh; font-weight: 900; letter-spacing: 0.08em; }
-#alarm-reading { display: flex; align-items: center; gap: 2vw; line-height: 1; }
+#alarm-title { font-size: 7vh; font-weight: 900; letter-spacing: 0.08em; padding-left: 0.08em; } /* balances the trailing letter-space */
+#alarm-reading { position: relative; display: flex; align-items: center; line-height: 1; }
 #alarm-glucose { font-size: min(18vw, 32vh); font-weight: 800; font-variant-numeric: tabular-nums;
   font-family: "Nunito Irin", system-ui, -apple-system, "Segoe UI", sans-serif; font-synthesis: none; }
 #alarm-trend { font-size: min(9vw, 16vh); }
@@ -271,3 +271,10 @@ body.mode-night #doctor { background: #03101d; }
 #keypad-keys button:active { background: var(--sage); color: var(--bg); }
 #alarm.tier-full.strobe #alarm-ack { background: #000; color: #fff; border-color: #000; } /* visible on red and white frames */
 body.alarm-on .flag-demo { background: #000; color: #ffb000; box-shadow: 0 0 0 0.3vh #ffb000; } /* stays readable on amber and red */
+
+/* Alignment: the NUMBER sits on the centre line shared by the clock, the title
+   and the prediction; its trend arrow hangs to the right, outside the centring. */
+#trend, #night-trend, #alarm-trend { position: absolute; left: 100%; top: 50%; transform: translateY(-50%); }
+#trend { margin-left: 1.5vw; } #night-trend { margin-left: 1.2vw; } #alarm-trend { margin-left: 2vw; }
+/* The logo is under every takeover, so during an alarm the flags start at the edge. */
+body.alarm-on #flags { left: 1.5vw; }

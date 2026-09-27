@@ -279,8 +279,11 @@ function predictionText() {
   if (!fc || !r || r.is_stale || isDisconnected() || fc.predicted_mgdl == null) return null;
   const v = Math.round(fc.predicted_mgdl), mins = fc.horizon_min ?? 30;
   // Above the current reading the same number is a FLOOR (80% chance of at least
-  // this), so rising reads "likely X or more", never "as high as".
-  return v > r.glucose_mgdl ? `Rising: likely ${v} or more in ${mins} min` : `Could be as low as ${v} in ${mins} min`;
+  // this), so it reads "likely X or more", never "as high as"; "Rising" only when
+  // the trend arrow agrees (a forecast rebound under a falling arrow says no more).
+  if (v <= r.glucose_mgdl) return `Could be as low as ${v} in ${mins} min`;
+  const up = ["DoubleUp", "SingleUp", "FortyFiveUp"].includes(r.trend);
+  return `${up ? "Rising: likely" : "Likely"} ${v} or more in ${mins} min`;
 }
 
 function render() {
