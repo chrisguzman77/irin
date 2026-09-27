@@ -30,4 +30,6 @@ else
   platform=()
 fi
 [ -e /boot/firmware/NO_KIOSK ] && { echo "NO_KIOSK flag present; not starting the kiosk"; exit 0; }
-exec chromium "${platform[@]}" --kiosk --noerrdialogs --disable-infobars --disable-session-crashed-bubble http://localhost:8000/
+# --password-store=basic: without it Chromium waits on the desktop keyring's "Unlock" dialog, which
+# sits hidden behind the fullscreen kiosk, and the screen stays blank (seen on the Pi, 2026-09-27)
+exec chromium "${platform[@]}" --password-store=basic --kiosk --noerrdialogs --disable-infobars --disable-session-crashed-bubble http://localhost:8000/
