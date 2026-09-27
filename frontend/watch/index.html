@@ -2,14 +2,83 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Night Buddy — watcher (concept)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0b1020">
+  <title>Night Buddy Watch</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <h1>Night Buddy — watcher (concept)</h1>
-  <p class="badge">placeholder — Justin owns the looks</p>
-  <pre id="out">loading config…</pre>
+  <header class="top">
+    <h1>Night Buddy</h1>
+    <span id="demo" class="badge-demo" hidden>DEMO</span>
+  </header>
+
+  <main>
+    <section id="unpaired" hidden>
+      <p class="lead">This page watches over one buddy's night.</p>
+      <p id="unpaired-note">To start, scan the QR code on your buddy's Irin (Settings, Night Buddy, Pair a buddy).</p>
+    </section>
+
+    <section id="paired" hidden>
+      <div class="watchbar">
+        <button id="onwatch" type="button" class="btn onwatch" aria-pressed="false">On watch</button>
+        <p id="watchstate" class="note"></p>
+      </div>
+      <p class="caveat">A locked phone needs a native Critical Alert or a call; keep this page open while on watch.</p>
+
+      <nav class="tabs" aria-label="Views">
+        <button type="button" data-tab="buddy" aria-pressed="true">Buddy</button>
+        <button type="button" data-tab="hub" aria-pressed="false">Hub</button>
+      </nav>
+
+      <section id="tab-buddy">
+        <article id="buddycard" class="card"></article>
+        <form id="wa" class="card wa" novalidate>
+          <h2>WhatsApp alerts</h2>
+          <p class="note">The same alert, text and voice clip, also as a WhatsApp message to this phone. The number goes to the
+            relay only: it is never shown to your buddy, and this page does not keep or show it after saving.</p>
+          <label>WhatsApp number, with country code
+            <input id="wa-phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="+14045550123" maxlength="24">
+          </label>
+          <button type="submit" class="btn">Save number</button>
+          <p id="wa-msg" class="note" role="status"></p>
+        </form>
+      </section>
+
+      <section id="tab-hub" hidden>
+        <p class="note">People asking for a backstop right now, most urgent first. First names only; contact is
+          brokered, never shown.</p>
+        <p class="legend"><span class="conf conf-device_confirmed">Device confirmed</span>
+          <span class="conf conf-unconfirmed">Unconfirmed</span></p>
+        <div id="hublist"></div>
+      </section>
+
+      <p id="status" class="note" role="status"></p>
+      <p class="pairbar"><span id="pairwho"></span> <button id="unpair" type="button" class="linkish">End pairing</button></p>
+    </section>
+  </main>
+
+  <!-- The alert: huge and single-purpose, over everything. -->
+  <section id="alert" class="alert" hidden role="alertdialog" aria-labelledby="alert-head">
+    <span id="alert-demo" class="badge-demo" hidden>DEMO</span>
+    <p id="alert-conf" class="conf"></p>
+    <h2 id="alert-head"></h2>
+    <p id="alert-line" class="alert-line"></p>
+    <p id="alert-state" class="alert-state"></p>
+    <div class="alert-actions">
+      <button id="call" type="button" class="btn big call">Call</button>
+      <button id="gotit" type="button" class="btn big ghost">I've got this</button>
+      <button id="script" type="button" class="btn big ghost" hidden>Execute script</button>
+    </div>
+    <ol id="steps" class="steps" hidden></ol>
+    <p id="alert-audio" class="note"></p>
+    <button id="alert-close" type="button" class="linkish" hidden>Back to the watcher page</button>
+    <p class="caveat">Follow your buddy's own script. This page never gives medical advice.</p>
+  </section>
+
+  <footer class="foot">Irin Night Buddy: a hackathon demo, not a medical device. In an emergency call your local emergency number.</footer>
+  <!-- tweetnacl 1.0.3 (public domain, Unlicense), vendored: defines window.nacl -->
+  <script src="nacl.min.js"></script>
   <script type="module" src="watch.js"></script>
 </body>
 </html>
