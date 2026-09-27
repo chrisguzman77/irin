@@ -6,6 +6,8 @@
 //
 // postFresh() is the only way to call them; deviceFetch() refuses them.
 
+import { clearOwnerPairing, getOwnerPairing } from "./owner";
+
 type Prompter = (title: string) => Promise<string | null>;
 
 let prompter: Prompter | null = null;
@@ -28,7 +30,11 @@ const lists = new Map<string, Promise<RegExp[]>>();
 function patterns(base: string): Promise<RegExp[]> {
   let p = lists.get(base);
   if (!p) {
-    p = fetch(`${base}/api/contracts/fresh_pin`, { cache: "no-store" })
+    const owner = getOwnerPairing();
+    p = fetch(`${base}/api/contracts/fresh_pin`, {
+      cache: "no-store",
+      headers: owner?.token ? { Authorization: `Bearer ${owner.token}` } : undefined,
+    })
       .then((r) => {
         if (!r.ok) throw new Error(`${r.status}`);
         return r.json() as Promise<{ endpoints?: string[] }>;
@@ -59,12 +65,22 @@ export async function postFresh(base: string, path: string, body?: unknown, titl
   const pin = await prompter(title);
   if (!pin) return { ok: false, cancelled: true, reason: "Cancelled. Nothing was sent." };
   try {
+    const owner = getOwnerPairing();
+    const headers: Record<string, string> = { "X-PIN": pin, "Content-Type": "application/json" };
+    if (owner?.token) headers.Authorization = `Bearer ${owner.token}`;
     const res = await fetch(base + path, {
       method: "POST",
-      headers: { "X-PIN": pin, "Content-Type": "application/json" },
+      headers,
       body: body === undefined ? undefined : JSON.stringify(body),
     });
-    if (res.status === 401) return { ok: false, badPin: true, reason: "That PIN was not accepted. Nothing was confirmed." };
+    if (res.status === 401) {
+      const b = (await res.json().catch(() => null)) as { detail?: unknown } | null;
+      if (b && b.detail === "pair this phone with your Irin") {
+        clearOwnerPairing();
+        return { ok: false, reason: "This phone needs to be paired with your Irin again. Nothing was confirmed." };
+      }
+      return { ok: false, badPin: true, reason: "That PIN was not accepted. Nothing was confirmed." };
+    }
     if (!res.ok) {
       const b = (await res.json().catch(() => null)) as { detail?: unknown } | null;
       const detail = b && typeof b.detail === "string" ? b.detail : null;

@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import DoctorTakeover from "./components/DoctorTakeover";
 import FreshPinPrompt from "./components/FreshPinPrompt";
 import Gate from "./components/Gate";
 import StatusBar from "./components/StatusBar";
 import { DeviceProvider } from "./lib/device";
+import { setPendingPairCode } from "./lib/owner";
 import { usePin } from "./lib/usePin";
 import DeviceTab from "./tabs/DeviceTab";
 import MyIrinTab from "./tabs/MyIrinTab";
@@ -18,6 +19,7 @@ import logo from "./assets/irin-logo.svg";
 const TAB_KEY = "irin.tab";
 const TABS = ["Irin Device", "My Irin", "Irin Buddy", "Irin Rounds"] as const;
 type Tab = (typeof TABS)[number];
+const HASH_CODE_RE = /^#pair=(\d{6})$/;
 
 function storedTab(): Tab {
   try {
@@ -32,8 +34,6 @@ export default function App() {
   const pin = usePin();
   const [tab, setTab] = useState<Tab>(storedTab);
 
-  if (!pin) return <Gate />;
-
   const select = (t: Tab) => {
     try {
       localStorage.setItem(TAB_KEY, t);
@@ -42,6 +42,19 @@ export default function App() {
     }
     setTab(t);
   };
+
+  // A2: a QR's #pair=NNNNNN can land on whichever tab was last remembered,
+  // not necessarily Device. Take the code once, wipe it from the URL, and
+  // switch to Device so the pairing form gets it (lib/owner.ts).
+  useEffect(() => {
+    const m = HASH_CODE_RE.exec(location.hash);
+    if (!m) return;
+    setPendingPairCode(m[1]);
+    history.replaceState(null, "", location.pathname + location.search);
+    select("Irin Device");
+  }, []);
+
+  if (!pin) return <Gate />;
 
   return (
     <DeviceProvider>
