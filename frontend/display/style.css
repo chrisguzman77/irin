@@ -35,8 +35,9 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
 button, input { font-family: inherit; }
 
 /* The Irin logo, top left (docs/brand horizontal, for dark backgrounds). Under
-   every takeover (pairing 12, doctor 15, idle 19, alarm 20) so nothing competes
-   with an alarm; the flags (DEMO etc.) sit to its right and stay above all. */
+   every takeover (pairing 12, owner pairing 13, doctor 15, idle 19, alarm 20)
+   so nothing competes with an alarm; the flags (DEMO etc.) sit to its right
+   and stay above all. */
 .logo { position: fixed; top: 1.5vh; left: 1.5vw; height: 5vh; width: auto; z-index: 5; pointer-events: none; }
 /* At night the colour logo gives way to the one-colour white one
    (docs/brand/mono), dimmed like the rest of the night screen. */
@@ -244,8 +245,10 @@ body.is-stale #alarm-glucose, body.is-disconnected #alarm-glucose { opacity: 0.5
 body.mode-night #doctor { background: #03101d; }
 
 #watch-strip { margin-top: 2vh; font-size: 2.4vh; color: #8fb3d9; text-align: center; } /* R1: glance only, no buttons */
-#share-open { margin-top: 3vh; font: 600 2.2vh "Nunito Irin", system-ui, sans-serif; padding: 1.2vh 2vw;
+#share-open, #owner-open, #owner-disconnect { margin-top: 3vh; font: 600 2.2vh "Nunito Irin", system-ui, sans-serif; padding: 1.2vh 2vw;
   border-radius: 6px; border: 1px solid var(--sage); background: var(--panel); color: var(--fg); }
+#owner-status { margin-top: 3vh; display: flex; align-items: center; gap: 1.5vw; font-size: 2.2vh; color: var(--fg); }
+#owner-status #owner-disconnect { margin-top: 0; }
 #pair { position: fixed; inset: 0; z-index: 12; background: #071a2e; color: #e8f1fb; display: flex; flex-direction: column;
   align-items: center; justify-content: center; gap: 2vh; padding: 6vh 6vw; text-align: center; } /* under the doctor takeover, alarm, DEMO, keypad */
 #pair-title { font-size: 4vh; font-weight: 700; }
@@ -260,6 +263,20 @@ body.mode-night #doctor { background: #03101d; }
 #pair-start, #pair-confirm { background: #e8f1fb; color: #071a2e; }
 #pair-start:disabled, #pair-confirm:disabled { opacity: 0.35; }
 #pair-msg { font-size: 2.4vh; color: #ffd27a; min-height: 2.4vh; }
+
+/* A2: Pair a phone (the phone app's Device tab). Same shell as #pair, one
+   step above it (13) so it never sits under the doctor pairing overlay. */
+#ownerpair { position: fixed; inset: 0; z-index: 13; background: #071a2e; color: #e8f1fb; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 2vh; padding: 6vh 6vw; text-align: center; }
+#owner-title { font-size: 4vh; font-weight: 700; }
+#owner-qr { background: #fff; padding: 1.5vh; border-radius: 4px; line-height: 0; }
+#owner-qr svg { width: 44vh; height: 44vh; display: block; }
+#owner-code { font-size: min(16vh, 12vw); font-weight: 800; letter-spacing: 2vw; font-variant-numeric: tabular-nums; line-height: 1; }
+#owner-text { font-size: 2.8vh; max-width: 70vw; color: #cfe0f2; }
+#owner-buttons { display: flex; gap: 3vw; }
+#owner-buttons button { font: 800 3.6vh "Nunito Irin", system-ui, sans-serif; padding: 2vh 4vw; border-radius: 6px; border: 0.3vh solid #8fb3d9; }
+#owner-close { background: transparent; color: #e8f1fb; }
+#owner-msg { font-size: 2.4vh; color: #ffd27a; min-height: 2.4vh; }
 
 #keypad { position: fixed; inset: 0; z-index: 30; background: rgba(46, 47, 41, 0.97); display: flex;
   flex-direction: column; align-items: center; justify-content: center; gap: 2vh; }

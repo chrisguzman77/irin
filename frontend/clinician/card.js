@@ -17,8 +17,11 @@ function section(title) {
   return s;
 }
 
-// Actions whose flow belongs to a later step: shown, never sendable yet.
-const LATER = { resources: "arrives with R13" };
+// Actions whose flow belongs elsewhere: shown, never sendable from this button.
+// "resources" is built (the inbox hands off from its own Resources side panel,
+// not from ACTIONS in inbox.js), so it stays disabled but points there instead
+// of claiming to be unbuilt.
+const LATER = { resources: "use Resources in the side panel" };
 
 /** @param {object} card a SignalCard
  * @param {{actions?: boolean, sample?: boolean, onAction?: (key: string) => void, onResource?: (category: string) => void, onNight?: (index: number) => void}} opts

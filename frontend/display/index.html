@@ -71,6 +71,20 @@
     <div id="pair-msg"></div>
   </section>
 
+  <!-- A2: Pair a phone. Only the screen that started the pairing draws its
+       QR/code; the overlay closes itself on WS pairing_state {kind: "owner",
+       state: "paired"} or on expiry. -->
+  <section id="ownerpair" class="hidden" aria-label="pair a phone">
+    <div id="owner-title">Pair a phone</div>
+    <div id="owner-qr" class="hidden"></div>
+    <div id="owner-code" class="hidden"></div>
+    <div id="owner-text"></div>
+    <div id="owner-buttons">
+      <button type="button" id="owner-close">Close</button>
+    </div>
+    <div id="owner-msg"></div>
+  </section>
+
   <section id="keypad" class="hidden" aria-label="enter PIN">
     <div id="keypad-title">Enter PIN</div>
     <div id="keypad-dots"></div>
@@ -88,6 +102,12 @@
       <div id="reading-time">Waiting for Device</div>
       <div id="watch-strip" class="hidden"></div>
       <button type="button" id="share-open">Share with my doctor</button>
+      <!-- A2: Pair a phone (the phone app's Device tab), beside doctor sharing. -->
+      <button type="button" id="owner-open" class="hidden">Pair a phone</button>
+      <div id="owner-status" class="hidden">
+        <span id="owner-paired-label">Paired phone: <span id="owner-username"></span></span>
+        <button type="button" id="owner-disconnect">Disconnect phone</button>
+      </div>
     </section>
 
     <section id="graph-wrap">

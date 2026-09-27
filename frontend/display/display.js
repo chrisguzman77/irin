@@ -53,6 +53,7 @@ const state = {
   doctorMsg: "",
   doctorAsking: null,  // message_id the keypad is open for
   pairing: {},         // pairing_state (snapshot + pairing_state messages)
+  owner: { state: "none" }, // GET /api/owner (no PIN): this device's paired phone, if any
   planState: {},       // Step Watch plan_state (snapshot + plan_state messages); {active: false} = no watch
   activePlan: null,    // the snapshot's active_plan (TitrationPlan), for the fallback in renderWatch
   ackMsg: "",
@@ -184,7 +185,11 @@ function onMessage(msg) {
       state.settings = p.settings || p;
       break;
     case "pairing_state":
-      setPairing(p);
+      // Doctor pairing_state messages carry no `kind` (or a different one);
+      // owner pairing_state always carries kind: "owner". Each handler
+      // ignores the other's messages.
+      if (p.kind === "owner") onOwnerPairingState(p);
+      else setPairing(p);
       break;
     case "plan_state":
       state.planState = p || {};
@@ -355,6 +360,7 @@ function render() {
   renderAlarm(num, arrow);
   renderWatch();
   renderPair();
+  renderOwner();
   renderDoctor();
   if (mode === "detail") drawGraph();
   updateIdle();
@@ -696,6 +702,126 @@ function renderPair() {
   }
   $("pair-text").textContent = text;
   $("pair-msg").textContent = pair.msg;
+}
+
+// --- Pair a phone (A2, relay README "Owner pairing"): the phone app's
+// Device tab <-> this Pi. GET /api/owner needs no PIN and drives the
+// "Pair a phone" / "Disconnect phone" controls; POST /api/owner/code and
+// DELETE /api/owner are PIN-gated, and pairing progress arrives on the
+// WebSocket as pairing_state {kind: "owner", ...} rather than by polling. ---
+
+const owner = { open: false, code: null, qrUrl: null, deadline: 0, msg: "", busy: false };
+
+// GET /api/owner: no PIN, safe to call on load and after any change.
+async function loadOwner() {
+  try {
+    const res = await fetch("/api/owner", { cache: "no-store" });
+    if (res.ok) state.owner = await res.json();
+  } catch { /* keeps the last known state; the next poll or WS message tries again */ }
+  render();
+}
+
+// The Pi broadcasts this on redeem/revoke; kind: "owner" only (the doctor
+// pairing_state handler above ignores it).
+function onOwnerPairingState(p) {
+  state.owner = { state: p.state, username: p.username, paired_at: p.paired_at };
+  if (p.state === "paired" && owner.open) {
+    owner.code = null;
+    owner.qrUrl = null;
+    owner.msg = `Paired with ${p.username || "your phone"}`;
+    setTimeout(closeOwnerOverlay, 3000); // shown for 3 s, then the overlay closes itself
+  }
+  render();
+}
+
+function closeOwnerOverlay() {
+  owner.open = false;
+  owner.code = null;
+  owner.qrUrl = null;
+  owner.msg = "";
+  render();
+}
+
+async function startOwnerPairing() {
+  if (owner.busy) return;
+  const pin = await promptPin("Enter PIN to pair a phone");
+  if (!pin) return;
+  owner.busy = true;
+  owner.open = true;
+  owner.code = null;
+  owner.qrUrl = null;
+  owner.msg = "starting…";
+  render();
+  try {
+    const res = await fetch("/api/owner/code", { method: "POST", headers: { "X-PIN": pin } });
+    if (res.status === 401) { owner.msg = "PIN not accepted"; return; }
+    if (res.status === 409) {
+      const b = await res.json().catch(() => null);
+      owner.msg = (b && typeof b.detail === "string" && b.detail) || "stand in front of your Irin to pair a phone";
+      return;
+    }
+    if (!res.ok) {
+      const b = await res.json().catch(() => null);
+      owner.msg = `Could not start: ${(b && typeof b.detail === "string" && b.detail) || `the device refused (${res.status})`}`;
+      return;
+    }
+    const b = await res.json();
+    owner.qrUrl = b.qr_url;
+    owner.code = String(b.code || "");
+    owner.deadline = Date.now() + (Number(b.expires_in_s) || 600) * 1000;
+    owner.msg = "";
+  } catch {
+    owner.msg = "Could not reach the device";
+  } finally {
+    owner.busy = false;
+    render();
+  }
+}
+
+async function disconnectOwner() {
+  if (owner.busy) return;
+  const pin = await promptPin("Enter PIN to disconnect phone");
+  if (!pin) return;
+  owner.busy = true;
+  render();
+  try {
+    const res = await fetch("/api/owner", { method: "DELETE", headers: { "X-PIN": pin } });
+    if (res.ok) await loadOwner();
+  } catch { /* GET /api/owner or the next pairing_state message catches up */ }
+  finally {
+    owner.busy = false;
+    render();
+  }
+}
+
+let ownerQrDrawn = null; // the URL the SVG on screen encodes
+function renderOwner() {
+  const o = state.owner || {};
+  const paired = o.state === "paired";
+  $("owner-open").classList.toggle("hidden", paired || owner.open);
+  $("owner-status").classList.toggle("hidden", !paired);
+  if (paired) $("owner-username").textContent = o.username || "phone";
+
+  $("ownerpair").classList.toggle("hidden", !owner.open);
+  if (!owner.open) return;
+  const showQr = !!owner.qrUrl;
+  $("owner-qr").classList.toggle("hidden", !showQr);
+  if (showQr && ownerQrDrawn !== owner.qrUrl) {
+    $("owner-qr").replaceChildren(qrSvg(owner.qrUrl));
+    ownerQrDrawn = owner.qrUrl;
+  }
+  if (!showQr) { $("owner-qr").replaceChildren(); ownerQrDrawn = null; }
+  $("owner-code").classList.toggle("hidden", !owner.code);
+  $("owner-code").textContent = owner.code ? `${owner.code.slice(0, 3)} ${owner.code.slice(3, 6)}` : "";
+
+  let text = "";
+  if (owner.code) {
+    const left = Math.max(0, Math.round((owner.deadline - Date.now()) / 1000));
+    text = `Open irin-out-of-sleep-at-hackgt.tech on your phone, Irin Device tab, enter this code. `
+      + `${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")} left.`;
+  }
+  $("owner-text").textContent = text;
+  $("owner-msg").textContent = owner.msg;
 }
 
 // --- morning (step 2 numbers, from the step 11 report) ---
@@ -1056,7 +1182,17 @@ $("pair-start").addEventListener("click", startPairing);
 $("pair-confirm").addEventListener("click", confirmPairing);
 // the QR countdown ticks without a message arriving
 setInterval(() => { if (pair.qr) render(); }, 1000);
+$("owner-open").addEventListener("click", startOwnerPairing);
+$("owner-close").addEventListener("click", closeOwnerOverlay);
+$("owner-disconnect").addEventListener("click", disconnectOwner);
+// the owner code's countdown ticks without a message arriving; expiry closes the overlay itself
+setInterval(() => {
+  if (!owner.open || !owner.code) return;
+  if (Date.now() > owner.deadline) closeOwnerOverlay();
+  else render();
+}, 1000);
 render();
 connect();
 pollDevice();
+loadOwner();
 setInterval(pollDevice, POLL_MS);
