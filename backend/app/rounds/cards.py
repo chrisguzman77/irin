@@ -99,6 +99,35 @@ def assemble(*, program: str, kind: str, status: str, flags: list[str], metrics:
     return card
 
 
+def _checkable(card: SignalCard) -> dict:
+    """The numbers a card narrative may use: the card's metrics, plus any number the
+    code-computed headline states that no metric already holds (e.g. the 5 in "rough
+    stomach 3 of 5 days", a count of days). A number already in the metrics keeps
+    its own sign, so "rose 22" still fails when the metric is -22. Not stored."""
+    from .narrative import numeric_tokens
+
+    def values(v):
+        if isinstance(v, dict):
+            for x in v.values():
+                yield from values(x)
+        elif isinstance(v, list):
+            for x in v:
+                yield from values(x)
+        elif isinstance(v, (int, float)) and not isinstance(v, bool):
+            yield abs(float(v))
+
+    known = set(values(card.metrics))
+    extra = []
+    for tok in numeric_tokens(card.headline):
+        try:
+            x = float(tok.replace(",", ""))
+        except ValueError:
+            continue  # clock times and ranges are not metric values
+        if x not in known:
+            extra.append(x)
+    return {**card.metrics, "headline_numbers": extra} if extra else dict(card.metrics)
+
+
 async def with_narrative(card: SignalCard) -> SignalCard:
     """R13: the card's narrative through narrative.py's chain (the validator and the
     second opinion run inside it; any miss ships the deterministic template), in a
@@ -110,7 +139,7 @@ async def with_narrative(card: SignalCard) -> SignalCard:
 
     try:
         text = await asyncio.to_thread(generate, "card", {"kind": card.kind, "headline": card.headline,
-                                                          "confidence": dict(card.confidence)}, dict(card.metrics))
+                                                          "confidence": dict(card.confidence)}, _checkable(card))
     except Exception:
         log.exception("card narrative failed; the template stands")
         return card

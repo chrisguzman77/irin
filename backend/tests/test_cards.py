@@ -251,3 +251,15 @@ def test_card_narrative_runs_the_chain_off_the_loop_and_falls_back_to_the_templa
     monkeypatch.undo()
     real = asyncio.run(with_narrative(card))  # NARRATIVE_BACKEND=template in the suite
     assert real.narrative == template_narrative(card.kind, card.headline, card.metrics, card.confidence)
+
+
+def test_a_card_narrative_may_repeat_the_headline_numbers_but_not_flip_a_sign():
+    """The 5 in "Rough stomach 3 of 5 days" is a code-computed count that no metric holds."""
+    from app.rounds import narrative
+    from app.rounds.cards import _checkable
+
+    card = SignalCard.model_validate(json.loads((FIXTURES / "signal_card_step.json").read_text()))
+    m = _checkable(card)
+    assert narrative.validate("Stomach upset occurred on 3 of 5 days.", m)
+    assert not narrative.validate("Stomach upset occurred on 3 of 6 days.", m)  # 6 is nowhere
+    assert m.get("headline_numbers") and 22.0 not in m["headline_numbers"]  # 22 is already a metric (-22)
