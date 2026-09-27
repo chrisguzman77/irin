@@ -106,7 +106,7 @@ def test_build_stores_emails_with_png_and_uses_the_template_offline(db, tmp_path
     readings = the_save_readings()
     mailer = FakeMailer()
     b = ReportBuilder(readings_for=lambda a, c: readings, treatments_for=lambda a, c: [],
-                      mailer=mailer, out_dir=tmp_path, narrative_backend="template")
+                      mailer=mailer, out_dir=tmp_path)  # conftest: template
     r = b.build(NIGHT, is_demo=False)
     assert r.stats["low_mgdl"] == round(min(g for _, g, _ in _ROWS)) and r.graph_png_path and r.night_date == NIGHT
     assert validate_narrative(r.narrative, r.stats) and r.is_demo is False
@@ -123,31 +123,40 @@ def test_demo_report_is_stored_and_shown_but_never_emailed(db, tmp_path):
     assert r.is_demo and mailer.sent == [] and store.select_report(NIGHT) is not None
 
 
-def test_invented_number_from_a_model_falls_back_to_the_template(db, tmp_path):
-    b = ReportBuilder(readings_for=lambda a, c: the_save_readings(), treatments_for=lambda a, c: [],
-                      mailer=FakeMailer(), out_dir=tmp_path,
-                      narrative_backend="anthropic", model_call=lambda prompt: "You dropped to 41 and slept through it.")
-    r = b.build(NIGHT, is_demo=True)
+@pytest.fixture
+def chain(monkeypatch):
+    """narrative.py's chain live with its link functions faked: nothing reaches the network."""
+    from app.rounds import narrative
+    from tests.test_narrative import ROUTING, Fakes
+
+    monkeypatch.setattr(narrative.config, "NARRATIVE_BACKEND", "anthropic")
+    monkeypatch.setattr(narrative.config, "NARRATIVE_ROUTING", ROUTING)
+    return lambda **replies: Fakes(monkeypatch, **replies)
+
+
+def _builder(tmp_path):
+    return ReportBuilder(readings_for=lambda a, c: the_save_readings(), treatments_for=lambda a, c: [],
+                         mailer=FakeMailer(), out_dir=tmp_path)
+
+
+def test_invented_number_from_a_model_falls_back_to_the_template(db, tmp_path, chain):
+    chain(anthropic="You dropped to 41 and slept through it.")
+    r = _builder(tmp_path).build(NIGHT, is_demo=True)
     assert r.narrative == template_narrative(r.stats)
 
 
-def test_model_error_or_missing_key_falls_back_to_the_template(db, tmp_path):
-    def boom(prompt):
-        raise RuntimeError("no network")
-
-    b = ReportBuilder(readings_for=lambda a, c: the_save_readings(), treatments_for=lambda a, c: [],
-                      mailer=FakeMailer(), out_dir=tmp_path, narrative_backend="anthropic", model_call=boom)
-    r = b.build(NIGHT, is_demo=True)
+def test_model_error_or_missing_key_falls_back_to_the_template(db, tmp_path, chain):
+    chain(anthropic=RuntimeError("no network"))
+    r = _builder(tmp_path).build(NIGHT, is_demo=True)
     assert r.narrative == template_narrative(r.stats)
 
 
-def test_valid_model_text_is_used(db, tmp_path):
+def test_valid_model_text_is_used_and_comes_from_claude_never_meta(db, tmp_path, chain):
     lo = min(_ROWS, key=lambda r: r[1])
     good = f"Your lowest point was {round(lo[1])} mg/dL around {lo[0].strftime('%H:%M')}. Nothing else stood out."
-    b = ReportBuilder(readings_for=lambda a, c: the_save_readings(), treatments_for=lambda a, c: [],
-                      mailer=FakeMailer(), out_dir=tmp_path, narrative_backend="anthropic", model_call=lambda p: good)
-    r = b.build(NIGHT, is_demo=True)
-    assert r.narrative == good
+    fakes = chain(anthropic=good, meta="x")
+    r = _builder(tmp_path).build(NIGHT, is_demo=True)
+    assert r.narrative == good and fakes.names() == ["anthropic"]
 
 
 def test_rebuild_replaces_the_stored_report(db, tmp_path):

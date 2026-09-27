@@ -1,12 +1,13 @@
 """Morning report (chris.md step 11): overnight stats computed by code, a
-matplotlib PNG, a plain-language narrative (the direct Claude call until R13,
-when narrative.py's chain takes over; the deterministic template is the
-no-network path and the fallback), stored in SQLite, emailed with the PNG
+matplotlib PNG, a plain-language narrative (narrative.py's chain, task morning_report,
+routed to Claude, never Muse; the deterministic template is the no-network
+path and the fallback), stored in SQLite, emailed with the PNG
 attached, and shown on the morning screen. Family Story rides this job (F3).
 
-The narrative passes the no-invented-numbers validator: every numeric token
-in the generated text (integers, decimals, percentages, clock times) must
-exist in the computed stats, otherwise the template renders instead. Two
+The narrative passes narrative.py's no-invented-numbers validator: every
+numeric token in the generated text (integers, decimals, percentages, clock
+times) must exist in the computed stats, otherwise the template renders
+instead; a no-data night is always the template. Two
 short paragraphs, plain language, no medical advice.
 
 Demo-mode reports are badged DEMO, stored and shown, and NEVER emailed.
@@ -111,7 +112,7 @@ def render_graph(readings: list[Reading], path: Path, night_start: str, night_en
     return path
 
 
-# --- narrative: template, validator, the direct Claude call ---
+# --- narrative: template, validator, prompt (narrative.py runs the chain) ---
 
 
 def template_narrative(s: dict) -> str:
@@ -170,27 +171,6 @@ SYSTEM_PROMPT = (
 )
 
 
-def claude_narrative(prompt: str, system: str = SYSTEM_PROMPT, task: str = "morning_report") -> str:
-    """The direct Claude call (until R13's narrative.py chain). Raises on any
-    failure; the caller falls back to its template. `task` picks the model from
-    NARRATIVE_ROUTING when that row names anthropic."""
-    import anthropic
-
-    if not config.ANTHROPIC_API_KEY:
-        raise RuntimeError("ANTHROPIC_API_KEY not set")
-    routing = config.NARRATIVE_ROUTING.get(task) or []
-    model = routing[1] if len(routing) == 2 and routing[0] == "anthropic" else DEFAULT_MODEL
-    client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY, timeout=20.0, max_retries=1)
-    response = client.messages.create(model=model, max_tokens=600, system=system,
-                                      messages=[{"role": "user", "content": prompt}])
-    if response.stop_reason == "refusal":
-        raise RuntimeError("refused")
-    text = "".join(block.text for block in response.content if block.type == "text").strip()
-    if not text:
-        raise RuntimeError("empty narrative")
-    return text
-
-
 def narrative_prompt(s: dict) -> str:
     """No date in the prompt: a model echoing "January 2" or "2020-01-02" would
     only trip the validator; the night is "last night"."""
@@ -230,27 +210,14 @@ class ReportBuilder:
     treatments_for: Callable[[datetime, datetime], list[Treatment]]
     mailer: Mailer | None = None
     out_dir: Path = REPORTS_DIR
-    narrative_backend: str | None = None  # None = config.NARRATIVE_BACKEND
-    model_call: Callable[[str], str] | None = None  # injectable; default claude_narrative
     settings: Settings = field(default_factory=Settings)  # the night window, read at build time
 
     def _narrative(self, night_date: date, s: dict) -> str:
-        backend = self.narrative_backend or config.NARRATIVE_BACKEND
-        fallback = template_narrative(s)
-        if backend == "template":
-            return fallback
-        call = self.model_call or claude_narrative
-        try:
-            text = call(narrative_prompt(s))
-        except Exception as e:  # no key, no network, refusal, timeout: the template stands
-            log.warning("narrative backend failed (%s); using the template", type(e).__name__)
-            return fallback
-        if not validate_narrative(text, s):
-            log.warning("narrative failed the no-invented-numbers validator; using the template")
-            return fallback
-        if not s["readings"] and "fine" in text.lower():
-            return fallback
-        return text
+        """build() runs in a worker thread (main._build_night), so the chain runs; on an event loop it would
+        return the template."""
+        from .rounds import narrative
+
+        return narrative.generate("morning_report", {}, s)
 
     def build(self, night_date: date, is_demo: bool) -> MorningReport:
         """night_date is the MORNING the night ends on. Runs in a worker thread
