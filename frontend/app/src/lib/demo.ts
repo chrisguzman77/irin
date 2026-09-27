@@ -17,6 +17,12 @@ export interface ScenarioList {
   speed: number;
   /** whether the replay feed is paused; false when the Pi does not say */
   paused: boolean;
+  /** Irin Brain only (R12): card rows change confidence label, never blank */
+  brain_only: boolean;
+  /** the replay clock (the Pi's naive local time), null when not given */
+  clock: string | null;
+  /** the scenario companion's kind, null when the scenario has none */
+  companion: string | null;
 }
 
 export async function listScenarios(base: string): Promise<ScenarioList> {
@@ -28,25 +34,33 @@ export async function listScenarios(base: string): Promise<ScenarioList> {
     current: typeof b.current === "string" ? b.current : null,
     speed: typeof b.speed === "number" ? b.speed : 1,
     paused: b.paused === true,
+    brain_only: b.brain_only === true,
+    clock: typeof b.clock === "string" ? b.clock : null,
+    companion: typeof b.companion === "string" ? b.companion : null,
   };
 }
 
-/** One demo POST; resolves to an error message, or "" on success. */
-async function post(base: string, path: string, body?: unknown): Promise<string> {
+/** One demo POST: the Pi's JSON answer, or the message saying why not. */
+async function postJson<T>(base: string, path: string, body?: unknown): Promise<{ ok: true; body: T } | { ok: false; reason: string }> {
   const res = await deviceFetch(base, `/api/demo/${path}`, {
     method: "POST",
     body: body === undefined ? undefined : JSON.stringify(body),
   });
-  if (res.ok) return "";
-  if (res.status === 404) {
-    try {
-      const b = await res.json();
-      if (b && typeof b.detail === "string") return b.detail;
-    } catch {
-      /* no body */
-    }
+  let b: unknown = null;
+  try {
+    b = await res.json();
+  } catch {
+    /* no body */
   }
-  return `Your Irin refused it (${res.status}).`;
+  if (res.ok) return { ok: true, body: b as T };
+  const detail = b && typeof (b as { detail?: unknown }).detail === "string" ? (b as { detail: string }).detail : "";
+  return { ok: false, reason: detail ? `Your Irin said (${res.status}): ${detail}` : `Your Irin refused it (${res.status}).` };
+}
+
+/** One demo POST; resolves to an error message, or "" on success. */
+async function post(base: string, path: string, body?: unknown): Promise<string> {
+  const r = await postJson(base, path, body);
+  return r.ok ? "" : r.reason;
 }
 
 export const playScenario = (base: string, name: string) => post(base, "scenario", { name } satisfies ScenarioRequest);
@@ -55,3 +69,33 @@ export const setPaused = (base: string, paused: boolean) => post(base, "pause", 
 export const injectLow = (base: string, glucose_mgdl: number) =>
   post(base, "inject_low", { glucose_mgdl, trend: "SingleDown" } satisfies InjectRequest);
 export const basalNudge = (base: string) => post(base, "basal_time");
+
+// R12 (chris/r12-seek): the seek and the sponsor-tier controls, all demo-only.
+/** {step, day} jumps to day D of plan step N; {day} to day D of the scenario;
+ * the clock lands at 09:00 of that day. 409 when the replay is already past it. */
+export type SeekTarget = { step: number; day: number } | { day: number } | { date: string };
+export interface SeekResult {
+  scenario: string;
+  clock: string;
+  seeded: Record<string, number>;
+  nights_built: number;
+  mornings_evaluated: number;
+  to: string;
+}
+export const seek = (base: string, target: SeekTarget) => postJson<SeekResult>(base, "seek", target);
+export const setBrainOnly = (base: string, brain_only: boolean) =>
+  postJson<{ brain_only: boolean }>(base, "brain_only", { brain_only });
+/** A pending plan_create from "Impiricus Spark (simulated)": the doctor-message
+ * takeover confirms it with a fresh PIN, which starts the watch. */
+export const sparkOffer = (base: string) =>
+  postJson<{ message_id: string; plan_id: string; status: string }>(base, "spark_offer");
+/** 404 until the Night Buddy tier lands. */
+export const buddyRung = (base: string) => postJson<{ status: string }>(base, "buddy_rung");
+
+/** R14(c) Brain versus Bedside: the real engine's current card (the Step Watch
+ * card, else the Basal Check), sealed as the bedside device, as Brain only, or
+ * both side by side. Brain only changes confidence labels, never a row. */
+export type SendMode = "bedside" | "brain" | "both";
+export interface SentCard { card_id: string; kind: string; program: string; status: string; recipients: string[]; is_demo: boolean }
+export const sendEvaluatedCard = (base: string, mode: Exclude<SendMode, "bedside">) =>
+  postJson<{ mode: SendMode; cards: SentCard[] }>(base, "send_card", { mode });

@@ -17,7 +17,12 @@ function section(title) {
   return s;
 }
 
-/** @returns {HTMLElement} the card, ready to insert */
+// Actions whose flow belongs to a later step: shown, never sendable yet.
+const LATER = { resources: "arrives with R13" };
+
+/** @param {object} card a SignalCard
+ * @param {{actions?: boolean, sample?: boolean, onAction?: (key: string) => void, onResource?: (category: string) => void, onNight?: (index: number) => void}} opts
+ * @returns {HTMLElement} the card, ready to insert */
 export function renderCard(card, opts = {}) {
   const m = cardModel(card, opts);
   const root = el("article", `sc-card ${m.statusCls}`);
@@ -54,12 +59,17 @@ export function renderCard(card, opts = {}) {
   if (m.nights.length) {
     const s = section("Nights");
     const strip = el("div", "sc-strip");
-    for (const nt of m.nights) {
-      const d = el("div", `sc-night ${nt.cls} ${nt.source === "logged" ? "sc-logged" : "sc-inferred-code"}`);
+    const tap = typeof opts.onNight === "function"; // the inbox's night replay
+    m.nights.forEach((nt, i) => {
+      const d = el(tap ? "button" : "div", `sc-night ${nt.cls} ${nt.source === "logged" ? "sc-logged" : "sc-inferred-code"}`);
       d.title = nt.title;
       d.append(el("b", "", nt.date), nt.text);
+      if (tap) {
+        d.type = "button";
+        d.addEventListener("click", () => opts.onNight(i));
+      }
       strip.append(d);
-    }
+    });
     s.append(strip, el("div", "sc-legend", "Solid border: reason logged. Dashed: inferred from the trace."));
     root.append(s);
   }
@@ -84,8 +94,18 @@ export function renderCard(card, opts = {}) {
   }
 
   if (m.resources.length) {
+    // the inbox passes onResource(category) to start the handoff flow, a preview lists them
     const s = section("Resources");
-    s.append(el("div", "", m.resources.join(" · ")));
+    if (typeof opts.onResource === "function") {
+      const a = el("div", "sc-actions");
+      (card.resource_categories || []).forEach((key, i) => {
+        const b = el("button", "sc-action", m.resources[i]);
+        b.type = "button";
+        b.addEventListener("click", () => opts.onResource(String(key)));
+        a.append(b);
+      });
+      s.append(a);
+    } else s.append(el("div", "", m.resources.join(" · ")));
     root.append(s);
   }
 
@@ -94,14 +114,21 @@ export function renderCard(card, opts = {}) {
   root.append(n);
 
   if (m.actions.length) {
-    const s = section("Actions (arrive with the relay)");
+    // m.actions are the labels of card.allowed_actions, in the same order; the
+    // inbox passes onAction(key) to make them live, a preview leaves them off.
+    const live = typeof opts.onAction === "function";
+    const s = section(live ? "Actions" : "Actions (preview)");
     const a = el("div", "sc-actions");
-    for (const label of m.actions) {
-      const b = el("button", "sc-action", label);
+    const keys = card.allowed_actions || [];
+    m.actions.forEach((label, i) => {
+      const key = String(keys[i]);
+      const later = LATER[key];
+      const b = el("button", "sc-action", later ? `${label} (${later})` : label);
       b.type = "button";
-      b.disabled = true;
+      b.disabled = !live || !!later;
+      if (live && !later) b.addEventListener("click", () => opts.onAction(key));
       a.append(b);
-    }
+    });
     s.append(a);
     root.append(s);
   }

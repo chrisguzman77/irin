@@ -7,6 +7,7 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
+  <img id="logo" src="brand/irin-logo.svg" alt="Irin">
   <header id="flags">
     <div id="badge-demo" class="flag flag-demo hidden">DEMO</div>
     <div id="badge-clock" class="flag flag-clock hidden">clock not set</div>
@@ -16,6 +17,11 @@
     <div id="flag-acked" class="flag flag-acked hidden">acknowledged — still low</div>
     <div id="flag-basal" class="flag flag-basal hidden">basal not logged yet</div>
   </header>
+
+  <!-- Idle screen: falling leaves while presence is Away (nobody in the radar's
+       range). Never during any alarm or a low reading; the alarm takeover and
+       the flags (DEMO) sit above it. Purely visual: it sends nothing. -->
+  <div id="idle" aria-hidden="true"><img src="idle-leaves.svg" alt=""></div>
 
   <!-- Alarm takeover (step 3): amber = predicted low (WARNING), red = actual low (FULL).
        The tier comes from alarm.trigger_type; it covers every screen mode. -->
@@ -44,6 +50,22 @@
     <div id="doctor-msg"></div>
   </section>
 
+  <!-- R1: Share with my doctor. The QR is drawn only by the screen that started
+       the pairing; the code and Confirm show whenever the doctor has joined. -->
+  <section id="pair" class="hidden" aria-label="share with my doctor">
+    <div id="pair-title">Share with my doctor</div>
+    <div id="pair-list"></div>
+    <div id="pair-qr" class="hidden"></div>
+    <div id="pair-code" class="hidden"></div>
+    <div id="pair-text"></div>
+    <div id="pair-buttons">
+      <button type="button" id="pair-close">Close</button>
+      <button type="button" id="pair-start">Show a pairing code</button>
+      <button type="button" id="pair-confirm" class="hidden">Confirm</button>
+    </div>
+    <div id="pair-msg"></div>
+  </section>
+
   <section id="keypad" class="hidden" aria-label="enter PIN">
     <div id="keypad-title">Enter PIN</div>
     <div id="keypad-dots"></div>
@@ -56,8 +78,11 @@
         <span id="glucose">---</span>
         <span id="trend" aria-label="trend"></span>
       </div>
+      <div id="prediction" class="prediction hidden" aria-live="polite"></div>
       <div id="units">mg/dL</div>
       <div id="reading-time">waiting for device</div>
+      <div id="watch-strip" class="hidden"></div>
+      <button type="button" id="share-open">Share with my doctor</button>
     </section>
 
     <section id="graph-wrap">
@@ -90,6 +115,7 @@
       <span id="night-glucose">---</span>
       <span id="night-trend"></span>
     </div>
+    <div id="night-prediction" class="prediction hidden"></div>
   </main>
 
   <!-- Morning: overnight summary, for 2 h after the night window ends. -->
@@ -118,6 +144,7 @@
   </main>
 
   <script src="doctor-echo.js"></script>
+  <script src="qrcode.js"></script>
   <script src="display.js"></script>
 </body>
 </html>

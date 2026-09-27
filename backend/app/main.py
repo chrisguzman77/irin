@@ -18,7 +18,7 @@ from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Literal
 
-from fastapi import Depends, FastAPI, HTTPException, WebSocket
+from fastapi import Depends, FastAPI, HTTPException, WebSocket, Query
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -26,24 +26,37 @@ from pydantic import BaseModel, Field
 
 from . import store
 from .alarm import AlarmEngine, Transition
-from .auth import require_pin
+from .backlight import BacklightController
+from .buddy.rung import BuddyRung
+from .buddy.treating import TreatingError, handle_calls, set_treating
+from .auth import require_fresh_pin, require_pin
 from .clock import clock
 from .config import REPO_ROOT, config
 from .contracts import (FRESH_PIN_ENDPOINTS, AlarmEvent, AlarmState, FamilyRecipient, FamilyStory, LowEvent,
-                        MorningReport, NightRecord, Reading, Settings, Treatment, WSMessage)
+                        MorningReport, NightRecord, Pairing, Reading, RecallAnswer, Settings, Treatment, WSMessage)
 from .datasource.base import DataSource
 from .datasource.nightscout import NightscoutDataSource
 from .datasource.replay import ReplayDataSource
-from .demo import bind as bind_demo, live_basal_time, restore_live_settings, router as demo_router
+from .demo import bind as bind_demo, live_basal_time, restore_live_settings, router as demo_router, simulated_peers
 from .family_story import FamilyStoryService
 from .forecast import Forecaster
 from .forward import Forwarder, from_config as forwarder_from_config
 from .outputs import GatedOutputs
 from .presence import PresenceMachine, PresenceState
 from .reports import ReportBuilder, SmtpMailer
+from .rounds import crypto
 from .rounds.alarm_events import AlarmEventRecorder
 from .rounds.ledger import Ledger
 from .rounds.low_events import LowEventDetector
+from .rounds.cards import CardSender
+from .rounds.evaluate import StandingEngine
+from .rounds.messages import DoctorMessages, MessageError
+from .rounds.pairing import PairingError, PairingService, RelayPairing
+from .rounds.relay_client import RelayClient
+from .rounds.catchup import CatchUp
+from .rounds.recall import ANSWER_UNTIL_HHMM, MorningRecall, RecallError
+from .rounds.step_watch import StepWatch
+from .rounds.vigilance import install as install_vigilance
 from .rounds.nights_adapter import NightsAdapter
 from .scheduler import Scheduler, basal_logged_on, timedatectl_synced
 from . import voice_out
@@ -82,6 +95,15 @@ class Runtime:
     alarm_events: "AlarmEventRecorder | None" = None
     ledger: "Ledger | None" = None
     low_events: "LowEventDetector | None" = None
+    pairing: "PairingService | None" = None
+    relay_client: "RelayClient | None" = None
+    cards: "CardSender | None" = None
+    standing: "StandingEngine | None" = None
+    messages: "DoctorMessages | None" = None
+    step_watch: "StepWatch | None" = None
+    recall: "MorningRecall | None" = None
+    catchup: "CatchUp | None" = None
+    buddy: "BuddyRung | None" = None
 
 
 runtime = Runtime(mode="nightscout" if config.DATASOURCE == "nightscout" else "replay",
@@ -95,7 +117,7 @@ def _hal():
 
     return get_hal()
 
-runtime.presence = PresenceMachine(runtime.settings)
+runtime.presence = PresenceMachine(runtime.settings, away_after_min=config.AWAY_AFTER_MIN)
 runtime.outputs = GatedOutputs(_hal(), runtime.presence)  # Away gates room outputs only, here
 runtime.alarm = AlarmEngine(runtime.settings, hal=runtime.outputs)
 runtime.forecaster = Forecaster()
@@ -224,6 +246,20 @@ runtime.ledger = Ledger(
 runtime.low_events = LowEventDetector(adapter=runtime.ledger.adapter, is_demo=lambda: runtime.mode == "replay")
 
 
+def _recall_due(status: dict) -> None:
+    _schedule(hub.broadcast(WSMessage(type="recall_due", payload=status)))
+
+
+def _recall_answered(recall, event) -> None:
+    """A late answer before noon re-runs the morning's evaluation; the budget sends nothing twice."""
+    _schedule(_evaluate_night(event.night_date))
+
+
+# R11: the morning questions about the night's lows (asked at window end, open until noon)
+runtime.recall = MorningRecall(is_demo=lambda: runtime.mode == "replay", on_due=_recall_due, on_answer=_recall_answered,
+                               clock_synced=lambda: runtime.scheduler.clock_synced if runtime.scheduler else True)
+
+
 def _ledger_job(morning: date) -> None:
     """At night-window end: the night that just ended (keyed by its evening date)."""
     task = asyncio.get_running_loop().create_task(
@@ -235,21 +271,140 @@ def _ledger_job(morning: date) -> None:
 def _build_night_record(night_date: date) -> NightRecord | None:
     """The ledger row, then the night's low events (R4) from the same inputs."""
     try:
+        # the low events first, so the evaluation the ledger row triggers never reads the previous rebuild's rows
+        runtime.low_events.detect(night_date)
         record = runtime.ledger.build_night(night_date)
     except Exception:
         logging.getLogger("irin.main").exception("night ledger failed for %s", night_date)
         return None
     try:
-        runtime.low_events.detect(night_date)
+        # R11: one question per low, the two deepest, asked AT the window end: a night rebuilt days later is born closed
+        runtime.recall.create(night_date, runtime.low_events.detect(night_date), asked_at=record.window_end)
     except Exception:
         logging.getLogger("irin.main").exception("low events failed for %s; the ledger row stands", night_date)
     return record
 
 
 runtime.scheduler.register("ledger", lambda: runtime.settings.night_window_end, _ledger_job)
+runtime.scheduler.register("recall_close", ANSWER_UNTIL_HHMM, lambda d: runtime.recall.close(d))  # unanswered = no answer, never fine
+
+
+# --- the Standing Cards engine (R8): 07:05 on clock.py, and the red rule on every closed alarm episode ---
+
+
+async def _evaluate_night(night_date: date) -> None:
+    """The morning evaluation for the night keyed by `night_date`. The watch
+    first: its checks and gates fall due once, and the budget's one-program-a-day
+    rule would otherwise let a same-morning Follow-up swallow them. Idempotent:
+    a re-run (a late recall answer, a seek) sends nothing twice."""
+    if runtime.step_watch is not None:
+        await runtime.step_watch.run(today=night_date)
+        if runtime.step_watch.checkin_due(night_date + timedelta(days=1)):
+            await hub.broadcast(WSMessage(type="symptom_check_due", payload=_checkin_status()))
+    if runtime.standing is not None:
+        await runtime.standing.run(today=night_date)
+
+
+def _checkin_status() -> dict:
+    """The stomach check-in and the open morning questions, one dict (the snapshot's todays_checkin_status)."""
+    return hub.checkin_status()
+
+
+def _evaluate_after_ledger(record: NightRecord) -> None:
+    """The morning evaluation runs right after the ledger row is written (the
+    plan's 07:05), never before it: the ledger job is its trigger."""
+    if runtime.standing is None:
+        return
+    _schedule(_evaluate_night(record.night_date))
+
+
+def _red_rules_on_alarm_event(event: AlarmEvent) -> None:
+    """A closed episode may make Hypo Response red: re-run just that rule, keyed to
+    the episode, over the window ending on the night in progress."""
+    if runtime.standing is None or event.tier not in ("predicted_low", "actual_low"):
+        return
+    tonight = runtime.ledger.night_ended_on(clock.now().date()) if clock.now().time() < parse_hhmm(runtime.settings.night_window_start) \
+        else clock.now().date()
+    _schedule(runtime.standing.run(today=tonight, only="hypo_response", event_key=event.event_id))
+    if runtime.step_watch is not None and (event.rearm_count or 0) > 0:
+        _schedule(runtime.step_watch.safety(tonight))  # during a watch Hypo Response is absorbed into this red (invariant 10)
+
+
+runtime.ledger.on_record = _evaluate_after_ledger
+
+
+# --- doctor / buddy pairing (R5): the QR handshake through the relay, confirmed with a FRESH PIN ---
+
+
+def _role_url(configured: str, sub: str) -> str:
+    """INBOX_URL / WATCH_URL from .env, else derived from APP_ORIGIN (doctor. / watch.)."""
+    if configured:
+        return configured
+    return config.APP_ORIGIN.replace("://", f"://{sub}.", 1) if config.APP_ORIGIN.startswith("https://") else config.APP_ORIGIN
+
+
+def _broadcast_pairing_state(state: dict) -> None:
+    _schedule(hub.broadcast(WSMessage(type="pairing_state", payload=state)))
+
+
+def _broadcast_card_sent(payload: dict) -> None:
+    _schedule(hub.broadcast(WSMessage(type="card_sent", payload=payload)))
+
+
+async def _relay_tick() -> None:
+    """Every relay poll: retry undelivered cards, expire unanswered doctor messages, retry receipts."""
+    try:
+        await runtime.cards.flush()
+    except Exception:
+        logging.getLogger("irin.main").exception("card flush failed")
+    try:
+        await runtime.messages.expire()
+    except Exception:
+        logging.getLogger("irin.main").exception("message expiry failed")
+
+
+def _make_relay_client() -> RelayClient:
+    return RelayClient(relay_url=config.RELAY_URL, source_key=config.RELAY_SOURCE_KEY,
+                       device_id=config.DEVICE_ID or "irin-dev", is_demo=lambda: runtime.mode == "replay",
+                       on_pairings=lambda states: runtime.pairing.apply_remote_states(states))
+
+
+def _make_pairing() -> PairingService:
+    return PairingService(relay=RelayPairing(config.RELAY_URL, config.RELAY_SOURCE_KEY),
+                          device_id=config.DEVICE_ID or "irin-dev", device_pk_fn=crypto.device_public_key,
+                          inbox_url=_role_url(config.INBOX_URL, "doctor"), watch_url=_role_url(config.WATCH_URL, "watch"),
+                          relay_url=config.RELAY_URL, is_demo=lambda: runtime.mode == "replay",
+                          on_state=_broadcast_pairing_state)
+
+def _buddy_calls(calls: list[dict]) -> None:
+    """B4: brokered calls from the relay poll: the buddy chime (never an alarm tone, never over a sounding low)."""
+    handle_calls(runtime.buddy, calls, runtime.outputs, lambda: runtime.alarm.state, runtime.settings.volume)
+
 
 ALARM_TICK_CLOCK_SECONDS = 30.0
 _broadcast_tasks: set[asyncio.Task] = set()  # references held so a broadcast is never GC'd mid-flight
+_loop: asyncio.AbstractEventLoop | None = None  # captured in lifespan so worker threads can schedule broadcasts
+
+
+def _schedule(coro) -> None:
+    """Run a coroutine on the app's loop from the loop itself OR from a worker
+    thread (asyncio.to_thread callers such as the pairing handshake)."""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = _loop
+        if loop is None or loop.is_closed():
+            coro.close()
+            return
+        loop.call_soon_threadsafe(_schedule_on_loop, coro)
+        return
+    _schedule_on_loop(coro, loop)
+
+
+def _schedule_on_loop(coro, loop: asyncio.AbstractEventLoop | None = None) -> None:
+    task = (loop or asyncio.get_running_loop()).create_task(coro)
+    _broadcast_tasks.add(task)
+    task.add_done_callback(_broadcast_tasks.discard)
 
 
 def _broadcast_transition(t: Transition) -> None:
@@ -268,6 +423,23 @@ runtime.alarm.on_transition(_broadcast_transition)
 runtime.alarm_events = AlarmEventRecorder(is_demo=lambda: runtime.mode == "replay",
                                           brain_only=lambda: config.IRIN_BRAIN_ONLY)
 runtime.alarm.on_transition(runtime.alarm_events)  # R2 observes; it never calls back into alarm.py
+# B2: the buddy rung observes too, AFTER the recorder (it reads the recorder's open episode); additive only
+runtime.buddy = BuddyRung(
+    settings=runtime.settings, alarm_state=lambda: runtime.alarm.state, recorder=runtime.alarm_events,
+    recipients=lambda demo: runtime.pairing.recipients(demo) if runtime.pairing is not None else [],
+    post_card=lambda env: runtime.relay_client.post_card(env),
+    post_hub=lambda path, body: runtime.relay_client.post_hub(path, body),
+    spawn=lambda coro: _schedule(coro), device_id=config.DEVICE_ID or "irin-dev",
+    is_demo=lambda: runtime.mode == "replay", brain_only=lambda: config.IRIN_BRAIN_ONLY,
+    on_alert=lambda p: _schedule(hub.broadcast(WSMessage(type="buddy_alert", payload=p))),
+    on_update=lambda p: _schedule(hub.broadcast(WSMessage(type="hub_update", payload=p))))
+runtime.alarm.on_transition(runtime.buddy)
+# The backlight: dim in the night window, full by day and whenever a low alarm
+# sounds. It observes alarm transitions (never raises into them) and the tick
+# below follows the night window; it writes through the output gate.
+runtime.backlight = BacklightController(runtime.outputs, lambda: runtime.scheduler.display_mode(),
+                                        lambda: runtime.alarm.state)
+runtime.alarm.on_transition(runtime.backlight.update)
 
 
 def _broadcast_presence(state: PresenceState) -> None:
@@ -296,22 +468,76 @@ async def _alarm_tick_loop() -> None:
             raw = runtime.outputs.get_presence()
             runtime.presence.sample(raw)
             runtime.alarm_events.sample(raw)  # the same raw radar sample, aggregated per episode (B7)
+            runtime.buddy.tick()  # B2: the rung and the T+20 clock, after the recorder's sample
+            runtime.backlight.update()  # follows the night window (writes only on a change)
         except Exception:
             logging.getLogger("irin.main").exception("tick failed; continuing")
         await clock.sleep(ALARM_TICK_CLOCK_SECONDS)
 
 
+async def _presence_fast_loop() -> None:
+    """Optional, only when PRESENCE_SAMPLE_SECONDS is shorter than the alarm
+    tick: extra raw radar samples for the presence machine alone, so a person
+    walking back in wakes the room outputs and the idle screen within seconds.
+    Alarm deadlines and R2's presence_during keep the 30 s tick above. Wall
+    seconds on purpose: at 60x replay a clock-second loop would spin."""
+    while True:
+        try:
+            runtime.presence.sample(runtime.outputs.get_presence())
+        except Exception:
+            logging.getLogger("irin.main").exception("presence sample failed; continuing")
+        await asyncio.sleep(config.PRESENCE_SAMPLE_SECONDS)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global _loop
+    _loop = asyncio.get_running_loop()
     store.init_db()
     _load_settings()
+    runtime.pairing = _make_pairing()  # after init_db: it loads the stored pairings
+    runtime.relay_client = _make_relay_client()
+    # a Rounds card goes to doctors only: a buddy pairing never receives clinical numbers (invariant 15)
+    runtime.cards = CardSender(recipients=lambda demo: [p for p in runtime.pairing.recipients(demo) if p.peer_kind == "doctor"],
+                               post=runtime.relay_client.post_card,
+                               device_id=config.DEVICE_ID or "irin-dev", on_sent=_broadcast_card_sent)
+    runtime.standing = StandingEngine(settings=runtime.settings, sender=runtime.cards,
+                                      device_id=config.DEVICE_ID or "irin-dev", is_demo=lambda: runtime.mode == "replay",
+                                      brain_only=lambda: config.IRIN_BRAIN_ONLY)
+    runtime.alarm_events.on_event = _red_rules_on_alarm_event
+    runtime.messages = DoctorMessages(
+        settings=runtime.settings, pairings=lambda: {**simulated_peers(), **{k: p for k, p in runtime.pairing.pairings.items()
+                                                                             if p.peer_kind == "doctor"}},
+        post_resolution=runtime.relay_client.post_resolution,
+        on_received=lambda d: _schedule(hub.broadcast(WSMessage(type="doctor_message_received", payload=d))),
+        on_resolved=lambda d: _schedule(hub.broadcast(WSMessage(type="doctor_message_resolved", payload=d))),
+        is_demo=lambda: runtime.mode == "replay")
+    runtime.relay_client.on_messages = runtime.messages.receive
+    runtime.relay_client.on_tick = _relay_tick
+    runtime.relay_client.on_calls = _buddy_calls
+    runtime.step_watch = StepWatch(
+        adapter=runtime.ledger.adapter, sender=runtime.cards, device_id=config.DEVICE_ID or "irin-dev",
+        is_demo=lambda: runtime.mode == "replay", brain_only=lambda: config.IRIN_BRAIN_ONLY,
+        on_plan_state=lambda st: _schedule(hub.broadcast(WSMessage(type="plan_state", payload=st))))
+    runtime.messages.on_plan_message = runtime.step_watch.on_plan_message
+    runtime.standing.active_watch = lambda: runtime.step_watch.active_plan() is not None
+    # R14(a): step-week vigilance raises ONLY the predicted-low threshold, for 7 days after a step-up,
+    # from the active plan of the current world; the actual-low alarm is untouched
+    install_vigilance(runtime.alarm, runtime.settings, runtime.step_watch.active_plan)
+    # R12: the replay seek's catch-up replays every missing morning through the same ledger, questions and budget
+    runtime.catchup = CatchUp(ledger=runtime.ledger, low_events=runtime.low_events, recall=runtime.recall,
+                              evaluate_night=_evaluate_night, is_demo=lambda: runtime.mode == "replay")
     await runtime.datasource.start()
     hub.start()
     tick_task = asyncio.create_task(_alarm_tick_loop())
     sched_task = asyncio.create_task(runtime.scheduler.run())
     forward_task = asyncio.create_task(runtime.forwarder.run())
+    relay_task = asyncio.create_task(runtime.relay_client.run())
+    tasks = [tick_task, sched_task, forward_task, relay_task]
+    if config.PRESENCE_SAMPLE_SECONDS < ALARM_TICK_CLOCK_SECONDS:
+        tasks.append(asyncio.create_task(_presence_fast_loop()))
     yield
-    for task in (tick_task, sched_task, forward_task):
+    for task in tasks:
         task.cancel()
         try:
             await task
@@ -393,6 +619,8 @@ async def set_mode(req: ModeRequest) -> dict:
     await new.start()
     runtime.alarm.reset()  # switch semantics (step 12): alarm state back to idle
     runtime.alarm_events.reset()  # an episode cut by the switch is dropped, never written
+    runtime.buddy.reset()  # an open buddy alert is resolved; the T+20 clock is disarmed with the episode
+    await asyncio.to_thread(runtime.pairing.cancel)  # its lock may be held by a relay call in a worker
     runtime.forecaster.reset()
     runtime.voice.reset()
     hub._last = None
@@ -526,6 +754,183 @@ async def scheduler_state() -> dict:
 @app.get("/api/alarm", response_model=AlarmState)
 async def alarm_state() -> AlarmState:
     return runtime.alarm.state
+
+
+# --- pairing endpoints (R5) ---
+
+
+class PairStartRequest(BaseModel):
+    peer_kind: Literal["doctor", "buddy"] = "doctor"
+
+
+def _pairing_error(e: PairingError) -> HTTPException:
+    return HTTPException(status_code=e.status, detail=e.detail)
+
+
+@app.post("/api/pair/start", dependencies=[Depends(require_pin)])
+async def pair_start(req: PairStartRequest) -> dict:
+    """A single-use 10-minute token and the QR URL (everything after # stays off every server)."""
+    try:
+        return await asyncio.to_thread(runtime.pairing.start, req.peer_kind)
+    except PairingError as e:
+        raise _pairing_error(e)
+
+
+@app.get("/api/pair/status", dependencies=[Depends(require_pin)])
+async def pair_status() -> dict:
+    """Polls the relay once: awaiting_scan | awaiting_confirm (with code4) | idle, plus the pairings."""
+    try:
+        return await asyncio.to_thread(runtime.pairing.poll)
+    except PairingError as e:
+        raise _pairing_error(e)
+
+
+@app.post("/api/pair/confirm", dependencies=[Depends(require_fresh_pin)], response_model=Pairing)
+async def pair_confirm() -> Pairing:
+    """The patient's confirmation on the device, with a PIN typed fresh (FRESH_PIN_ENDPOINTS)."""
+    try:
+        pairing = await asyncio.to_thread(runtime.pairing.confirm)
+    except PairingError as e:
+        raise _pairing_error(e)
+    return pairing.model_copy(update={"doctor_pk": ""})  # the peer key stays on the device
+
+
+@app.post("/api/pair/{doctor_id}/revoke", dependencies=[Depends(require_pin)], response_model=Pairing)
+async def pair_revoke(doctor_id: str) -> Pairing:
+    """Instant and final on both sides: sharing ended."""
+    try:
+        return await asyncio.to_thread(runtime.pairing.revoke, doctor_id)
+    except PairingError as e:
+        raise _pairing_error(e)
+
+
+@app.get("/api/pairings", response_model=list[Pairing])
+async def pairings() -> list[Pairing]:
+    return [p.model_copy(update={"doctor_pk": ""}) for p in runtime.pairing.pairings.values()]
+
+
+def _message_error(e: MessageError) -> HTTPException:
+    return HTTPException(status_code=e.status, detail=e.detail)
+
+
+@app.get("/api/rounds/messages", dependencies=[Depends(require_pin)])
+async def rounds_messages(pending_only: bool = True) -> list[dict]:
+    """Doctor messages for the confirm takeover: pending by default, all with pending_only=false."""
+    docs = runtime.messages.pending() if pending_only else store.select_doctor_messages()
+    return docs
+
+
+@app.post("/api/rounds/messages/{message_id}/confirm", dependencies=[Depends(require_fresh_pin)])
+async def rounds_message_confirm(message_id: str) -> dict:
+    """The patient's echo-and-confirm on the device (FRESH PIN): the only path that applies a doctor message."""
+    try:
+        doc = await runtime.messages.confirm(message_id)
+    except MessageError as e:
+        raise _message_error(e)
+    await _settings_changed()  # basal_units may have changed
+    return doc
+
+
+@app.post("/api/rounds/messages/{message_id}/decline", dependencies=[Depends(require_fresh_pin)])
+async def rounds_message_decline(message_id: str) -> dict:
+    try:
+        return await runtime.messages.decline(message_id)
+    except MessageError as e:
+        raise _message_error(e)
+
+
+# --- Step Watch endpoints (R10) ---
+
+
+class CheckinRequest(BaseModel):
+    gi: Literal["fine", "rough", "cant_eat"]
+
+
+def _watch() -> StepWatch:
+    if runtime.step_watch is None:
+        raise HTTPException(status_code=503, detail="step watch not started")
+    return runtime.step_watch
+
+
+@app.get("/api/rounds/plan", dependencies=[Depends(require_pin)])
+async def rounds_plan() -> dict:
+    """The active watch (this mode's), or {active: false}. PIN: it is a prescription schedule."""
+    plan = _watch().active_plan()
+    return {**_watch().plan_state(), "plan": plan.model_dump(mode="json") if plan else None}
+
+
+@app.get("/api/rounds/checkin", dependencies=[Depends(require_pin)])
+async def rounds_checkin_status() -> dict:
+    _watch()
+    return _checkin_status()
+
+
+@app.post("/api/rounds/checkin", dependencies=[Depends(require_pin)])
+async def rounds_checkin(req: CheckinRequest) -> dict:
+    """The one-tap stomach check-in during a watch: fine | rough | cant_eat. Missing is never fine."""
+    if _watch().active_plan() is None:
+        raise HTTPException(status_code=409, detail="no active watch")
+    check = _watch().checkin(req.gi)
+    return {**check.model_dump(mode="json"), **_checkin_status()}
+
+
+class WatchEvaluateRequest(BaseModel):
+    today: date | None = None
+
+
+@app.post("/api/rounds/step_watch/evaluate", dependencies=[Depends(require_pin)])
+async def rounds_step_watch_evaluate(req: WatchEvaluateRequest) -> list[dict]:
+    """Run the watch's due cards for a date now (the seek's catch-up, the demo panel)."""
+    return await _watch().run(today=req.today)
+
+
+class RecallAnswerRequest(BaseModel):
+    answer: RecallAnswer
+
+
+@app.get("/api/rounds/recalls", dependencies=[Depends(require_pin)])
+async def rounds_recalls(day: date | None = Query(None, alias="date")) -> list[dict]:
+    """Every morning question asked on ?date= (the MORNING, default today) with its answer so far."""
+    return runtime.recall.morning(day)
+
+
+@app.post("/api/rounds/recall/{low_event_id}", dependencies=[Depends(require_pin)])
+async def rounds_recall_answer(low_event_id: str, req: RecallAnswerRequest) -> dict:
+    """The morning answer about one low (R11): 404 unknown, 409 after noon (recorded as no answer)."""
+    try:
+        return runtime.recall.answer(low_event_id, req.answer).model_dump(mode="json")
+    except RecallError as e:
+        raise HTTPException(status_code=e.status, detail=e.detail) from e
+
+
+class EvaluateRequest(BaseModel):
+    today: date | None = None  # the night (evening date) the 14-night window ends on; default: the latest
+    only: Literal["basal_check", "hypo_response"] | None = None
+
+
+@app.post("/api/rounds/evaluate", dependencies=[Depends(require_pin)])
+async def rounds_evaluate(req: EvaluateRequest) -> list[dict]:
+    """Run the Standing Card rules now (the demo panel's send-card control, R12's catch-up):
+    the noise budget still applies."""
+    return await runtime.standing.run(today=req.today, only=req.only)
+
+
+@app.get("/api/rounds/evaluations")
+async def rounds_evaluations() -> dict:
+    """The latest evaluation per Standing Card kind and the budget's verdict."""
+    return runtime.standing.last if runtime.standing else {}
+
+
+@app.get("/api/rounds/cards")
+async def rounds_cards(limit: int = 50) -> list[dict]:
+    """The device's own record of the cards it sealed (R7): card, delivery status, recipients."""
+    return store.select_cards(max(1, min(limit, 500)))
+
+
+@app.get("/api/relay")
+async def relay_state() -> dict:
+    """The relay client: polls, failures, undelivered cards (the under-the-hood panel)."""
+    return {**runtime.relay_client.status(), "pending_cards": sorted(runtime.cards.pending)}
 
 
 @app.get("/api/nights", response_model=list[NightRecord])
@@ -876,6 +1281,21 @@ async def skip_story(story_id: str) -> FamilyStory:
     if story is None:
         raise HTTPException(status_code=404, detail="no such story")
     return story
+
+
+# --- Night Buddy (B4): the patient's one-press treating status ---
+
+
+@app.post("/api/buddy/treating", dependencies=[Depends(require_pin)])
+async def buddy_treating() -> dict:
+    """I'm treating: 20 minutes, forwarded to the hub when a listing is open.
+    Never touches the alarm or the T+20 emergency clock (invariant 13)."""
+    try:
+        t = set_treating(runtime.buddy)
+    except TreatingError as e:
+        raise HTTPException(status_code=e.status, detail=e.detail)
+    await hub.broadcast(WSMessage(type="treating_set", payload=t))
+    return t
 
 
 @app.websocket("/ws")

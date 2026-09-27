@@ -65,7 +65,11 @@ export async function postFresh(base: string, path: string, body?: unknown, titl
       body: body === undefined ? undefined : JSON.stringify(body),
     });
     if (res.status === 401) return { ok: false, badPin: true, reason: "That PIN was not accepted. Nothing was confirmed." };
-    if (!res.ok) return { ok: false, status: res.status, reason: `Your Irin refused it (${res.status}).` };
+    if (!res.ok) {
+      const b = (await res.json().catch(() => null)) as { detail?: unknown } | null;
+      const detail = b && typeof b.detail === "string" ? b.detail : null;
+      return { ok: false, status: res.status, reason: detail ? `Your Irin refused it: ${detail}` : `Your Irin refused it (${res.status}).` };
+    }
     return { ok: true, value: await res.json().catch(() => null) };
   } catch {
     return { ok: false, reason: "Could not reach your Irin. Nothing was confirmed." };

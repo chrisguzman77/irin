@@ -16,9 +16,10 @@ export class FreshPinRequired extends Error {
 
 const MUTATING = new Set(["POST", "PUT", "PATCH", "DELETE"]);
 
-/** Every call to the Pi goes through here. Mutating calls carry X-PIN; a 401
- * clears the stored code so the gate asks again (A1). */
-export async function deviceFetch(base: string, path: string, init: RequestInit = {}): Promise<Response> {
+/** Every call to the Pi goes through here. Mutating calls carry X-PIN (and a
+ * PIN-gated read with pinned: true); a 401 clears the stored code so the gate
+ * asks again (A1). */
+export async function deviceFetch(base: string, path: string, init: RequestInit & { pinned?: boolean } = {}): Promise<Response> {
   const method = (init.method ?? "GET").toUpperCase();
   const headers = new Headers(init.headers);
   if (MUTATING.has(method)) {
@@ -28,7 +29,9 @@ export async function deviceFetch(base: string, path: string, init: RequestInit 
     headers.set("X-PIN", getPin() ?? "");
     if (init.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
   }
-  const res = await fetch(base + path, { ...init, method, headers });
+  if (init.pinned) headers.set("X-PIN", getPin() ?? "");
+  const { pinned: _, ...rest } = init;
+  const res = await fetch(base + path, { ...rest, method, headers });
   if (res.status === 401) {
     clearPin(true);
     throw new PinRejected();

@@ -13,15 +13,119 @@
     <span class="mock">mock Ascend</span>
   </header>
   <main>
-    <p class="note">Pairing and the live inbox arrive with the relay. Until then this page previews the two sample cards.</p>
-    <div class="tabs" role="tablist">
-      <button type="button" data-fixture="standing" aria-pressed="true">Basal Check (Standing)</button>
-      <button type="button" data-fixture="step" aria-pressed="false">Step check (Step Watch)</button>
-    </div>
-    <div id="card"></div>
-    <pre id="out" hidden></pre>
+    <!-- paired: the live inbox -->
+    <section id="live" hidden>
+      <div class="pairbar">
+        <span id="pairwho"></span>
+        <span id="pairdemo" class="badge-demo" hidden>DEMO</span>
+        <button type="button" id="newplan" class="linkish">Start a Step Watch</button>
+        <button type="button" id="unpair" class="linkish">Stop receiving</button>
+      </div>
+      <p id="status" class="note" role="status"></p>
+      <div id="list"></div>
+      <details id="handoffs" class="panel">
+        <summary>Resources you handed off</summary>
+        <div id="handofflist" class="sent"></div>
+      </details>
+      <div id="detail" hidden>
+        <button type="button" id="back" class="linkish">← All cards</button>
+        <div id="card"></div>
+        <section id="sent" class="sent" hidden>
+          <h4>Your messages about this card</h4>
+          <ul id="sentlist"></ul>
+        </section>
+      </div>
+    </section>
+
+    <!-- not paired: how to pair, and the sample cards -->
+    <section id="unpaired" hidden>
+      <p class="note">Not paired with a patient yet. Scan the QR code on the patient's Irin ("Share with my doctor") to
+        pair this browser. Until then this page previews the two sample cards.</p>
+      <div class="tabs" role="tablist">
+        <button type="button" data-fixture="standing" aria-pressed="true">Basal Check (Standing)</button>
+        <button type="button" data-fixture="step" aria-pressed="false">Step check (Step Watch)</button>
+      </div>
+      <div id="sample"></div>
+      <pre id="out" hidden></pre>
+    </section>
+    <details id="seen" class="panel seen">
+      <summary>What Impiricus sees</summary>
+      <p class="note">The relay is a blind courier: sealed boxes it cannot open, and this log of what passed through.
+        No glucose value, no name, no card text.</p>
+      <p id="seenstatus" class="note" role="status"></p>
+      <ul id="seenlist"></ul>
+    </details>
   </main>
+
+  <dialog id="act">
+    <form id="actform" method="dialog">
+      <h3 id="acttitle"></h3>
+      <div id="actfields"></div>
+      <p id="actmsg" class="msg" role="status"></p>
+      <div class="actbuttons">
+        <button type="button" id="actcancel">Cancel</button>
+        <button type="submit" id="actsend">Send to the patient</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="res">
+    <div class="resbox">
+      <h3 id="restitle"></h3>
+      <div id="resbody"></div>
+      <div class="actbuttons">
+        <button type="button" id="resback" class="linkish" hidden>← Back</button>
+        <button type="button" id="resclose">Close</button>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="film" class="wide">
+    <div class="resbox">
+      <h3 id="filmtitle"></h3>
+      <div id="filmchart" class="film"></div>
+      <p id="filmclock" class="note"></p>
+      <p id="filmcap" class="filmcap" aria-live="polite"></p>
+      <p id="filmnote" class="note"></p>
+      <div class="actbuttons">
+        <button type="button" id="filmplay" class="linkish">Pause</button>
+        <button type="button" id="filmclose">Close</button>
+      </div>
+    </div>
+  </dialog>
+
+  <dialog id="plan" class="wide">
+    <form id="planform" method="dialog">
+      <h3>Start a Step Watch</h3>
+      <p class="note">Pre-filled from the product label; change anything. The patient confirms the plan on their Irin
+        with their PIN before it starts.</p>
+      <label class="field"><span>Label schedule</span><select id="planschedule"></select></label>
+      <div class="planrow">
+        <label class="field"><span>Drug class</span><select id="planclass" required></select></label>
+        <label class="field"><span>Drug</span><input id="planlabel" maxlength="60" required></label>
+      </div>
+      <label class="field"><span>Start date (moves every step with it)</span><input id="planstart" type="date" required></label>
+      <table class="plansteps">
+        <thead><tr><th>Step</th><th>Dose</th><th>Starts</th><th></th></tr></thead>
+        <tbody id="plansteps"></tbody>
+      </table>
+      <button type="button" id="planadd" class="linkish">Add a step</button>
+      <p id="planstartsat" class="note"></p>
+      <label class="check"><input type="checkbox" id="planinsulin"> On insulin</label>
+      <label class="check"><input type="checkbox" id="planketone"> Ketone prompts</label>
+      <label class="check"><input type="checkbox" id="planvigil"> Step-week vigilance: raise the predicted-low alarm for 7 days after each step</label>
+      <label class="field indent"><span>by (mg/dL)</span><input id="planoffset" type="number" min="0" max="30" step="1"></label>
+      <p id="planmsg" class="msg" role="status"></p>
+      <div class="actbuttons">
+        <button type="button" id="plancancel">Cancel</button>
+        <button type="submit" id="plansend">Send the plan to the patient</button>
+      </div>
+    </form>
+  </dialog>
+
   <footer class="foot">Irin Rounds: a mock clinician inbox for the hackathon demo, not a medical device.</footer>
+  <!-- tweetnacl 1.0.3 (public domain, Unlicense), vendored: defines window.nacl -->
+  <script src="nacl.min.js"></script>
   <script type="module" src="inbox.js"></script>
 </body>
 </html>

@@ -3,13 +3,45 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Irin — family view</title>
+  <meta name="referrer" content="no-referrer">
+  <title>Irin family view</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <h1>Irin — family view</h1>
-  <p class="badge">placeholder — Justin owns the looks</p>
-  <pre id="out">loading config…</pre>
+  <div id="demo" class="demo" hidden>DEMO: replayed data, not live</div>
+  <main>
+    <h1>Irin <span class="muted">· family view</span></h1>
+
+    <section id="nolink" hidden>
+      <p>This page shows what the person who shared it with you chooses to share. Open it from the link they sent you.</p>
+    </section>
+
+    <section id="view" hidden>
+      <div id="now" class="now">
+        <div class="reading"><span id="mgdl">---</span><span id="trend" class="trend"></span></div>
+        <div class="unit">mg/dL</div>
+        <div id="since" class="since"></div>
+      </div>
+
+      <div id="night" class="night">
+        <h2 id="night-title">Last night</h2>
+        <div id="night-empty" class="muted" hidden>No data for last night.</div>
+        <div id="night-body">
+          <svg id="strip" viewBox="0 0 320 120" role="img" aria-label="last night's readings"></svg>
+          <dl class="stats">
+            <div><dt>Lowest</dt><dd id="low">—</dd></div>
+            <div><dt>Highest</dt><dd id="high">—</dd></div>
+            <div><dt>Under 70</dt><dd id="under">—</dd></div>
+          </dl>
+          <p id="coverage" class="muted"></p>
+        </div>
+      </div>
+      <p id="status" class="muted" role="status"></p>
+    </section>
+
+    <p id="msg" class="msg" role="status"></p>
+  </main>
+  <footer>Irin: a hackathon project, not a medical device. Updates every minute.</footer>
   <script type="module" src="family.js"></script>
 </body>
 </html>
