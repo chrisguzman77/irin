@@ -270,3 +270,19 @@ def test_brain_only_never_reaches_live_and_step_seek_follows_a_hold(rig):
         assert "demo-tirzepatide:0" in green  # step 1's check was green
     finally:
         c.__exit__(None, None, None)
+
+
+def test_a_seek_writes_the_buddy_morning_line_once_for_the_newest_night(rig):
+    c = rig.open()
+    try:
+        c.post("/api/demo/scenario", json={"name": "basal_change_1"}, headers=H)
+        calls = []
+        real = main.runtime.catchup.on_last_night
+        main.runtime.catchup.on_last_night = lambda rec: calls.append(rec.night_date)
+        try:
+            assert c.post("/api/demo/seek", json={"day": 5}, headers=H).status_code == 200
+        finally:
+            main.runtime.catchup.on_last_night = real
+        assert len(calls) == 1  # one line for the newest night, not one per rebuilt night
+    finally:
+        c.__exit__(None, None, None)

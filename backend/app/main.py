@@ -529,7 +529,8 @@ async def lifespan(app: FastAPI):
     install_vigilance(runtime.alarm, runtime.settings, runtime.step_watch.active_plan)
     # R12: the replay seek's catch-up replays every missing morning through the same ledger, questions and budget
     runtime.catchup = CatchUp(ledger=runtime.ledger, low_events=runtime.low_events, recall=runtime.recall,
-                              evaluate_night=_evaluate_night, is_demo=lambda: runtime.mode == "replay")
+                              evaluate_night=_evaluate_night, is_demo=lambda: runtime.mode == "replay",
+                              on_last_night=lambda rec: runtime.buddy.on_night(rec) if runtime.buddy else None)
     await runtime.datasource.start()
     hub.start()
     tick_task = asyncio.create_task(_alarm_tick_loop())
