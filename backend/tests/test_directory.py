@@ -4,16 +4,23 @@ Named checks: the profile endpoints are PIN-gated; only cgm_verified reaches
 the relay (never the feed URL or token); the intro is written by narrative.py
 in a worker thread, validated, with the template as fallback; an accepted
 match starts a buddy pairing and posts its qr_url as the pair_link; demo
-never creates a real directory entry and never uses the live profile."""
+never creates a real directory entry and never uses the live profile.
+Review fixes: the relay's ONE user per source key never leaks a demo match
+into live; an expired unused link is minted again; a failing link never
+churns the pairing screen; a 401 asks for the profile again; link.mode is
+"mirror" for a buddy from a mirror match."""
 
 import asyncio
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import httpx
 import pytest
 
 from app import store
+from app.buddy.rung import BuddyRung
+from app.clock import clock
+from app.contracts import Pairing, Settings
 from app.buddy.directory import BuddyDirectory, BuddyProfile, DirectoryError, DirectoryRelayClient
 from app.config import config
 from app.rounds import narrative
@@ -37,6 +44,10 @@ class FakeRelay:
         self.poll_matches: list[dict] | None = None
         self.users_status = 200
         self.match_forbidden = False
+        self.pair_link_status = None  # force an answer from pair_link (e.g. 404)
+        self.bearer_dead = False  # a relay DB reset: every bearer call is 401
+        self.user_is_demo = None  # ONE user per source key: the last upsert's is_demo wins
+
 
     def transport(self):
         def handler(request: httpx.Request) -> httpx.Response:
@@ -46,12 +57,17 @@ class FakeRelay:
             if path == "/v0/users":
                 if self.users_status != 200:
                     return httpx.Response(self.users_status, json={"detail": "no"})
+                self.user_is_demo = body.get("is_demo")
                 return httpx.Response(200, json={"user_id": "u1", "user_bearer": "bearer-secret"})
+            if self.bearer_dead and request.headers.get("authorization"):
+                return httpx.Response(401, json={"detail": "unknown bearer"})
             if path == "/v0/match":
                 if self.match_forbidden:  # unverified, or have_buddy off
                     return httpx.Response(403, json={"detail": "not eligible"})
                 return httpx.Response(200, json=OFFERS)
             if path.startswith("/v0/match/") and path.endswith("/pair_link"):
+                if self.pair_link_status:
+                    return httpx.Response(self.pair_link_status, json={"detail": "forced"})
                 if self.match_status.get(path.split("/")[3]) != "accepted":
                     return httpx.Response(409, json={"detail": "not accepted by both"})
                 return httpx.Response(200, json={"stored": True})
@@ -84,6 +100,12 @@ class FakeRelay:
 def db(tmp_path, monkeypatch):
     monkeypatch.setattr(store.config, "IRIN_DB", str(tmp_path / "t.db"))
     store.init_db()
+    clock.set(speed=1.0, start=T0)
+    yield
+    clock.reset()
+
+
+T0 = datetime(2020, 1, 1, 21, 0)
 
 
 def make_dir(relay, demo=True, verified=True, links=None, updates=None):
@@ -96,7 +118,8 @@ def make_dir(relay, demo=True, verified=True, links=None, updates=None):
         n = len(links) if links is not None else 0
         if links is not None:
             links.append(n)
-        return {"qr_url": f"https://watch.test/pair#token=t{n}&device_pk=pk&relay=https://relay.test"}
+        return {"token": f"t{n}", "qr_url": f"https://watch.test/pair#token=t{n}&device_pk=pk&relay=https://relay.test",
+                "expires_at": (clock.now() + timedelta(minutes=10)).isoformat()}
 
     d = BuddyDirectory(relay_url="http://relay.test", source_key="k", is_demo=lambda: world["demo"],
                        verify_cgm=verify, start_pairing=start_pairing,
@@ -280,6 +303,7 @@ def test_an_accept_seen_first_on_the_poll_starts_the_pairing_and_a_failure_retri
         return good()
 
     d.start_pairing = flaky
+    run(d.save_profile(BuddyProfile(**PROFILE)))
     relay.match_status["m2"] = "accepted"
     row = {"match_id": "m2", "first_name": "Ana", "status": "accepted", "pair_url": None}
     run(d.on_matches([row]))
@@ -319,15 +343,129 @@ def test_relay_refusals_reach_the_app_as_clear_reasons(db):
     assert e.value.status == 409 and "revok" in e.value.detail
 
 
-def test_a_pair_link_refused_before_both_accept_is_retried_not_marked(db):
+def test_fix3_a_pair_link_the_relay_refuses_is_attempted_once(db):
     relay = FakeRelay()
     links = []
     d, _ = make_dir(relay, links=links)
-    run(d._ensure_pair_link("m1"))  # m1 still offered on the relay: 409
-    assert store.get_kv("buddy_pair_links:demo") is None
+    run(d.save_profile(BuddyProfile(**PROFILE)))
     relay.match_status["m1"] = "accepted"
-    run(d._ensure_pair_link("m1"))
-    assert json.loads(store.get_kv("buddy_pair_links:demo"))["ids"] == ["m1"]
+    for code in (409, 404):
+        relay.requests.clear()
+        relay.pair_link_status = code
+        mid = "m1" if code == 409 else "m2"
+        row = {"match_id": mid, "first_name": "Sam", "status": "accepted", "pair_url": None}
+        for _ in range(3):  # three polls
+            run(d.on_matches([row]))
+        assert len(relay.to("/pair_link")) == 1, code
+    assert links == [0, 1]  # one pairing per match, never one per poll
+
+
+def test_fix3_a_pending_doctor_pairing_is_never_replaced_and_a_live_buddy_token_is_reused(db):
+    relay = FakeRelay()
+    links = []
+    d, _ = make_dir(relay, links=links)
+    run(d.save_profile(BuddyProfile(**PROFILE)))
+    relay.match_status["m1"] = "accepted"
+    d.pending = lambda: ("doctor", "doc-token")  # a doctor pairing is on screen
+    row = {"match_id": "m1", "first_name": "Sam", "status": "accepted", "pair_url": None}
+    run(d.on_matches([row]))
+    run(d.respond("m1", "accept"))
+    assert links == [] and not relay.to("/pair_link")
+    d.pending = lambda: None  # the doctor pairing finished
+    relay.pair_link_status = 502  # our link is minted, the post fails
+    run(d.on_matches([row]))
+    assert links == [0] and len(relay.to("/pair_link")) == 1
+    d.pending = lambda: ("buddy", "t0")  # our own token is still live: reused, never a new one
+    relay.pair_link_status = None
+    run(d.on_matches([row]))
+    assert links == [0] and len(relay.to("/pair_link")) == 2
+    assert relay.to("/pair_link")[-1][2]["pair_url"].startswith("https://watch.test/pair#token=t0&")
+
+
+def test_fix2_an_expired_unused_link_is_minted_again_on_the_poll(db):
+    relay = FakeRelay()
+    links = []
+    d, _ = make_dir(relay, links=links)
+    run(d.save_profile(BuddyProfile(**PROFILE)))
+    relay.match_status["m1"] = "accepted"
+    run(d.respond("m1", "accept"))
+    row = {"match_id": "m1", "first_name": "Sam", "status": "accepted", "pair_url": "https://w/p#x"}
+    run(d.on_matches([row]))
+    assert links == [0] and len(relay.to("/pair_link")) == 1  # still live: no new link
+    clock.advance(11 * 60)
+    run(d.on_matches([row]))
+    assert links == [0, 1] and len(relay.to("/pair_link")) == 2
+    assert relay.to("/pair_link")[-1][2]["pair_url"].startswith("https://watch.test/pair#token=t1&")
+    # the second link is used: a buddy pairing confirmed while it was live, so never a third
+    used = [Pairing(device_id="irin", doctor_id="b1", doctor_display_name="Sam", doctor_pk="pk",
+                    status="paired", confirmed_at=clock.now(), peer_kind="buddy", is_demo=True)]
+    d.buddy_pairings = lambda: used
+    clock.advance(11 * 60)
+    run(d.on_matches([row]))
+    assert links == [0, 1] and len(relay.to("/pair_link")) == 2
+
+
+def test_fix1_the_single_relay_user_never_leaks_a_demo_match_into_live(db):
+    relay = FakeRelay()
+    links = []
+    d, world = make_dir(relay, demo=False, links=links)
+    run(d.save_profile(BuddyProfile(**PROFILE)))  # live first: a live bearer exists
+    world["demo"] = True
+    run(d.save_profile(BuddyProfile(**PROFILE)))  # the relay's one user flips to demo
+    assert relay.user_is_demo is True
+    world["demo"] = False  # back to live: the live profile and bearer are still on the device
+    assert d.profile() is not None
+    relay.requests.clear()
+    for call in (d.find_matches(), d.respond("m1", "accept")):
+        with pytest.raises(DirectoryError) as e:
+            run(call)
+        assert e.value.status == 409 and e.value.detail == "save your buddy profile in this mode first"
+    relay.match_status["m1"] = "accepted"  # the demo match was accepted in replay
+    run(d.on_matches([{"match_id": "m1", "first_name": "Sam", "status": "accepted", "pair_url": "https://w/p#x"}]))
+    assert d.snapshot() == [] and links == [] and relay.requests == []  # ignored: no pairing, no relay call
+    run(d.save_profile(BuddyProfile(**PROFILE)))  # the live profile saved again: live owns the user
+    run(d.on_matches([{"match_id": "m9", "first_name": "Ana", "status": "offered", "pair_url": None}]))
+    assert [m["match_id"] for m in d.snapshot()] == ["m9"]
+
+
+def test_fix4_a_401_asks_for_the_profile_again_and_forgets_the_bearer(db):
+    relay = FakeRelay()
+    d, _ = make_dir(relay)
+    run(d.save_profile(BuddyProfile(**PROFILE)))
+    relay.bearer_dead = True
+    with pytest.raises(DirectoryError) as e:
+        run(d.find_matches())
+    assert (e.value.status, e.value.detail) == (409, "save your buddy profile again")
+    assert not store.get_kv("buddy_user:demo")
+    with pytest.raises(DirectoryError) as e:
+        run(d.find_matches())
+    assert e.value.status == 409 and len(relay.to("/v0/match")) == 1  # the stale bearer is never sent again
+    relay.bearer_dead = False
+    run(d.save_profile(BuddyProfile(**PROFILE)))
+    assert len(run(d.find_matches())) == 2
+
+
+def test_fix5_link_mode_is_mirror_for_a_buddy_from_a_mirror_match_and_twin_otherwise(db):
+    relay = FakeRelay()
+    d, _ = make_dir(relay)
+    run(d.save_profile(BuddyProfile(**PROFILE)))
+    run(d.find_matches())  # m1 mirror, m2 not
+    relay.match_status["m1"] = "accepted"
+    run(d.respond("m1", "accept"))
+
+    def buddy(confirmed_at):
+        return Pairing(device_id="irin", doctor_id="b1", doctor_display_name="Sam", doctor_pk="pk",
+                       status="paired", confirmed_at=confirmed_at, peer_kind="buddy", is_demo=True)
+
+    paired = buddy(clock.now() + timedelta(minutes=2))  # confirmed while m1's link was live
+    rung = BuddyRung(settings=Settings(), alarm_state=lambda: None, recorder=None,
+                     recipients=lambda demo: [paired], post_card=None, post_hub=None, spawn=lambda c: None,
+                     device_id="irin", is_demo=lambda: True, link_mode=d.mode_for)
+    assert rung.link() == {"first_name": "Sam", "mode": "mirror", "peer_id": "b1"}
+    paired = buddy(T0 - timedelta(days=3))  # a pre-matched demo pair, no match behind it
+    assert rung.link()["mode"] == "twin"
+    rung.link_mode = lambda p: 1 / 0  # a failing directory never breaks the snapshot
+    assert rung.link()["mode"] == "twin"
 
 
 # --- the poll ---
@@ -337,6 +475,7 @@ def test_the_poll_matches_key_reaches_the_directory_and_other_keys_are_unchanged
     relay = FakeRelay()
     updates = []
     d, _ = make_dir(relay, updates=updates)
+    run(d.save_profile(BuddyProfile(**PROFILE)))
     relay.poll_matches = [{"match_id": "m1", "first_name": "Sam", "status": "offered", "pair_url": None}]
     client = DirectoryRelayClient(relay_url="http://relay.test", source_key="k", device_id="irin-test",
                                   transport=relay.transport(), on_matches=d.on_matches)

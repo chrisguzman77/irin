@@ -22,7 +22,17 @@ line built from the score parts.
 Accept: once a match is accepted by BOTH sides (at accept time or later,
 seen on the relay poll), the Pi starts a buddy pairing with the existing
 PairingService (peer_kind "buddy") and posts its qr_url to POST
-/v0/match/{id}/pair_link; a failure is retried on the next poll. The poll's
+/v0/match/{id}/pair_link. It never replaces a pairing pending for anything
+else (a doctor, another match) and reuses its own unexpired token; a link
+that expired unused, with no buddy pairing from it, is minted again on the
+poll; relay 404/409 are final for that match; other failures retry.
+buddy_state.link.mode is "mirror" for a buddy paired from a match the relay
+flagged mirror (the pairing confirmed while that match's link was live).
+
+The relay keeps ONE user per source key, so the world of the last profile
+saved (kv buddy_relay_world) is that user's world: in the other world,
+match and accept/decline answer 409 and the poll's matches are ignored, so
+a demo match never mints a live pairing (invariant 18). The poll's
 `matches` key becomes buddy_state.matches and a WS hub_update {event:
 "match", match_id, status, pair_url} for every change."""
 
@@ -33,12 +43,15 @@ import json
 import logging
 import re
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, Awaitable, Callable, Literal
 
 import httpx
 from pydantic import BaseModel, Field, field_validator
 
 from .. import store
+from ..clock import clock
+from ..contracts import Pairing
 from ..rounds import narrative
 from ..rounds.relay_client import RelayClient
 
@@ -184,11 +197,14 @@ class BuddyDirectory:
     source_key: str
     is_demo: Callable[[], bool]
     verify_cgm: Callable[[], Awaitable[bool]]  # live: the Nightscout feed answered with a recent reading
-    start_pairing: Callable[[], dict]  # PairingService.start("buddy"): blocking, run in a worker thread
+    start_pairing: Callable[[], dict]  # PairingService.start("buddy") -> {token, qr_url, expires_at}; a worker thread
+    pending: Callable[[], tuple[str, str] | None] = lambda: None  # the live pending pairing: (peer_kind, token)
+    buddy_pairings: Callable[[], list[Pairing]] = lambda: []  # this world's paired buddies
     on_update: Callable[[dict], None] | None = None  # hub_update {event: "match", ...}
     transport: httpx.AsyncBaseTransport | None = None  # tests inject a MockTransport
     matches: dict[str, dict] = field(default_factory=dict)  # match_id -> {match_id, first_name, status, pair_url}
     _linking: set = field(default_factory=set, repr=False)
+    _last_start: dict | None = field(default=None, repr=False)  # {match_id, token, qr_url, expires_at, started_at}
 
     # --- state ---
 
@@ -198,12 +214,26 @@ class BuddyDirectory:
     def _user(self) -> dict | None:
         return _kv_json(f"buddy_user:{self._world()}")
 
-    def _linked(self) -> set[str]:
-        return set((_kv_json(f"buddy_pair_links:{self._world()}") or {}).get("ids", []))
+    def _relay_world(self) -> str | None:
+        """The world of the ONE relay user this source key has: the last profile saved (the relay upserts)."""
+        return store.get_kv("buddy_relay_world") or None
 
-    def _mark_linked(self, match_id: str) -> None:
-        ids = self._linked() | {match_id}
-        store.set_kv(f"buddy_pair_links:{self._world()}", json.dumps({"ids": sorted(ids)}))
+    def _check_world(self) -> None:
+        if self._relay_world() != self._world():
+            raise DirectoryError(409, "save your buddy profile in this mode first")
+
+    def _links(self) -> dict[str, dict]:
+        """match_id -> {started_at, expires_at, terminal}: the pair link posted for it, per world."""
+        raw = _kv_json(f"buddy_pair_links:{self._world()}") or {}
+        return {k: v for k, v in raw.items() if isinstance(v, dict)}
+
+    def _save_link(self, match_id: str, record: dict) -> None:
+        links = self._links()
+        links[match_id] = record
+        store.set_kv(f"buddy_pair_links:{self._world()}", json.dumps(links))
+
+    def _mirrors(self) -> dict[str, bool]:
+        return _kv_json(f"buddy_match_mirror:{self._world()}") or {}
 
     def profile(self) -> StoredProfile | None:
         raw = _kv_json(f"buddy_profile:{self._world()}")
@@ -215,6 +245,29 @@ class BuddyDirectory:
     def reset(self) -> None:
         """A mode switch: the other world's matches are never shown in this one."""
         self.matches.clear()
+
+    def _match_for(self, pairing: Pairing) -> str | None:
+        """The match a buddy pairing came from: confirmed while that match's link was live (the Pi holds
+        one pending token at a time, and a match link is only minted while nothing else is pending)."""
+        at = pairing.confirmed_at
+        if at is None:
+            return None
+        for mid, rec in self._links().items():
+            try:
+                start, end = datetime.fromisoformat(rec["started_at"]), datetime.fromisoformat(rec["expires_at"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if start <= at <= end:
+                return mid
+        return None
+
+    def mode_for(self, pairing: Pairing) -> str:
+        """buddy_state.link.mode: "mirror" for a buddy from a match flagged mirror, else "twin" (a pre-matched pair)."""
+        mid = self._match_for(pairing)
+        return "mirror" if mid is not None and self._mirrors().get(mid) else "twin"
+
+    def _paired(self, match_id: str) -> bool:
+        return any(self._match_for(p) == match_id for p in self.buddy_pairings())
 
     # --- the relay ---
 
@@ -232,6 +285,9 @@ class BuddyDirectory:
                 r = await c.request(method, path, json=body)
         except httpx.HTTPError as e:
             raise DirectoryError(502, f"relay unreachable ({type(e).__name__})")
+        if r.status_code == 401 and bearer:
+            store.set_kv(f"buddy_user:{self._world()}", "")  # a stale bearer (e.g. a relay reset): forget it
+            raise DirectoryError(409, "save your buddy profile again")
         if r.status_code == 422:
             raise DirectoryError(422, "the relay refused the fields (no email, phone, location, or glucose value)")
         if r.status_code == 403:
@@ -275,11 +331,13 @@ class BuddyDirectory:
         store.set_kv(f"buddy_profile:{world}", stored.model_dump_json())
         store.set_kv(f"buddy_user:{world}", json.dumps({"user_id": user_id, "user_bearer": bearer,
                                                         "cgm_verified": verified}))
+        store.set_kv("buddy_relay_world", world)  # the relay's one user is now this world's
         return ProfileResult(profile=stored, cgm_verified=verified, user_id=user_id, is_demo=demo)
 
     # --- match ---
 
     async def find_matches(self) -> list[MatchOffer]:
+        self._check_world()
         demo = self.is_demo()
         rows = await self._call("POST", "/v0/match", {}, bearer=self._bearer(),
                                refused="no matches until the CGM feed is verified and 'have a buddy' is on")
@@ -297,12 +355,16 @@ class BuddyDirectory:
                               intro=intro, why=why_line(hours, mirror, langs), is_demo=demo)
 
         offers = list(await asyncio.gather(*(offer(r) for r in rows)))
+        mirrors = self._mirrors()
         for o, r in zip(offers, rows):
+            mirrors[o.match_id] = o.mirror
             self._set(o.match_id, o.first_name, str(r.get("status") or "offered"),
                       self.matches.get(o.match_id, {}).get("pair_url"))
+        store.set_kv(f"buddy_match_mirror:{self._world()}", json.dumps(mirrors))
         return offers
 
     async def respond(self, match_id: str, action: Literal["accept", "decline"]) -> MatchStatus:
+        self._check_world()
         out = await self._call("POST", f"/v0/match/{match_id}/{action}", {}, bearer=self._bearer(),
                                refused=("a declined match cannot be accepted" if action == "accept"
                                         else "an accepted match is ended by revoking the buddy pairing"))
@@ -315,19 +377,57 @@ class BuddyDirectory:
             await self._ensure_pair_link(match_id)
         return MatchStatus(match_id=match_id, status=status, is_demo=self.is_demo())
 
+    def _needs_link(self, match_id: str) -> bool:
+        rec = self._links().get(match_id)
+        if rec is None:
+            return True
+        if rec.get("terminal") or self._paired(match_id):
+            return False
+        try:
+            return clock.now() >= datetime.fromisoformat(rec["expires_at"])  # the token died unused: a new link
+        except (KeyError, TypeError, ValueError):
+            return True
+
+    def _pairing_link(self, match_id: str) -> dict | None:
+        """A pairing link for this match without churning the pairing screen: reuse this match's own
+        unexpired pending token; never replace a pairing pending for anything else (a doctor, another match)."""
+        live, last = self.pending(), self._last_start
+        if live is not None:
+            if last is not None and last["match_id"] == match_id and tuple(live) == ("buddy", last["token"]):
+                return last
+            return None  # someone else's pairing is on screen: retried on the next poll
+        started = self.start_pairing()
+        if not isinstance(started, dict) or not started.get("qr_url") or not started.get("token"):
+            raise DirectoryError(502, "the pairing service returned no link")
+        now = clock.now().isoformat()
+        self._last_start = {"match_id": match_id, "token": started["token"], "qr_url": started["qr_url"],
+                            "expires_at": started.get("expires_at") or now, "started_at": now}
+        return self._last_start
+
     async def _ensure_pair_link(self, match_id: str) -> None:
-        """Once per accepted match: a buddy pairing, its qr_url handed to the other side. Failures retry on the poll."""
-        if match_id in self._linking or match_id in self._linked():
+        """Per accepted match: a buddy pairing, its qr_url handed to the other side. A new link only when the
+        last one expired unused; relay 404/409 are final for the match; anything else retries on the poll."""
+        if self._relay_world() != self._world():
+            return  # the relay's user belongs to the other world (invariant 18)
+        if match_id in self._linking or not self._needs_link(match_id):
             return
         self._linking.add(match_id)
         try:
-            started = await asyncio.to_thread(self.start_pairing)
-            qr_url = started.get("qr_url") if isinstance(started, dict) else None
-            if not qr_url:
-                raise DirectoryError(502, "the pairing service returned no link")
-            await self._call("POST", f"/v0/match/{match_id}/pair_link", {"pair_url": qr_url},
-                             refused="the other side has not accepted yet")
-            self._mark_linked(match_id)
+            link = await asyncio.to_thread(self._pairing_link, match_id)
+            if link is None:
+                log.info("buddy pair link for %s waits: another pairing is in progress", match_id)
+                return
+            try:
+                await self._call("POST", f"/v0/match/{match_id}/pair_link", {"pair_url": link["qr_url"]},
+                                 refused="the other side has not accepted yet")
+            except DirectoryError as e:
+                if e.status in (404, 409):
+                    log.warning("buddy pair link for %s refused by the relay (%s); not retried", match_id, e.status)
+                    self._save_link(match_id, {"terminal": True, "status": e.status})
+                    return
+                raise
+            self._save_link(match_id, {"started_at": link["started_at"], "expires_at": link["expires_at"],
+                                       "terminal": False})
         except Exception as e:
             log.warning("buddy pair link for %s not posted (%s); retried on the next poll", match_id,
                         getattr(e, "detail", type(e).__name__))
@@ -348,7 +448,10 @@ class BuddyDirectory:
                 log.exception("hub_update observer failed")
 
     async def on_matches(self, rows: list[dict]) -> None:
-        """The poll's `matches` key: the relay's view of this user's matches is the truth."""
+        """The poll's `matches` key: the relay's view of this user's matches is the truth, but only when the
+        relay's one user is this world's (a demo match never reaches the live device, invariant 18)."""
+        if self._relay_world() != self._world():
+            return
         seen = set()
         for r in rows or []:
             if not isinstance(r, dict) or not r.get("match_id"):

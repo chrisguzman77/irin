@@ -386,10 +386,20 @@ async def _cgm_feed_verified() -> bool:
     return latest is not None and not latest.is_stale
 
 
+def _live_pending_pairing() -> tuple[str, str] | None:
+    """B3+: (peer_kind, token) of a pairing still on screen, so a match link never replaces it."""
+    p = runtime.pairing.pending if runtime.pairing is not None else None
+    if p is None or p.used or p.expired():
+        return None
+    return (p.peer_kind, p.token)
+
+
 def _make_directory() -> BuddyDirectory:
     return BuddyDirectory(relay_url=config.RELAY_URL, source_key=config.RELAY_SOURCE_KEY,
                           is_demo=lambda: runtime.mode == "replay", verify_cgm=_cgm_feed_verified,
-                          start_pairing=lambda: runtime.pairing.start("buddy"),
+                          start_pairing=lambda: runtime.pairing.start("buddy"), pending=_live_pending_pairing,
+                          buddy_pairings=lambda: [p for p in runtime.pairing.recipients(runtime.mode == "replay")
+                                                  if p.peer_kind == "buddy"],
                           on_update=lambda p: _schedule(hub.broadcast(WSMessage(type="hub_update", payload=p))))
 
 
@@ -523,6 +533,7 @@ async def lifespan(app: FastAPI):
     runtime.relay_client = _make_relay_client()
     runtime.directory = _make_directory()
     runtime.buddy.matches = runtime.directory.snapshot
+    runtime.buddy.link_mode = runtime.directory.mode_for
     # a Rounds card goes to doctors only: a buddy pairing never receives clinical numbers (invariant 15)
     runtime.cards = CardSender(recipients=lambda demo: [p for p in runtime.pairing.recipients(demo) if p.peer_kind == "doctor"],
                                post=runtime.relay_client.post_card,
