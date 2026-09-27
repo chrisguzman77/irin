@@ -97,7 +97,7 @@ def test_seeding_150_is_idempotent_and_wipe_removes_every_seed(c):
         assert sum(s["timezones"][0] == busy for s in seeds) >= 12, busy
     assert {s["optins"]["have_buddy"] for s in seeds} == {True, False}
     for s in seeds:  # every seed passes the same model POST /v0/users uses
-        directory.UserIn(**{k: s[k] for k in directory.UserIn.model_fields})
+        directory.UserIn(**{**{k: s[k] for k in directory.UserIn.model_fields}, "username": s["username"][:-7] + "_s"})
     ids = {s["username"]: (s["user_id"], s["source_key_hash"]) for s in seeds}
     assert seed_buddies.seed() == 150
     again = {s["username"]: (s["user_id"], s["source_key_hash"]) for s in store.db()["users"].find({"seed": True})}
@@ -154,3 +154,9 @@ def test_sample_marks_seed_rows_only(c):
     assert all(o.get("sample") is True for o in offers if o is not real)
     r = c.post(f"/v0/match/{offers[0]['match_id']}/decline", headers=me)
     assert r.status_code == 200 and r.json()["status"] == "declined" and r.json()["sample"] is True
+
+
+def test_a_real_user_cannot_take_the_sample_suffix(c):
+    r = c.post("/v0/users", json={"username": "chris_sample", "first_name": "Chris", "timezones": ["America/New_York"]},
+               headers={"X-Source-Key": next(iter(os.environ.get("RELAY_SOURCE_KEYS", "k").split(",")))})
+    assert r.status_code == 422

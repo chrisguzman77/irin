@@ -86,6 +86,13 @@ class UserIn(_Strict):
     cgm_verified: bool = False
     is_demo: bool = False
 
+    @field_validator("username")
+    @classmethod
+    def _not_a_sample(cls, v: str) -> str:
+        if v.lower().endswith("_sample"):
+            raise ValueError("usernames ending in _sample are reserved for the sample profiles")
+        return v
+
     @field_validator("languages")
     @classmethod
     def _languages(cls, v: list[str]) -> list[str]:

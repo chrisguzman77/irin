@@ -95,7 +95,9 @@ def profiles() -> list[dict]:
                     "availability": _slots(rng),
                     "optins": {"have_buddy": rng.random() < 0.7, "be_watcher": True,
                                "hub_watchable": rng.random() < 0.3, "hub_volunteer": rng.random() < 0.4}})
-    return [{**UserIn(**p, cgm_verified=True, is_demo=False).model_dump(), "seed": True} for p in out]
+    # validated as any user, except the reserved _sample suffix (real users may never take it)
+    return [{**UserIn(**{**p, "username": p["username"][:-len("_sample")] + "_s"}, cgm_verified=True,
+                      is_demo=False).model_dump(), "username": p["username"], "seed": True} for p in out]
 
 
 def seed() -> int:
