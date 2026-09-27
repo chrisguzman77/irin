@@ -68,6 +68,11 @@ const toMs = (iso) => new Date(iso).getTime(); // naive Pi-local timestamps; onl
 // glyph for it, so it becomes a plain space.
 const plainSpace = (s) => s.replace(/[\u202f\u00a0]/g, " ");
 const hm12 = (ms) => plainSpace(new Date(ms).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true }));
+// A settings time ("21:00", HH:MM on the Pi) in the same 12-hour form: "9:00 PM"
+const settingTime12 = (hhmm) => {
+  const [h, m] = String(hhmm).split(":").map(Number);
+  return Number.isInteger(h) && Number.isInteger(m) ? hm12(new Date(2000, 0, 1, h, m).getTime()) : String(hhmm);
+};
 const hour12 = (ms) => plainSpace(new Date(ms).toLocaleTimeString("en-US", { hour: "numeric", hour12: true }));  // graph axis: "7 PM"
 
 // --- data ---
@@ -292,7 +297,7 @@ function render() {
   $("flag-basal").classList.toggle("hidden", !nudge);
   if (nudge) {
     const usual = state.settings && state.settings.basal_time;
-    $("flag-basal").textContent = usual ? `basal not logged yet · usual ${usual}` : "basal not logged yet";
+    $("flag-basal").textContent = usual ? `basal not logged yet · usual ${settingTime12(usual)}` : "basal not logged yet";
   }
   document.body.classList.toggle("is-stale", stale);
   document.body.classList.toggle("is-disconnected", disconnected);
