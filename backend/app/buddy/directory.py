@@ -412,7 +412,8 @@ class BuddyDirectory:
                                 refused="the hub is for CGM-verified users only", passthrough=True)
         if not isinstance(rows, list):
             raise DirectoryError(502, "relay answered without a hub list")
-        return [r for r in rows if isinstance(r, dict)]
+        keep = ("listing_id", "first_name", "languages", "elapsed_min", "urgency", "confidence", "sample")
+        return [{k: r[k] for k in keep if k in r} for r in rows if isinstance(r, dict)]  # the pinned fields only (inv. 15)
 
     async def hub_claim(self, listing_id: str) -> dict:
         self._check_world()

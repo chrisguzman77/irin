@@ -148,10 +148,11 @@ def _collect(value, forms: dict[str, set[str]], key: str = "", only_key: re.Patt
             _collect(float(s), forms, key, only_key)
 
 
-def _forms(metrics: dict) -> dict[str, set[str]]:
+def _forms(metrics: dict, thresholds: bool = True) -> dict[str, set[str]]:
     forms: dict[str, set[str]] = {}
     _collect(metrics, forms)
-    _collect(list(THRESHOLDS), forms)
+    if thresholds:
+        _collect(list(THRESHOLDS), forms)
     return forms
 
 
@@ -191,12 +192,12 @@ def _token_ok(sign: str, num: str, before: str, forms: dict[str, set[str]]) -> b
     return True
 
 
-def validate(text: str, metrics: dict) -> bool:
+def validate(text: str, metrics: dict, thresholds: bool = True) -> bool:
     """True when every numeric token in the text exists in the metrics (any
     depth; whole-number or one-decimal rounding, half up; clock times in 24- or
     12-hour form; a written sign must agree with the metric's) or is one of the
     range THRESHOLDS. Domain terms (type 1, GLP-1, Level 2, Step N) are not numbers."""
-    forms = _forms(metrics)
+    forms = _forms(metrics, thresholds)
     stripped = _strip_terms(text, metrics)
     return all(_token_ok(sign, num, stripped[max(0, at - 40):at], forms) for sign, num, at in _tokens(stripped))
 
@@ -302,8 +303,11 @@ def _system_and_prompt(task: str, context: dict, metrics: dict, muse: bool) -> t
     return system, f"About: {about}\nThe only numbers you may use: {json.dumps(metrics, default=str)}"
 
 
+BUDDY_TASKS = ("buddy_line", "buddy_intro", "match_why")  # a buddy never sees a glucose-like number, not even 70
+
+
 def _passes(task: str, context: dict, text: str, metrics: dict) -> bool:
-    if not validate(text, metrics):
+    if not validate(text, metrics, thresholds=task not in BUDDY_TASKS):
         return False
     if task == "card":
         return not _names_a_dose(text, metrics)

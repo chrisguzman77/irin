@@ -372,3 +372,10 @@ def test_match_why_is_routed_like_match_explanation_and_validated(monkeypatch, l
     assert fakes.names() == ["meta"]  # Muse, never Backboard
     Fakes(monkeypatch, meta="Sam is awake for 9 of your night hours.")
     assert narrative.generate("match_why", WHY_CTX, WHY_METRICS) == template("match_why", WHY_CTX, WHY_METRICS)
+
+
+def test_buddy_text_may_not_name_a_glucose_threshold():
+    """Review: 70/54/180 are allowed on cards but never in a buddy's words (invariant 15)."""
+    assert narrative.validate("keeps you above 70 overnight", {"hours_covered": 8})
+    assert not narrative.validate("keeps you above 70 overnight", {"hours_covered": 8}, thresholds=False)
+    assert not narrative._passes("match_why", {}, "Sam keeps you above 70 overnight.", {"hours_covered": 8})
