@@ -64,7 +64,7 @@ export default function DeviceTab() {
       {/* keyed per alarm episode/state so a previous tap's message never carries over */}
       <AckBar key={`${a?.trigger_type}-${a?.state}-${a?.started_at}`} alarm={a} baseUrl={target.url} />
       <TreatingButton snap={snap} baseUrl={target.url} />
-      <div className="flex gap-2 mb-2">
+      <div className="flex gap-2 mb-4">
         {VIEWS.map((v) => (
           <button
             key={v}
@@ -74,7 +74,7 @@ export default function DeviceTab() {
               setView(v);
             }}
             className={`px-3 py-1.5 rounded-full text-sm ${
-              v === view ? "bg-white text-black font-semibold" : "bg-neutral-900 text-neutral-300"
+              v === view ? "bg-irin-mint text-irin-ink font-semibold" : "bg-irin-surface text-irin-sage"
             }`}
           >
             {v}
@@ -85,7 +85,7 @@ export default function DeviceTab() {
           onClick={openDemo}
           aria-label="Demo panel"
           title="Demo panel"
-          className={`ml-auto px-3 py-1.5 rounded-full text-xs ${view === "Demo" ? "bg-amber-400 text-black" : "text-neutral-500 border border-neutral-800"}`}
+          className={`ml-auto px-3 py-1.5 rounded-full text-xs ${view === "Demo" ? "bg-amber-400 text-black" : "text-irin-sage border border-irin-line"}`}
         >
           demo
         </button>

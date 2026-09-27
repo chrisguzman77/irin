@@ -45,19 +45,19 @@ export default function App() {
 
   return (
     <DeviceProvider>
-      <div className="app-shell min-h-dvh text-[#EFEEEA]">
+      <div className="app-shell min-h-dvh bg-irin-ink text-irin-cream">
         <StatusBar />
         <DoctorTakeover />
         <FreshPinPrompt />
         <header className="flex items-center px-4 pt-3 pb-2">
           <img src={logo} alt="Irin" className="h-7 w-auto select-none" draggable={false} />
         </header>
-        <nav className="relative flex border-b border-white/10">
+        <nav className="relative flex border-b border-irin-line bg-irin-ink">
           {TABS.map((t) => (
             <button
               key={t}
               className={`flex-1 py-3 text-sm sm:text-base transition-colors duration-200 ${
-                t === tab ? "text-white font-semibold" : "text-neutral-400 hover:text-neutral-200"
+                t === tab ? "text-irin-cream font-semibold" : "text-irin-sage hover:text-irin-cream"
               }`}
               onClick={() => select(t)}
             >
