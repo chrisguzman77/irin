@@ -33,6 +33,16 @@
 
       <section id="tab-buddy">
         <article id="buddycard" class="card"></article>
+        <form id="wa" class="card wa" novalidate>
+          <h2>WhatsApp alerts</h2>
+          <p class="note">The same alert, text and voice clip, also as a WhatsApp message to this phone. The number goes to the
+            relay only: it is never shown to your buddy, and this page does not keep or show it after saving.</p>
+          <label>WhatsApp number, with country code
+            <input id="wa-phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="+14045550123" maxlength="24">
+          </label>
+          <button type="submit" class="btn">Save number</button>
+          <p id="wa-msg" class="note" role="status"></p>
+        </form>
       </section>
 
       <section id="tab-hub" hidden>

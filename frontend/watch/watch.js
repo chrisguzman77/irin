@@ -36,9 +36,10 @@ const el = (tag, cls, text) => {
 const TREATING_MIN = 20;       // relay/hub.py: treating clears the listing for 20 min
 const RECENT_MS = 60 * 60e3;   // an open alert older than this, found at page load, does not pop up
 const LOG = "irin.watch.log.v0";
+const HUB_SEEN = "irin.watch.hub.v0"; // listing_id -> null while seen on the hub, then the resolved time (0 = unknown)
 
-// The relay's timestamps may arrive without an offset (its Mongo client is not
-// tz-aware): read a bare timestamp as UTC, never as local time.
+// The relay's timestamps carry an explicit offset (relay/README.md); a bare one,
+// from an older relay, is read as UTC, never as local time.
 const asUtc = (iso) => (/[zZ]|[+-]\d\d:?\d\d$/.test(iso) ? iso : `${iso}Z`);
 const ms = (iso) => (iso ? Date.parse(asUtc(String(iso))) : NaN);
 const hhmm = (t) => new Date(t).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
@@ -63,7 +64,8 @@ const possessive = (name) => (name === "Your buddy" ? "Your buddy's" : `${name}'
 // ------------------------------------------------------------ state
 
 const s = load();
-const alerts = new Map();   // alert_id -> {alert, message, receivedAt}
+const alerts = new Map();   // alert_id -> {alert, message, receivedAt}; receivedAt is the relay's time (the
+                            // alert's own created_at is the device clock, which a replay sets years back)
 const byListing = new Map(); // listing_id -> alert_id (the newest alert for it)
 const listings = new Map();  // listing_id -> {l, seenAt, prev, reopened, resolvedAt}
 const claims = new Map();    // listing_id -> {claim, calledAt, steps} (mine, while live)
@@ -99,7 +101,10 @@ function mergeListing(l) {
   if (!l || typeof l.listing_id !== "string") return;
   const old = listings.get(l.listing_id);
   const prev = old ? old.l.status : null;
-  const e = { l, seenAt: Date.now(), prev, reopened: old ? old.reopened : false, resolvedAt: old ? old.resolvedAt : null };
+  // elapsed_min changes only when the device re-posts: count on from when this value was first seen
+  const seenAt = old && old.l.elapsed_min === l.elapsed_min ? old.seenAt : Date.now();
+  const e = { l, seenAt, prev, reopened: old ? old.reopened : false, resolvedAt: old ? old.resolvedAt : null,
+    onHub: old ? old.onHub : false };
   if (prev === "treating" && l.status === "open") e.reopened = true;          // treating ran out unrecovered: top urgency
   if (l.status === "resolved" && prev !== "resolved") e.resolvedAt = old ? Date.now() : null;
   if (l.status === "resolved" || l.status === "treating") e.reopened = false;
@@ -297,10 +302,12 @@ async function pollInbox() {
       continue;
     }
     const isNew = !alerts.has(a.alert_id);
-    alerts.set(a.alert_id, { alert: a, message: safeLine(p.message), receivedAt: Date.now() });
+    const receivedAt = ms(env.created_at) || Date.now();
+    alerts.set(a.alert_id, { alert: a, message: safeLine(p.message), receivedAt });
     byListing.set(l.listing_id, a.alert_id);
     mergeListing(l);
-    const fresh = !firstInbox || Date.now() - ms(a.created_at) < RECENT_MS;
+    // at page load: only a recent alert, and never one this page already saw closed
+    const fresh = !firstInbox || (Date.now() - receivedAt < RECENT_MS && typeof hubSeen()[l.listing_id] !== "number");
     if (isNew && l.status === "open" && fresh) {
       handled.delete(l.listing_id);
       pop = l.listing_id;
@@ -334,6 +341,32 @@ async function pollHub() {
     mergeListing(l);
     hubOrder.push(l.listing_id);
   }
+  // The hub lists every listing not resolved: one of ours that was on it and is gone was resolved
+  // (the patient acknowledged, or recovered). "Was on it" is remembered across reloads, so an alert
+  // that never reached the hub (hub_watchable off) is never shown as closed.
+  const listed = new Set(hubOrder), seen = hubSeen();
+  for (const id of listed) if (!(id in seen)) seen[id] = null;
+  for (const [id, e] of listings) {
+    if (listed.has(id) || e.l.status === "resolved" || !(id in seen)) continue;
+    const at = e.onHub ? Date.now() : seen[id];
+    mergeListing({ ...e.l, status: "resolved" });
+    listings.get(id).resolvedAt = at || null;
+    seen[id] = at || 0;
+  }
+  for (const id of listed) listings.get(id).onHub = true;
+  saveHubSeen(seen);
+}
+function hubSeen() {
+  try {
+    const m = JSON.parse(localStorage.getItem(HUB_SEEN) || "{}");
+    return m && typeof m === "object" ? m : {};
+  } catch {
+    return {};
+  }
+}
+function saveHubSeen(m) {
+  const keep = Object.keys(m).slice(-50);
+  try { localStorage.setItem(HUB_SEEN, JSON.stringify(Object.fromEntries(keep.map((k) => [k, m[k]])))); } catch { /* this session only */ }
 }
 
 async function claim(listingId) {
@@ -489,7 +522,7 @@ function renderAlert() {
 function renderBuddy() {
   const card = $("buddycard");
   const ids = [...byListing.keys()];
-  const last = ids.map(live).filter(Boolean).sort((x, y) => ms(alerts.get(byListing.get(y.l.listing_id)).alert.created_at) - ms(alerts.get(byListing.get(x.l.listing_id)).alert.created_at))[0];
+  const last = ids.map(live).filter(Boolean).sort((x, y) => alerts.get(byListing.get(y.l.listing_id)).receivedAt - alerts.get(byListing.get(x.l.listing_id)).receivedAt)[0];
   if (!last) {
     card.replaceChildren(el("h2", null, "Your buddy"),
       el("p", "line", "No alerts from your buddy's Irin. If their alarm goes unanswered, this page sounds."));
@@ -502,7 +535,8 @@ function renderBuddy() {
   if (l.is_demo) top.append(el("span", "badge-demo", "DEMO"));
   kids.push(top);
   if (l.status === "resolved") {
-    kids.push(el("p", "line", `Last alert ${hhmm(ms(a.alert.created_at))}, resolved${last.resolvedAt ? ` at ${hhmm(last.resolvedAt)}` : ""}.`));
+    kids.push(el("p", "morning", morningLine(last, who)));
+    kids.push(el("p", "line", `Last alert ${hhmm(a.receivedAt)}, resolved${last.resolvedAt ? ` at ${hhmm(last.resolvedAt)}` : ""}.`));
   } else if (l.status === "treating") {
     const ago = treatingAgo(l);
     kids.push(el("p", "line", `Alert open: ${who} marked treating${ago === null ? "" : ` ${ago} min ago`}.`));
@@ -511,6 +545,7 @@ function renderBuddy() {
   }
   if (a.message) kids.push(el("p", "line", a.message));
   const done = (myLog()[l.listing_id] || []).map((x) => el("li", null, `You ${x.what} at ${hhmm(x.at)}.`));
+  if (l.status === "resolved") done.push(el("li", null, `Closed${last.resolvedAt ? ` at ${hhmm(last.resolvedAt)}` : ""}: ${who}'s Irin ended the alert.`));
   if (done.length) {
     const ul = el("ul", "closeout");
     ul.replaceChildren(...done);
@@ -523,6 +558,17 @@ function renderBuddy() {
     kids.push(b);
   }
   card.replaceChildren(...kids);
+}
+
+/** The morning line: the night's alerts from this buddy (counts and times only), all of them closed. */
+function morningLine(last, who) {
+  const created = (e) => alerts.get(byListing.get(e.l.listing_id)).receivedAt;
+  const night = [...byListing.keys()].map(live).filter((e) => e && created(last) - created(e) < 12 * 3600e3);
+  const open = night.filter((e) => e.l.status !== "resolved").length;
+  const n = night.length;
+  const mine = night.some((e) => (myLog()[e.l.listing_id] || []).length);
+  return `${n === 1 ? "One alert" : `${n} alerts`} from ${who} overnight${open ? `, ${open} still open` : n === 1 ? ", closed" : ", all closed"}.`
+    + (mine ? " Thank you for answering." : "");
 }
 
 function renderHub() {
@@ -607,6 +653,36 @@ $("unpair").addEventListener("click", async () => {
     await relay(s, `/v0/pair/${encodeURIComponent(s.doctor_id)}/revoke`, { method: "POST" });
   } catch { /* the key is forgotten here either way */ }
   sharingEnded("You ended the pairing. Sharing ended.");
+});
+
+// ------------------------------------------------------------ WhatsApp (A6's second channel)
+
+// POST {relay}/v0/buddy/whatsapp {phone} (E.164, bearer) -> {registered: true}. The number is
+// sent once and never kept or shown here; every refusal is shown as the relay gave it.
+$("wa").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const say = (t) => { $("wa-msg").textContent = t; };
+  const phone = $("wa-phone").value.replace(/[\s().-]/g, "");
+  if (!/^\+[1-9]\d{7,14}$/.test(phone)) return say("Type the number with + and the country code, e.g. +14045550123.");
+  const btn = $("wa").querySelector("button");
+  btn.disabled = true;
+  say("Saving…");
+  try {
+    const res = await relay(s, "/v0/buddy/whatsapp", { method: "POST", body: JSON.stringify({ phone }) });
+    const b = await res.json().catch(() => ({}));
+    if (res.ok && b.registered) {
+      $("wa-phone").value = "";
+      say("Saved. Send \"hi\" once to the Irin WhatsApp number so its messages can reach you.");
+    } else if (res.status === 401) {
+      sharingEnded("Sharing ended: your buddy stopped sharing with this browser. Scan a new QR code on their Irin to pair again.");
+    } else {
+      const d = Array.isArray(b.detail) ? b.detail.map((x) => x && x.msg).filter(Boolean).join("; ") : b.detail;
+      say(`The relay answered ${res.status}${d ? `: ${d}` : ""}.${res.status === 404 ? " WhatsApp alerts are not live on this relay yet." : ""}`);
+    }
+  } catch {
+    say("Cannot reach the relay. Try again.");
+  }
+  btn.disabled = false;
 });
 
 // ------------------------------------------------------------ the loop

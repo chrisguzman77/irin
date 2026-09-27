@@ -88,3 +88,10 @@ main > section { display: flex; flex-direction: column; gap: 12px; }
 .alert .btn.ghost { color: #fff; border-color: #fff; }
 .steps { margin: 0; padding: 14px 14px 14px 36px; background: rgba(0, 0, 0, 0.35); border-radius: 12px; font-size: 18px; display: flex; flex-direction: column; gap: 10px; }
 .alert .linkish { color: #fff; align-self: flex-start; font-size: 15px; }
+
+/* the WhatsApp number */
+.wa label { display: flex; flex-direction: column; gap: 6px; font-size: 15px; }
+.wa input { font: 16px system-ui, sans-serif; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--fg); }
+.wa .btn { align-self: flex-start; }
+.card .morning { margin: 0; font-size: 16px; font-weight: 600; }
+.alert .badge-demo { align-self: flex-start; }
