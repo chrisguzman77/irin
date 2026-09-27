@@ -27,6 +27,8 @@ from pydantic import BaseModel, Field
 from . import store
 from .alarm import AlarmEngine, Transition
 from .backlight import BacklightController
+from .buddy.directory import (BuddyDirectory, BuddyProfile, DirectoryError, DirectoryRelayClient, MatchOffer,
+                              MatchStatus, ProfileResult, StoredProfile)
 from .buddy.rung import BuddyRung
 from .buddy.treating import TreatingError, handle_calls, set_treating
 from .auth import require_fresh_pin, require_pin
@@ -104,6 +106,7 @@ class Runtime:
     recall: "MorningRecall | None" = None
     catchup: "CatchUp | None" = None
     buddy: "BuddyRung | None" = None
+    directory: "BuddyDirectory | None" = None
 
 
 runtime = Runtime(mode="nightscout" if config.DATASOURCE == "nightscout" else "replay",
@@ -367,9 +370,37 @@ async def _relay_tick() -> None:
 
 
 def _make_relay_client() -> RelayClient:
-    return RelayClient(relay_url=config.RELAY_URL, source_key=config.RELAY_SOURCE_KEY,
-                       device_id=config.DEVICE_ID or "irin-dev", is_demo=lambda: runtime.mode == "replay",
-                       on_pairings=lambda states: runtime.pairing.apply_remote_states(states))
+    return DirectoryRelayClient(relay_url=config.RELAY_URL, source_key=config.RELAY_SOURCE_KEY,
+                                device_id=config.DEVICE_ID or "irin-dev", is_demo=lambda: runtime.mode == "replay",
+                                on_pairings=lambda states: runtime.pairing.apply_remote_states(states),
+                                on_matches=lambda rows: runtime.directory.on_matches(rows))
+
+
+async def _cgm_feed_verified() -> bool:
+    """B3+: live only. The Nightscout feed answered with a recent (non-stale) reading; one fresh poll first."""
+    ds = runtime.datasource
+    if not isinstance(ds, NightscoutDataSource):
+        return False
+    await ds.poll_once()
+    latest = await ds.get_latest()
+    return latest is not None and not latest.is_stale
+
+
+def _live_pending_pairing() -> tuple[str, str] | None:
+    """B3+: (peer_kind, token) of a pairing still on screen, so a match link never replaces it."""
+    p = runtime.pairing.pending if runtime.pairing is not None else None
+    if p is None or p.used or p.expired():
+        return None
+    return (p.peer_kind, p.token)
+
+
+def _make_directory() -> BuddyDirectory:
+    return BuddyDirectory(relay_url=config.RELAY_URL, source_key=config.RELAY_SOURCE_KEY,
+                          is_demo=lambda: runtime.mode == "replay", verify_cgm=_cgm_feed_verified,
+                          start_pairing=lambda: runtime.pairing.start("buddy"), pending=_live_pending_pairing,
+                          buddy_pairings=lambda: [p for p in runtime.pairing.recipients(runtime.mode == "replay")
+                                                  if p.peer_kind == "buddy"],
+                          on_update=lambda p: _schedule(hub.broadcast(WSMessage(type="hub_update", payload=p))))
 
 
 def _make_pairing() -> PairingService:
@@ -500,6 +531,9 @@ async def lifespan(app: FastAPI):
     _load_settings()
     runtime.pairing = _make_pairing()  # after init_db: it loads the stored pairings
     runtime.relay_client = _make_relay_client()
+    runtime.directory = _make_directory()
+    runtime.buddy.matches = runtime.directory.snapshot
+    runtime.buddy.link_mode = runtime.directory.mode_for
     # a Rounds card goes to doctors only: a buddy pairing never receives clinical numbers (invariant 15)
     runtime.cards = CardSender(recipients=lambda demo: [p for p in runtime.pairing.recipients(demo) if p.peer_kind == "doctor"],
                                post=runtime.relay_client.post_card,
@@ -624,6 +658,7 @@ async def set_mode(req: ModeRequest) -> dict:
     runtime.alarm.reset()  # switch semantics (step 12): alarm state back to idle
     runtime.alarm_events.reset()  # an episode cut by the switch is dropped, never written
     runtime.buddy.reset()  # an open buddy alert is resolved; the T+20 clock is disarmed with the episode
+    runtime.directory.reset()  # B3+: one world's matches are never shown in the other
     await asyncio.to_thread(runtime.pairing.cancel)  # its lock may be held by a relay call in a worker
     runtime.forecaster.reset()
     runtime.voice.reset()
@@ -1300,6 +1335,54 @@ async def buddy_treating() -> dict:
         raise HTTPException(status_code=e.status, detail=e.detail)
     await hub.broadcast(WSMessage(type="treating_set", payload=t))
     return t
+
+
+# --- Night Buddy (B3+): the directory profile and matching, through the relay ---
+
+
+def _directory_error(e: DirectoryError) -> HTTPException:
+    return HTTPException(status_code=e.status, detail=e.detail)
+
+
+@app.get("/api/buddy/profile", dependencies=[Depends(require_pin)], response_model=StoredProfile | None)
+async def buddy_profile() -> StoredProfile | None:
+    """This world's stored directory profile, or null."""
+    return runtime.directory.profile()
+
+
+@app.post("/api/buddy/profile", dependencies=[Depends(require_pin)], response_model=ProfileResult)
+async def buddy_profile_save(profile: BuddyProfile) -> ProfileResult:
+    """The Pi checks the CGM feed itself; the relay gets cgm_verified only, never the feed URL or token."""
+    try:
+        return await runtime.directory.save_profile(profile)
+    except DirectoryError as e:
+        raise _directory_error(e)
+
+
+@app.post("/api/buddy/match", dependencies=[Depends(require_pin)], response_model=list[MatchOffer])
+async def buddy_match() -> list[MatchOffer]:
+    """Up to 3 offers, scored by the relay; intro (narrative, validated) and why (computed) beside each."""
+    try:
+        return await runtime.directory.find_matches()
+    except DirectoryError as e:
+        raise _directory_error(e)
+
+
+@app.post("/api/buddy/match/{match_id}/accept", dependencies=[Depends(require_pin)], response_model=MatchStatus)
+async def buddy_match_accept(match_id: str) -> MatchStatus:
+    """Accepted by both sides: a buddy pairing starts and its link goes to the other side through the relay."""
+    try:
+        return await runtime.directory.respond(match_id, "accept")
+    except DirectoryError as e:
+        raise _directory_error(e)
+
+
+@app.post("/api/buddy/match/{match_id}/decline", dependencies=[Depends(require_pin)], response_model=MatchStatus)
+async def buddy_match_decline(match_id: str) -> MatchStatus:
+    try:
+        return await runtime.directory.respond(match_id, "decline")
+    except DirectoryError as e:
+        raise _directory_error(e)
 
 
 @app.websocket("/ws")

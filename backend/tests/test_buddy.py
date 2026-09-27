@@ -441,7 +441,7 @@ def test_treating_endpoint_pin_gated_409_then_broadcasts_treating_set(monkeypatc
                 snap = json.loads(ws.receive_text())
             assert snap["type"] == "state_snapshot"
             bs = snap["payload"]["buddy_state"]
-            assert set(bs) == {"link", "open_alert", "treating", "morning_line", "emergency"}
+            assert set(bs) == {"link", "open_alert", "treating", "morning_line", "emergency", "matches"}
             assert bs["treating"] == r.json() and bs["open_alert"] == b.alert
         finally:
             b.alert = b.treating = None
