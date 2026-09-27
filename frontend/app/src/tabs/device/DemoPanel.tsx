@@ -15,7 +15,7 @@ import { sendSampleCard, type SampleFixture } from "../../lib/cards";
 // in live mode.
 type ModeRequest = components["schemas"]["ModeRequest"];
 
-const SPEEDS = [1, 10, 60, 120] as const;
+const SPEEDS = [1, 10, 60, 120, 240] as const;
 const INJECT_MIN = 39;
 const INJECT_MAX = 401;
 
