@@ -58,14 +58,55 @@ const SEND_OUTCOME: Record<string, string> = {
   no_recipient: "Card saved but not sent: no doctor is paired in demo mode. Pair one first.",
 };
 
-const btn = "rounded-lg px-3 py-2 font-semibold disabled:opacity-40";
+// Calm, brand-coloured building blocks (irin-* in index.css). Alarm red,
+// DEMO amber and the red/amber/green card statuses keep their own colours.
+const btn = "rounded-full px-4 py-2 font-semibold transition-colors duration-300 disabled:opacity-40";
+const primary = `${btn} bg-gradient-to-r from-irin-leaf to-irin-mint text-irin-ink shadow-md shadow-black/20 active:brightness-110`;
+const secondary = `${btn} bg-irin-ink/70 border border-irin-leaf/40 text-irin-cream active:bg-irin-line`;
+const field = "bg-irin-ink/80 border border-irin-leaf/30 rounded-xl px-3 py-2 text-irin-cream focus:outline-none focus:border-irin-mint";
 
-function Control({ title, hint, children }: { title: string; hint?: string; children: ReactNode }) {
+/** A soft two-tone wave, the brand's leaf and mint layered, used as a divider. */
+function Wave({ flip = false }: { flip?: boolean }) {
   return (
-    <div className="rounded-lg border border-neutral-800 px-3 py-3 flex flex-col gap-2">
-      <div className="flex items-baseline justify-between gap-2">
-        <span className="text-neutral-200 font-medium">{title}</span>
-        {hint && <span className="text-xs text-neutral-500 text-right">{hint}</span>}
+    <svg viewBox="0 0 400 40" preserveAspectRatio="none" aria-hidden className={`block w-full h-6 ${flip ? "rotate-180" : ""}`}>
+      <path d="M0 22 C 80 4, 160 40, 240 20 S 360 6, 400 18 L400 40 L0 40 Z" className="fill-irin-leaf/25" />
+      <path d="M0 30 C 90 16, 170 44, 260 28 S 370 18, 400 26 L400 40 L0 40 Z" className="fill-irin-mint/15" />
+    </svg>
+  );
+}
+
+// Each group carries one tint so the colour flows leaf -> mint -> sage down the page.
+const TINTS = {
+  leaf: "from-irin-leaf/20",
+  mint: "from-irin-mint/15",
+  sage: "from-irin-sage/15",
+} as const;
+
+/** A titled group of related controls, washed with its tint at the top. */
+function Group({ title, note, tint, children }: { title: string; note?: string; tint: keyof typeof TINTS; children: ReactNode }) {
+  return (
+    <div className={`rounded-3xl bg-gradient-to-b ${TINTS[tint]} via-irin-surface to-irin-surface border border-irin-line/60 px-4 pt-4 pb-1 flex flex-col`}>
+      <div className="flex items-center gap-2">
+        <span className="h-2 w-2 rounded-full bg-gradient-to-br from-irin-leaf to-irin-mint" />
+        <h3 className="text-xs font-semibold uppercase tracking-[0.18em] text-irin-mint">{title}</h3>
+      </div>
+      {note && <p className="text-sm text-irin-sage mt-1">{note}</p>}
+      <div className="flex flex-col divide-y divide-irin-line/50">{children}</div>
+    </div>
+  );
+}
+
+/** One control. With `side`, a single action sits to the right of its name
+ *  (one row); otherwise the inputs sit full width under the name. */
+function Control({ title, hint, side, children }: { title: string; hint?: string; side?: ReactNode; children?: ReactNode }) {
+  return (
+    <div className="py-3 flex flex-col gap-2">
+      <div className="flex items-center gap-3">
+        <div className="flex flex-col flex-1 min-w-0">
+          <span className="text-irin-cream font-medium">{title}</span>
+          {hint && <span className="text-xs text-irin-sage">{hint}</span>}
+        </div>
+        {side && <div className="shrink-0">{side}</div>}
       </div>
       {children}
     </div>
@@ -143,7 +184,7 @@ export default function DemoPanel({ snap, baseUrl, onClose }: { snap: StateSnaps
       disabled={busy}
       aria-pressed={mode === m}
       onClick={() => switchTo(m)}
-      className={`flex-1 py-4 text-xl font-black tracking-wider rounded-lg ${mode === m ? on : "text-neutral-400"} disabled:opacity-60`}
+      className={`flex-1 py-3 text-lg font-black tracking-wider rounded-full ${mode === m ? on : "text-irin-sage"} disabled:opacity-60`}
     >
       {label}
     </button>
@@ -161,181 +202,195 @@ export default function DemoPanel({ snap, baseUrl, onClose }: { snap: StateSnaps
     (seekDay !== "" && Number.isInteger(dayN) && dayN >= 1 && (stepN === null || (Number.isInteger(stepN) && stepN >= 1)));
 
   return (
-    <section className="flex flex-col gap-4">
-      <div className="flex items-center justify-between">
-        <h2 className="text-xl font-semibold">Demo panel</h2>
-        <button type="button" onClick={onClose} className="text-neutral-400 px-2 py-1">
-          Close
-        </button>
-      </div>
-
-      <div className="flex gap-1 p-1 rounded-xl bg-neutral-900 border border-neutral-700">
-        {seg("nightscout", "LIVE", "bg-emerald-500 text-black")}
-        {seg("replay", "DEMO", "bg-amber-400 text-black")}
-      </div>
-      <p className="text-sm text-neutral-400">
-        {mode === undefined
-          ? "Waiting for your Irin…"
-          : demo
-            ? `Demo: replayed data, badged DEMO on every screen.${info?.current ? ` Playing ${info.current} at ${speed}×.` : ""}${
-                info?.clock ? ` Replay clock ${clockText(info.clock)}.` : ""
-              }`
-            : "Live: real readings. Demo controls are off."}
-      </p>
-      {msg && (
-        <p role="status" className={`text-sm ${msg.error ? "text-red-400" : "text-emerald-400"}`}>
-          {msg.text}
-        </p>
-      )}
-
-      <fieldset disabled={!demo || busy} className={`flex flex-col gap-2 ${demo ? "" : "opacity-40"}`}>
-        <legend className="text-xs uppercase tracking-wider text-neutral-500 mb-1">
-          {demo ? "Demo controls" : "Demo controls (demo mode only)"}
-        </legend>
-
-        <Control title="Scenario" hint="plays from its first reading">
-          <div className="flex gap-2">
-            <select
-              aria-label="Scenario"
-              className="flex-1 bg-neutral-900 border border-neutral-700 rounded-lg px-3 py-2 text-white"
-              value={picked}
-              onChange={(e) => setPicked(e.target.value)}
-            >
-              {(info?.scenarios ?? []).map((s) => (
-                <option key={s} value={s}>
-                  {s.replace(/_/g, " ")}
-                  {s === info?.current ? " (playing)" : ""}
-                </option>
-              ))}
-            </select>
-            <button
-              type="button"
-              disabled={!picked}
-              className={`${btn} bg-white text-black`}
-              onClick={() => run(() => playScenario(baseUrl, picked), `Playing ${picked.replace(/_/g, " ")} from the start.`, () => {
-                refresh();
-              })}
-            >
-              Play
-            </button>
+    <section className="flex flex-col gap-4 pb-24">
+      {/* hero: the mode switch on a leaf-to-ink wash with the brand wave under it */}
+      <div className="rounded-3xl overflow-hidden border border-irin-line/60 bg-gradient-to-br from-irin-leaf/35 via-irin-surface to-irin-ink">
+        <div className="px-4 pt-4 flex items-start justify-between gap-3">
+          <div>
+            <h2 className="text-xl font-semibold text-irin-cream">Demo panel</h2>
+            <p className="text-sm text-irin-sage">Stage controls for showing Irin with replayed nights.</p>
           </div>
-        </Control>
+          <button type="button" onClick={onClose} className={secondary}>
+            Close
+          </button>
+        </div>
+        <div className="px-4 pt-4 flex flex-col gap-2">
+          <div className="flex gap-1 p-1 rounded-full bg-irin-ink/80 border border-irin-line">
+            {seg("nightscout", "LIVE", "bg-gradient-to-r from-irin-leaf to-irin-mint text-irin-ink")}
+            {seg("replay", "DEMO", "bg-amber-400 text-black")}
+          </div>
+          <p className="text-sm text-irin-sage text-center">
+            {mode === undefined
+              ? "Waiting for your Irin…"
+              : demo
+                ? `Demo: replayed data, badged DEMO on every screen.${info?.current ? ` Playing ${info.current.replace(/_/g, " ")} at ${speed}×.` : ""}${
+                    info?.clock ? ` Replay clock ${clockText(info.clock)}.` : ""
+                  }`
+                : "Live: real readings. Demo controls are off."}
+          </p>
+        </div>
+        <Wave />
+      </div>
 
-        <Control title="Replay speed" hint="clock-minutes per real minute">
-          <div className="flex gap-2">
-            {SPEEDS.map((s) => (
-              <button
-                key={s}
-                type="button"
-                aria-pressed={speed === s}
-                className={`${btn} flex-1 ${speed === s ? "bg-white text-black" : "bg-neutral-900 text-neutral-300"}`}
-                onClick={() => run(() => setSpeed(baseUrl, s), `Speed ${s}×.`, refresh)}
+      <fieldset disabled={!demo || busy} className={`flex flex-col gap-4 transition-opacity duration-300 ${demo ? "" : "opacity-40"}`}>
+        <legend className="sr-only">{demo ? "Demo controls" : "Demo controls (demo mode only)"}</legend>
+        {!demo && <p className="text-sm text-irin-sage text-center">Switch to DEMO to use the controls below.</p>}
+
+        <Group title="Playback" note="Choose a recorded night and control how it plays." tint="leaf">
+          <Control title="Scenario" hint="Plays from its first reading.">
+            <div className="flex gap-2">
+              <select
+                aria-label="Scenario"
+                className={`flex-1 min-w-0 ${field}`}
+                value={picked}
+                onChange={(e) => setPicked(e.target.value)}
               >
-                {s}×
-              </button>
-            ))}
-          </div>
-        </Control>
-
-        <Control title="Sensor feed" hint="paused: the reading goes stale after 15 clock-min">
-          <button
-            type="button"
-            aria-pressed={paused}
-            className={`${btn} ${paused ? "bg-amber-400 text-black" : "bg-neutral-900 text-neutral-300"}`}
-            onClick={() =>
-              run(() => setPaused(baseUrl, !paused), paused ? "Feed resumed." : "Feed paused.", refresh)
-            }
-          >
-            {paused ? "Resume feed" : "Pause feed"}
-          </button>
-        </Control>
-
-        <Control title="Inject a low" hint="one reading now, falling; the scenario stays clean">
-          <div className="flex gap-2">
-            <input
-              aria-label="Injected glucose (mg/dL)"
-              className="w-24 bg-neutral-900 border border-neutral-700 rounded-lg px-3 py-2 text-white"
-              type="number"
-              inputMode="numeric"
-              min={INJECT_MIN}
-              max={INJECT_MAX}
-              value={injectValue}
-              onChange={(e) => setInjectValue(e.target.value)}
-            />
-            <span className="self-center text-neutral-400 text-sm">mg/dL</span>
-            <button
-              type="button"
-              disabled={!injectOk}
-              className={`${btn} flex-1 bg-red-500 text-white`}
-              onClick={() => run(() => injectLow(baseUrl, inject), `Injected ${inject} mg/dL.`)}
-            >
-              Inject
-            </button>
-          </div>
-          {!injectOk && <span className="text-xs text-red-400">Between {INJECT_MIN} and {INJECT_MAX}.</span>}
-        </Control>
-
-        <Control title="Basal-time nudge" hint="basal time set to 61 min ago; restored on the switch to live">
-          <button
-            type="button"
-            className={`${btn} bg-neutral-900 text-neutral-300`}
-            onClick={() => run(() => basalNudge(baseUrl), "Basal nudge triggered.")}
-          >
-            Show the basal nudge
-          </button>
-        </Control>
-
-        <Control title="Send a card to the doctor" hint="a sample card, badged DEMO, sealed to the paired demo doctor">
-          <div className="flex gap-2">
-            {([
-              ["signal_card_standing", "Basal Check"],
-              ["signal_card_step", "Step check"],
-            ] as [SampleFixture, string][]).map(([f, label]) => (
+                {(info?.scenarios ?? []).map((s) => (
+                  <option key={s} value={s}>
+                    {s.replace(/_/g, " ")}
+                    {s === info?.current ? " (playing)" : ""}
+                  </option>
+                ))}
+              </select>
               <button
-                key={f}
                 type="button"
-                className={`${btn} flex-1 bg-neutral-900 text-neutral-200`}
+                disabled={!picked}
+                className={`${primary} px-6`}
+                onClick={() => run(() => playScenario(baseUrl, picked), `Playing ${picked.replace(/_/g, " ")} from the start.`, () => {
+                  refresh();
+                })}
+              >
+                Play
+              </button>
+            </div>
+          </Control>
+
+          <Control title="Replay speed" hint="Clock-minutes per real minute.">
+            <div className="grid grid-cols-4 gap-1 p-1 rounded-full bg-irin-ink/80 border border-irin-line">
+              {SPEEDS.map((s) => (
+                <button
+                  key={s}
+                  type="button"
+                  aria-pressed={speed === s}
+                  className={`${btn} py-1.5 ${speed === s ? "bg-gradient-to-r from-irin-leaf to-irin-mint text-irin-ink" : "text-irin-sage"}`}
+                  onClick={() => run(() => setSpeed(baseUrl, s), `Speed ${s}×.`, refresh)}
+                >
+                  {s}×
+                </button>
+              ))}
+            </div>
+          </Control>
+
+          <Control
+            title="Sensor feed"
+            hint="While paused, the reading goes stale after 15 clock-minutes."
+            side={
+              <button
+                type="button"
+                aria-pressed={paused}
+                className={paused ? `${btn} bg-amber-400 text-black` : secondary}
                 onClick={() =>
-                  run(async () => {
-                    const r = await sendSampleCard(baseUrl, f);
-                    if (!r.ok) return r.reason;
-                    setMsg({ text: SEND_OUTCOME[r.status] ?? `Card ${r.status}.`, error: r.status === "no_recipient" });
-                    return "";
-                  }, "")
+                  run(() => setPaused(baseUrl, !paused), paused ? "Feed resumed." : "Feed paused.", refresh)
                 }
               >
-                {label}
+                {paused ? "Resume feed" : "Pause feed"}
               </button>
-            ))}
-          </div>
-        </Control>
+            }
+          />
+        </Group>
 
-        <Control title="Jump to step N day D, or to a date" hint="the step-2 check appears at step 2 day 8; clear the step for day D of the scenario; a date wins">
-          <div className="flex gap-2 items-center">
-            <span className="text-neutral-400 text-sm">step</span>
-            <input
-              aria-label="Plan step"
-              className="w-16 bg-neutral-900 border border-neutral-700 rounded-lg px-2 py-2 text-white"
-              type="number"
-              inputMode="numeric"
-              min={1}
-              value={seekStep}
-              onChange={(e) => setSeekStep(e.target.value)}
-            />
-            <span className="text-neutral-400 text-sm">day</span>
-            <input
-              aria-label="Day"
-              className="w-16 bg-neutral-900 border border-neutral-700 rounded-lg px-2 py-2 text-white"
-              type="number"
-              inputMode="numeric"
-              min={1}
-              value={seekDay}
-              onChange={(e) => setSeekDay(e.target.value)}
-            />
+        <Group title="Show a moment" note="Make something happen right now." tint="mint">
+          <Control title="Inject a low" hint="One falling reading now; the scenario itself stays clean.">
+            <div className="flex gap-2 items-center">
+              <div className="flex items-center rounded-xl bg-irin-ink/80 border border-irin-leaf/30 pr-3 focus-within:border-irin-mint">
+                <input
+                  aria-label="Injected glucose (mg/dL)"
+                  className="w-16 bg-transparent px-3 py-2 text-irin-cream focus:outline-none"
+                  type="number"
+                  inputMode="numeric"
+                  min={INJECT_MIN}
+                  max={INJECT_MAX}
+                  value={injectValue}
+                  onChange={(e) => setInjectValue(e.target.value)}
+                />
+                <span className="text-irin-sage text-sm">mg/dL</span>
+              </div>
+              <button
+                type="button"
+                disabled={!injectOk}
+                className={`${btn} flex-1 bg-red-500 text-white`}
+                onClick={() => run(() => injectLow(baseUrl, inject), `Injected ${inject} mg/dL.`)}
+              >
+                Inject
+              </button>
+            </div>
+            {!injectOk && <span className="text-xs text-red-400">Between {INJECT_MIN} and {INJECT_MAX}.</span>}
+          </Control>
+
+          <Control
+            title="Basal-time nudge"
+            hint="Sets basal time to 61 min ago; restored when you switch to live."
+            side={
+              <button
+                type="button"
+                className={secondary}
+                onClick={() => run(() => basalNudge(baseUrl), "Basal nudge triggered.")}
+              >
+                Show nudge
+              </button>
+            }
+          />
+        </Group>
+
+        <Group title="Doctor · Irin Rounds" note="Move through time and send cards to the paired demo doctor." tint="sage">
+          <Control title="Jump ahead" hint="Step 2 day 8 shows the step-2 check. Leave step empty for day D of the scenario. A date wins over both.">
+            <div className="grid grid-cols-2 gap-2">
+              <label className="flex items-center gap-2 rounded-xl bg-irin-ink/80 border border-irin-leaf/30 px-3 focus-within:border-irin-mint">
+                <span className="text-irin-sage text-sm">Step</span>
+                <input
+                  aria-label="Plan step"
+                  className="w-full min-w-0 bg-transparent py-2 text-irin-cream focus:outline-none"
+                  type="number"
+                  inputMode="numeric"
+                  min={1}
+                  value={seekStep}
+                  onChange={(e) => setSeekStep(e.target.value)}
+                />
+              </label>
+              <label className="flex items-center gap-2 rounded-xl bg-irin-ink/80 border border-irin-leaf/30 px-3 focus-within:border-irin-mint">
+                <span className="text-irin-sage text-sm">Day</span>
+                <input
+                  aria-label="Day"
+                  className="w-full min-w-0 bg-transparent py-2 text-irin-cream focus:outline-none"
+                  type="number"
+                  inputMode="numeric"
+                  min={1}
+                  value={seekDay}
+                  onChange={(e) => setSeekDay(e.target.value)}
+                />
+              </label>
+            </div>
+            <div className="flex gap-2 items-center">
+              <label className="flex flex-1 min-w-0 items-center gap-2 rounded-xl bg-irin-ink/80 border border-irin-leaf/30 px-3 focus-within:border-irin-mint">
+                <span className="text-irin-sage text-sm whitespace-nowrap">or date</span>
+                <input
+                  aria-label="Seek date"
+                  className="flex-1 min-w-0 bg-transparent py-2 text-irin-cream focus:outline-none"
+                  type="date"
+                  value={seekDate}
+                  onChange={(e) => setSeekDate(e.target.value)}
+                />
+              </label>
+              {seekDate && (
+                <button type="button" className="text-sm text-irin-sage underline" onClick={() => setSeekDate("")}>
+                  clear
+                </button>
+              )}
+            </div>
             <button
               type="button"
               disabled={!seekOk}
-              className={`${btn} flex-1 bg-white text-black`}
+              className={`${primary} w-full py-2.5`}
               onClick={() =>
                 run(async () => {
                   const r = await seek(
@@ -353,135 +408,188 @@ export default function DemoPanel({ snap, baseUrl, onClose }: { snap: StateSnaps
             >
               Jump
             </button>
-          </div>
-          <div className="flex gap-2 items-center">
-            <span className="text-neutral-400 text-sm">or date</span>
-            <input
-              aria-label="Seek date"
-              className="flex-1 bg-neutral-900 border border-neutral-700 rounded-lg px-2 py-2 text-white"
-              type="date"
-              value={seekDate}
-              onChange={(e) => setSeekDate(e.target.value)}
-            />
-            {seekDate && (
-              <button type="button" className="text-sm text-neutral-400 underline" onClick={() => setSeekDate("")}>
-                clear
-              </button>
-            )}
-          </div>
-          <span className="text-xs text-neutral-500">
-            Lands at 09:00 of that day; the catch-up builds every night, question and card up to it. Forward only.
-            {info?.companion ? "" : " This scenario has no companion (no plan to seek by step)."}
-          </span>
-        </Control>
+            <span className="text-xs text-irin-sage">
+              Lands at 09:00 of that day; the catch-up builds every night, question and card up to it. Forward only.
+              {info?.companion ? "" : " This scenario has no companion (no plan to seek by step)."}
+            </span>
+          </Control>
 
-        <Control title="Latest evaluations" hint="each Standing card's newest evaluation and what the noise budget did with it">
-          <button type="button" className={`${btn} bg-neutral-900 text-neutral-300`} onClick={loadEvals}>
-            {evals ? "Refresh" : "Show"}
-          </button>
-          {evals && evals.length === 0 && <span className="text-sm text-neutral-400">No evaluation yet.</span>}
-          {evals?.map((e) => (
-            <div key={e.kind} className="text-sm flex flex-col gap-0.5 border-t border-neutral-800 pt-2">
-              <span className="text-neutral-200">
-                {e.kind.replace(/_/g, " ")} · <span className={e.status === "red" ? "text-red-400" : e.status === "amber" ? "text-amber-300" : e.status === "green" ? "text-emerald-400" : "text-neutral-400"}>{e.status || "—"}</span>
-                {e.budget ? ` · ${BUDGET[e.budget] ?? e.budget}` : ""}
-                {e.sent ? " · sent" : ""}
-              </span>
-              {e.headline && <span className="text-neutral-400">{e.headline}</span>}
-            </div>
-          ))}
-        </Control>
-
-        <Control title="Irin Brain only" hint="cards change confidence labels, never blank a row">
-          <button
-            type="button"
-            aria-pressed={brainOnly}
-            className={`${btn} ${brainOnly ? "bg-sky-300 text-black" : "bg-neutral-900 text-neutral-300"}`}
-            onClick={() =>
-              run(async () => {
-                const r = await setBrainOnly(baseUrl, !brainOnly);
-                if (!r.ok) return r.reason;
-                setMsg({
-                  text: r.body.brain_only
-                    ? "Brain only: presence, alarm hardware events and logged context are ignored."
-                    : "Bedside: every signal counts again.",
-                  error: false,
-                });
-                return "";
-              }, "", refresh)
-            }
-          >
-            {brainOnly ? "Brain only (tap for Bedside)" : "Bedside (tap for Brain only)"}
-          </button>
-        </Control>
-
-        <Control title="Send the real card" hint="today's card from the engine: Brain only, or Bedside and Brain side by side">
-          <div className="flex gap-2">
-            {(
-              [
-                ["brain", "Brain-only"],
-                ["both", "Bedside + Brain"],
-              ] as const
-            ).map(([m, label]) => (
+          <Control
+            title="Irin Brain only"
+            hint="Cards change confidence labels, never blank a row."
+            side={
               <button
-                key={m}
                 type="button"
-                className={`${btn} flex-1 bg-neutral-900 text-neutral-200`}
+                role="switch"
+                aria-checked={brainOnly}
+                aria-pressed={brainOnly}
+                aria-label={brainOnly ? "Brain only (tap for Bedside)" : "Bedside (tap for Brain only)"}
+                className="flex items-center gap-2"
                 onClick={() =>
                   run(async () => {
-                    const r = await sendEvaluatedCard(baseUrl, m);
+                    const r = await setBrainOnly(baseUrl, !brainOnly);
                     if (!r.ok) return r.reason;
-                    const lines = r.body.cards.map(
-                      (c) => `${c.card_id.includes("brain") ? "Brain" : "Bedside"} ${c.kind.replace(/_/g, " ")}: ${SEND_OUTCOME[c.status] ?? c.status}`,
-                    );
-                    setMsg({ text: lines.join(" ") || "No card was due.", error: r.body.cards.some((c) => c.status === "no_recipient") });
+                    setMsg({
+                      text: r.body.brain_only
+                        ? "Brain only: presence, alarm hardware events and logged context are ignored."
+                        : "Bedside: every signal counts again.",
+                      error: false,
+                    });
+                    return "";
+                  }, "", refresh)
+                }
+              >
+                <span className="text-sm text-irin-sage">{brainOnly ? "Brain only" : "Bedside"}</span>
+                <span
+                  className={`relative h-7 w-12 rounded-full transition-colors duration-300 ${
+                    brainOnly ? "bg-gradient-to-r from-irin-leaf to-irin-mint" : "bg-irin-ink border border-irin-line"
+                  }`}
+                >
+                  <span
+                    className={`absolute top-1 h-5 w-5 rounded-full bg-irin-cream shadow transition-all duration-300 ${brainOnly ? "left-6" : "left-1"}`}
+                  />
+                </span>
+              </button>
+            }
+          />
+
+          <Control title="Send the real card" hint="Today's card from the engine: Brain only, or Bedside and Brain side by side.">
+            <div className="grid grid-cols-2 gap-2">
+              {(
+                [
+                  ["brain", "Brain-only"],
+                  ["both", "Bedside + Brain"],
+                ] as const
+              ).map(([m, label]) => (
+                <button
+                  key={m}
+                  type="button"
+                  className={secondary}
+                  onClick={() =>
+                    run(async () => {
+                      const r = await sendEvaluatedCard(baseUrl, m);
+                      if (!r.ok) return r.reason;
+                      const lines = r.body.cards.map(
+                        (c) => `${c.card_id.includes("brain") ? "Brain" : "Bedside"} ${c.kind.replace(/_/g, " ")}: ${SEND_OUTCOME[c.status] ?? c.status}`,
+                      );
+                      setMsg({ text: lines.join(" ") || "No card was due.", error: r.body.cards.some((c) => c.status === "no_recipient") });
+                      return "";
+                    }, "")
+                  }
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </Control>
+
+          <Control title="Send a sample card" hint="A sample card, badged DEMO, sealed to the paired demo doctor.">
+            <div className="grid grid-cols-2 gap-2">
+              {([
+                ["signal_card_standing", "Basal Check"],
+                ["signal_card_step", "Step check"],
+              ] as [SampleFixture, string][]).map(([f, label]) => (
+                <button
+                  key={f}
+                  type="button"
+                  className={secondary}
+                  onClick={() =>
+                    run(async () => {
+                      const r = await sendSampleCard(baseUrl, f);
+                      if (!r.ok) return r.reason;
+                      setMsg({ text: SEND_OUTCOME[r.status] ?? `Card ${r.status}.`, error: r.status === "no_recipient" });
+                      return "";
+                    }, "")
+                  }
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </Control>
+
+          <Control
+            title="Simulate a Spark offer"
+            hint="Impiricus Spark (simulated) offers the scenario's plan; confirm it on the takeover."
+            side={
+              <button
+                type="button"
+                className={secondary}
+                onClick={() =>
+                  run(async () => {
+                    const r = await sparkOffer(baseUrl);
+                    if (!r.ok) return r.reason;
+                    setMsg({
+                      text: `Offer ${r.body.status} (plan ${r.body.plan_id}). Confirm it on the takeover with your code to start the watch.`,
+                      error: false,
+                    });
                     return "";
                   }, "")
                 }
               >
-                {label}
+                Simulate
               </button>
+            }
+          />
+
+          <Control
+            title="Latest evaluations"
+            hint="Each Standing card's newest evaluation and what the noise budget did with it."
+            side={
+              <button type="button" className={secondary} onClick={loadEvals}>
+                {evals ? "Refresh" : "Show"}
+              </button>
+            }
+          >
+            {evals && evals.length === 0 && <span className="text-sm text-irin-sage">No evaluation yet.</span>}
+            {evals?.map((e) => (
+              <div key={e.kind} className="text-sm flex flex-col gap-0.5 rounded-xl bg-irin-ink/70 px-3 py-2">
+                <span className="text-irin-cream">
+                  {e.kind.replace(/_/g, " ")} · <span className={e.status === "red" ? "text-red-400" : e.status === "amber" ? "text-amber-300" : e.status === "green" ? "text-emerald-400" : "text-irin-sage"}>{e.status || "—"}</span>
+                  {e.budget ? ` · ${BUDGET[e.budget] ?? e.budget}` : ""}
+                  {e.sent ? " · sent" : ""}
+                </span>
+                {e.headline && <span className="text-irin-sage">{e.headline}</span>}
+              </div>
             ))}
-          </div>
-        </Control>
+          </Control>
+        </Group>
 
-        <Control title="Simulate a Spark offer" hint="Impiricus Spark (simulated) offers the scenario's plan">
-          <button
-            type="button"
-            className={`${btn} bg-neutral-900 text-neutral-200`}
-            onClick={() =>
-              run(async () => {
-                const r = await sparkOffer(baseUrl);
-                if (!r.ok) return r.reason;
-                setMsg({
-                  text: `Offer ${r.body.status} (plan ${r.body.plan_id}). Confirm it on the takeover with your code to start the watch.`,
-                  error: false,
-                });
-                return "";
-              }, "")
+        <Group title="Night Buddy" tint="leaf">
+          <Control
+            title="Trigger the buddy rung"
+            hint="Alerts the paired buddy as if an alarm went unanswered."
+            side={
+              <button
+                type="button"
+                className={secondary}
+                onClick={() =>
+                  run(async () => {
+                    const r = await buddyRung(baseUrl);
+                    if (!r.ok) return r.reason;
+                    setMsg({ text: `Buddy rung: ${r.body.status}.`, error: false });
+                    return "";
+                  }, "")
+                }
+              >
+                Trigger
+              </button>
             }
-          >
-            Simulate Spark offer
-          </button>
-        </Control>
-
-        <Control title="Trigger the buddy rung" hint="arrives with the Night Buddy tier">
-          <button
-            type="button"
-            className={`${btn} bg-neutral-900 text-neutral-200`}
-            onClick={() =>
-              run(async () => {
-                const r = await buddyRung(baseUrl);
-                if (!r.ok) return r.reason;
-                setMsg({ text: `Buddy rung: ${r.body.status}.`, error: false });
-                return "";
-              }, "")
-            }
-          >
-            Trigger buddy rung
-          </button>
-        </Control>
+          />
+        </Group>
       </fieldset>
+
+      {/* the Pi's answer to the last tap, pinned near the thumb so it is seen wherever the control was */}
+      {msg && (
+        <p
+          role="status"
+          className={`sticky bottom-3 rounded-2xl px-4 py-3 text-sm shadow-lg shadow-black/40 border backdrop-blur ${
+            msg.error ? "bg-red-950/95 border-red-800 text-red-200" : "bg-irin-ink/95 border-irin-leaf/60 text-irin-mint"
+          }`}
+        >
+          {msg.text}
+        </p>
+      )}
     </section>
   );
 }
