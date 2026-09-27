@@ -251,3 +251,38 @@ def test_reads_are_unaffected_by_the_tunnel_header(monkeypatch):
     with TestClient(main.app) as c:
         r = c.get("/api/owner", headers={"Cf-Connecting-Ip": "203.0.113.9"})
         assert r.status_code == 200
+
+
+def test_a_new_code_while_paired_never_locks_out_the_paired_phone(svc):
+    """Review: a re-mint wrote the new hash as current and 401'd the still-paired phone."""
+    s, relay, states = svc
+    s.mint()
+    first = relay.registered["token"]
+    s.on_owner({"state": "paired", "username": "Phone A", "token_sha256": _sha(first)})
+    s.mint()  # someone opens "Pair a phone" again
+    second = relay.registered["token"]
+    assert s.state()["state"] == "paired" and token_matches(first) and not token_matches(second)
+    s.on_owner({"state": "paired", "username": "Phone A", "token_sha256": _sha(first)})  # relay: still the old one
+    assert token_matches(first)
+    s.on_owner({"state": "paired", "username": "Phone B", "token_sha256": _sha(second)})  # the new code redeemed
+    assert token_matches(second) and not token_matches(first) and s.state()["username"] == "Phone B"
+
+
+def test_a_local_revoke_is_never_undone_by_a_stale_relay_report(svc):
+    s, relay, states = svc
+    s.mint()
+    token = relay.registered["token"]
+    s.on_owner({"state": "paired", "username": "Chris", "token_sha256": _sha(token)})
+    s.revoke()
+    s.on_owner({"state": "paired", "username": "Chris", "token_sha256": _sha(token)})  # relay never heard the revoke
+    assert s.state()["state"] == "revoked" and not token_matches(token)
+
+
+def test_the_poll_never_waits_on_a_busy_lock(svc):
+    s, relay, states = svc
+    s._lock.acquire()
+    try:
+        s.on_owner({"state": "revoked"})  # returns at once instead of blocking the event loop
+    finally:
+        s._lock.release()
+    assert s.state()["state"] == "none"

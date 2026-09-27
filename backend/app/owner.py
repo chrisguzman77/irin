@@ -27,6 +27,7 @@ bearer whose sha256 matches the paired token."""
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import logging
 import secrets
@@ -45,7 +46,7 @@ log = logging.getLogger("irin.owner")
 TOKEN_TTL = timedelta(minutes=10)  # WALL minutes: a human reads the code, so the deadline is scaled by clock.speed
 KV_KEY = "owner_pairing"
 
-_DEFAULT_STATE = {"token_sha256": None, "state": "none", "username": None, "paired_at": None}
+_DEFAULT_STATE = {"token_sha256": None, "pending_sha256": None, "state": "none", "username": None, "paired_at": None}
 
 
 class OwnerError(Exception):
@@ -76,7 +77,8 @@ def token_matches(token: str) -> bool:
     if not token:
         return False
     d = _load()
-    return d.get("state") == "paired" and d.get("token_sha256") == _sha256(token)
+    return d.get("state") == "paired" and bool(d.get("token_sha256")) \
+        and hmac.compare_digest(str(d["token_sha256"]), _sha256(token))
 
 
 class RelayOwner:
@@ -134,53 +136,69 @@ class OwnerPairingService:
 
     def mint(self) -> dict[str, Any]:
         """A new code replaces this device's earlier unused one (ONE owner pairing
-        per device); the token is kept here only as sha256, never again in the clear."""
-        with self._lock:
-            code = f"{secrets.randbelow(1_000_000):06d}"
-            token = secrets.token_urlsafe(32)
-            ttl = TOKEN_TTL * clock.speed  # 10 wall minutes whatever the replay speed
-            expires_at = clock.now() + ttl
-            # the relay's deadline is WALL time in UTC: clock.now() is naive and, in replay, the scenario's date
-            relay_expires = datetime.now(timezone.utc) + TOKEN_TTL
-            self.relay.register(code, self.device_id, self.device_url, token, relay_expires.isoformat())
-            store.set_kv(KV_KEY, json.dumps({"token_sha256": _sha256(token), "state": "pending",
-                                             "username": None, "paired_at": None}))
-            self._changed()
-            qr_url = f"{self.app_origin.rstrip('/')}/#pair={code}"  # the code only, never the token
-            return {"code": code, "qr_url": qr_url, "expires_at": expires_at.isoformat(),
-                    "expires_in_s": int(TOKEN_TTL.total_seconds())}
-
-    def on_owner(self, owner: dict) -> None:
-        """The device poll's `owner` key: a "paired" report is only accepted when
-        its token_sha256 matches the token this Pi minted (a mismatch is dropped,
-        never applied); other states update local state as reported."""
+        per device); the token is kept here only as sha256, never again in the clear.
+        A phone already paired stays paired (its token keeps working) until the new
+        code is redeemed: the new hash waits as pending_sha256. The relay call runs
+        outside the lock, so the poll (on the event loop) never waits on it."""
+        code = f"{secrets.randbelow(1_000_000):06d}"
+        token = secrets.token_urlsafe(32)
+        ttl = TOKEN_TTL * clock.speed  # 10 wall minutes whatever the replay speed
+        expires_at = clock.now() + ttl
+        # the relay's deadline is WALL time in UTC: clock.now() is naive and, in replay, the scenario's date
+        relay_expires = datetime.now(timezone.utc) + TOKEN_TTL
+        self.relay.register(code, self.device_id, self.device_url, token, relay_expires.isoformat())
         with self._lock:
             d = _load()
-            reported = owner.get("state")
+            d["pending_sha256"] = _sha256(token)
+            if d["state"] != "paired":
+                d.update(state="pending", token_sha256=None, username=None, paired_at=None)
+            store.set_kv(KV_KEY, json.dumps(d))
+        self._changed()
+        qr_url = f"{self.app_origin.rstrip('/')}/#pair={code}"  # the code only, never the token
+        return {"code": code, "qr_url": qr_url, "expires_at": expires_at.isoformat(),
+                "expires_in_s": int(TOKEN_TTL.total_seconds())}
+
+    def on_owner(self, owner: dict) -> None:
+        """The device poll's `owner` key (on the event loop: never waits on the lock;
+        a busy lock skips this poll). "paired" is accepted only for a token this Pi
+        minted: the current one (username refresh) or the pending one (promoted)."""
+        if not self._lock.acquire(blocking=False):
+            return
+        try:
+            d = _load()
+            reported, sha = owner.get("state"), owner.get("token_sha256")
             if reported == "paired":
-                if not owner.get("token_sha256") or owner.get("token_sha256") != d["token_sha256"]:
+                if sha and sha == d.get("pending_sha256"):
+                    updated = {**d, "token_sha256": sha, "pending_sha256": None}
+                elif sha and sha == d.get("token_sha256"):
+                    updated = dict(d)
+                else:
                     log.warning("owner poll reported 'paired' with a token this Pi did not mint; ignored")
                     return
-                updated = {"token_sha256": d["token_sha256"], "state": "paired",
-                          "username": owner.get("username"),
-                          "paired_at": owner.get("paired_at") or clock.now().isoformat()}
-            elif reported in ("none", "pending", "revoked"):
-                updated = {**d, "state": reported}
+                updated.update(state="paired", username=owner.get("username"),
+                               paired_at=owner.get("paired_at") or d.get("paired_at") or clock.now().isoformat())
+            elif reported in ("none", "revoked"):
+                updated = {**d, "state": reported, "token_sha256": None, "pending_sha256": None}
+            elif reported == "pending":
+                updated = d if d["state"] == "paired" else {**d, "state": "pending"}
             else:
                 return
             if updated == d:
                 return
             store.set_kv(KV_KEY, json.dumps(updated))
-            self._changed()
+        finally:
+            self._lock.release()
+        self._changed()
 
     def revoke(self) -> dict[str, Any]:
-        """Instant locally regardless of the relay's answer, like pairing.py's revoke."""
+        """Instant locally regardless of the relay's answer: both hashes are
+        forgotten, so a relay still reporting the old pairing can never restore it."""
+        try:
+            self.relay.revoke()
+        except OwnerError:
+            log.warning("relay revoke failed; the device side is revoked regardless")
         with self._lock:
-            try:
-                self.relay.revoke()
-            except OwnerError:
-                log.warning("relay revoke failed; the device side is revoked regardless")
             d = _load()
-            store.set_kv(KV_KEY, json.dumps({**d, "state": "revoked"}))
-            self._changed()
-            return self.state()
+            store.set_kv(KV_KEY, json.dumps({**d, "state": "revoked", "token_sha256": None, "pending_sha256": None}))
+        self._changed()
+        return self.state()
