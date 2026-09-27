@@ -378,8 +378,12 @@ async def buddy_rung() -> dict:
     if not (st.state in ("active", "acknowledged", "rearmed") and st.trigger_type == "actual_low"):
         _replay().set_paused(True)
         injected = _replay().inject(55, "SingleDown").model_dump(mode="json")
-    return {"status": "staged", "presence_driven": driven, "injected": injected,
-            "feed_paused": injected is not None, "alarm": _runtime.alarm.state.state}
+    out = {"status": "staged", "presence_driven": driven, "injected": injected,
+           "feed_paused": injected is not None, "alarm": _runtime.alarm.state.state}
+    if not driven:  # real hardware: presence is never faked, so the rung waits for the real radar
+        out["note"] = ("the real radar decides: the rung fires at T+10 only if someone is in front of the "
+                       "device (within the radar's range) during the unanswered low")
+    return out
 
 
 @router.post("/basal_time", dependencies=[Depends(require_pin), Depends(require_demo)])

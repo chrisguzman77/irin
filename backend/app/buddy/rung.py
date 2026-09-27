@@ -96,6 +96,15 @@ EMERGENCY_TEXT = "emergency contact alerted (simulated)"
 MIN_COVERAGE_PCT = 85.0  # under this a night is never told as quiet (invariant 9's stale night)
 NO_DATA_LINE = "Irin had no data last night, so it can't say how the night went."
 PARTIAL_LINE = "Irin missed part of last night, so it can't call the night quiet; nothing reached the buddy rung while it could see."
+LOW_LINE = "Irin sounded a low alarm last night; it never reached the buddy rung."  # counted lows, not buddy events
+
+
+def _night_had_low(record: Any) -> bool:
+    """A low alarm or time under 70 in the night's record: such a night is never told as all quiet, even
+    when nothing reached the rung (answered in time, nobody in the room, or a night loaded by a seek)."""
+    ids = getattr(record, "alarm_event_ids", None) or []
+    return any(str(i).endswith(("-actual_low", "-predicted_low")) for i in ids) \
+        or (getattr(record, "minutes_below_70", 0) or 0) > 0
 AUDIO_TIMEOUT_S = 3.0  # the most the clip may hold back the sealed alert (invariant 13)
 NOTIFY_TIMEOUT_S = 10.0  # spawned: nothing waits on it
 
@@ -473,6 +482,8 @@ class BuddyRung:
                     line = await asyncio.to_thread(narrative.generate, "buddy_line", context, metrics)
                 elif record.coverage_pct < MIN_COVERAGE_PCT:
                     line = PARTIAL_LINE
+                elif _night_had_low(record):
+                    line = LOW_LINE
                 else:
                     line = await asyncio.to_thread(narrative.generate, "buddy_line", {
                         "kind": "all_quiet", "name": self.first_name(),
