@@ -122,7 +122,7 @@ async function backfillHistory() {
 function setForecast(p) {
   const ok = p && p.status === "ok" && p.predicted_mgdl != null;
   state.forecast = ok ? p : null;
-  state.forecastNote = ok || !p || !p.status ? "" : `forecast ${p.status}${p.reason ? `: ${p.reason}` : ""}`;
+  state.forecastNote = ok || !p || !p.status ? "" : `Forecast ${p.status}${p.reason ? `: ${p.reason}` : ""}`;
 }
 
 function onMessage(msg) {
@@ -277,7 +277,13 @@ function predictionText() {
   const r = state.latest;
   const fc = state.forecast;
   if (!fc || !r || r.is_stale || isDisconnected() || fc.predicted_mgdl == null) return null;
-  return `could be as low as ${Math.round(fc.predicted_mgdl)} in ${fc.horizon_min ?? 30} min`;
+  const v = Math.round(fc.predicted_mgdl), mins = fc.horizon_min ?? 30;
+  // Above the current reading the same number is a FLOOR (80% chance of at least
+  // this), so it reads "likely X or more", never "as high as"; "Rising" only when
+  // the trend arrow agrees (a forecast rebound under a falling arrow says no more).
+  if (v <= r.glucose_mgdl) return `Could be as low as ${v} in ${mins} min`;
+  const up = ["DoubleUp", "SingleUp", "FortyFiveUp"].includes(r.trend);
+  return `${up ? "Rising: likely" : "Likely"} ${v} or more in ${mins} min`;
 }
 
 function render() {
@@ -298,7 +304,7 @@ function render() {
   $("flag-basal").classList.toggle("hidden", !nudge);
   if (nudge) {
     const usual = state.settings && state.settings.basal_time;
-    $("flag-basal").textContent = usual ? `basal not logged yet · usual ${settingTime12(usual)}` : "basal not logged yet";
+    $("flag-basal").textContent = usual ? `Basal Not Logged Yet · usual ${settingTime12(usual)}` : "Basal Not Logged Yet";
   }
   document.body.classList.toggle("is-stale", stale);
   document.body.classList.toggle("is-disconnected", disconnected);
@@ -338,11 +344,11 @@ function render() {
   if (r) {
     $("glucose").textContent = Math.round(r.glucose_mgdl);
     $("trend").textContent = r.is_stale ? "" : (TREND_ARROWS[r.trend] ?? "?");
-    $("reading-time").textContent = `reading at ${hm12(toMs(r.timestamp))}`;
+    $("reading-time").textContent = `Reading at ${hm12(toMs(r.timestamp))}`;
   } else {
     $("glucose").textContent = "---";
     $("trend").textContent = "";
-    $("reading-time").textContent = state.connected ? "no reading yet" : "connecting to device…";
+    $("reading-time").textContent = state.connected ? "No Reading Yet" : "Connecting to Device…";
   }
   // IOB, last dose, and today's TIR are not in the snapshot yet (contracts
   // request to Chris, see journal); the tiles stay "—" until they are.
@@ -597,7 +603,7 @@ async function startPairing() {
     if (res.status === 401) { pair.msg = "PIN not accepted"; return; }
     if (!res.ok) {
       const b = await res.json().catch(() => null);
-      pair.msg = `could not start: ${(b && typeof b.detail === "string" && b.detail) || `the device refused (${res.status})`}`;
+      pair.msg = `Could not start: ${(b && typeof b.detail === "string" && b.detail) || `the device refused (${res.status})`}`;
       return;
     }
     const b = await res.json();
@@ -608,7 +614,7 @@ async function startPairing() {
     pair.timer = setInterval(pollPair, PAIR_POLL_MS);
     pollPair();
   } catch {
-    pair.msg = "could not reach the device";
+    pair.msg = "Could not reach the device";
   } finally {
     pair.busy = false;
     render();
@@ -720,8 +726,8 @@ function renderMorning() {
   const s = morningReport();
   const pct = (v) => (v == null ? null : `${Number(v.toFixed(1))}%`); // matches the report's narrative
   $("tir-night").textContent = s ? (pct(s.tir_pct) ?? "—") : "—";
-  setStat("night-low", s ? s.low_mgdl : null, s && s.low_at ? `at ${s.low_at}` : "");
-  setStat("night-high", s ? s.high_mgdl : null, s && s.high_at ? `at ${s.high_at}` : "");
+  setStat("night-low", s ? s.low_mgdl : null, s && s.low_at ? `at ${settingTime12(s.low_at)}` : "");
+  setStat("night-high", s ? s.high_mgdl : null, s && s.high_at ? `at ${settingTime12(s.high_at)}` : "");
   setStat("night-below", s ? pct(s.tbr_pct) : null, s && s.minutes_below_70 ? `${s.minutes_below_70} min` : "");
   setStat("night-above", s ? pct(s.tar_pct) : null, "");
   // ring: below (red) from the top, then in range (green), then above (amber)
@@ -734,7 +740,7 @@ function renderMorning() {
   }
   let note = "no report for last night yet";
   if (s) note = s.coverage_pct != null && s.coverage_pct < 85
-    ? `sensor covered ${pct(s.coverage_pct)} of the night; some of it is missing`
+    ? `Sensor covered ${pct(s.coverage_pct)} of the night; some of it is missing`
     : "";
   $("morning-note").textContent = note;
   renderFamily();
@@ -783,8 +789,8 @@ function renderAlarm(num, arrow) {
     $("alarm-glucose").textContent = num;
     $("alarm-trend").textContent = arrow;
     $("alarm-sub").textContent = full
-      ? (a.state === "rearmed" ? "still low — treat now" : "treat now")
-      : "predicted low within 30 minutes";
+      ? (a.state === "rearmed" ? "Still Low — Treat Now" : "Treat Now")
+      : "Predicted Low Within 30 Minutes";
     $("alarm-ack-msg").textContent = state.ackMsg;
   }
   $("flag-acked").classList.toggle("hidden", !(low && a.state === "acknowledged"));
@@ -814,7 +820,7 @@ async function sendAcknowledge(pin) {
     if (!res.ok) return { ok: false, reason: `the device refused (${res.status})` };
     return { ok: true };
   } catch {
-    return { ok: false, reason: "could not reach the device" };
+    return { ok: false, reason: "Could not reach the device" };
   }
 }
 
@@ -822,7 +828,7 @@ async function onAckTap() {
   const pin = cachedPin() ?? await promptPin();
   if (!pin) return;
   storePin(pin);
-  state.ackMsg = "sending…";
+  state.ackMsg = "Sending…";
   render();
   const res = await sendAcknowledge(pin);
   if (res.badPin) storePin(null); // the next tap re-prompts the keypad
@@ -870,7 +876,7 @@ async function postFresh(path, body, title = "Enter PIN to confirm") {
     }
     return { ok: true, value: await res.json().catch(() => null) };
   } catch {
-    return { ok: false, reason: "could not reach the device" };
+    return { ok: false, reason: "Could not reach the device" };
   }
 }
 

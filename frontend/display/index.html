@@ -7,16 +7,17 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <img id="logo" src="brand/irin-logo.svg" alt="Irin">
+  <img id="logo" class="logo" src="brand/irin-logo.svg" alt="Irin">
+  <img id="logo-night" class="logo" src="brand/irin-logo-white.svg" alt="">
   <div id="topclock" aria-label="current time"></div>
   <header id="flags">
     <div id="badge-demo" class="flag flag-demo hidden">DEMO</div>
-    <div id="badge-clock" class="flag flag-clock hidden">clock not set</div>
-    <div id="banner-stale" class="flag flag-stale hidden">STALE — no new reading</div>
-    <div id="banner-disconnected" class="flag flag-disc hidden">DISCONNECTED — number may be old</div>
+    <div id="badge-clock" class="flag flag-clock hidden">Clock Not Set</div>
+    <div id="banner-stale" class="flag flag-stale hidden">STALE — No New Reading</div>
+    <div id="banner-disconnected" class="flag flag-disc hidden">DISCONNECTED — Number May Be Old</div>
     <div id="flag-high" class="flag flag-high hidden">HIGH</div>
-    <div id="flag-acked" class="flag flag-acked hidden">acknowledged — still low</div>
-    <div id="flag-basal" class="flag flag-basal hidden">basal not logged yet</div>
+    <div id="flag-acked" class="flag flag-acked hidden">Acknowledged — Still Low</div>
+    <div id="flag-basal" class="flag flag-basal hidden">Basal Not Logged Yet</div>
   </header>
 
   <!-- Idle screen: falling leaves while presence is Away (nobody in the radar's
@@ -64,7 +65,7 @@
     <div id="pair-text"></div>
     <div id="pair-buttons">
       <button type="button" id="pair-close">Close</button>
-      <button type="button" id="pair-start">Show a pairing code</button>
+      <button type="button" id="pair-start">Show a Pairing Code</button>
       <button type="button" id="pair-confirm" class="hidden">Confirm</button>
     </div>
     <div id="pair-msg"></div>
@@ -84,7 +85,7 @@
       </div>
       <div id="prediction" class="prediction hidden" aria-live="polite"></div>
       <div id="units">mg/dL</div>
-      <div id="reading-time">waiting for device</div>
+      <div id="reading-time">Waiting for Device</div>
       <div id="watch-strip" class="hidden"></div>
       <button type="button" id="share-open">Share with my doctor</button>
     </section>
@@ -97,17 +98,17 @@
       <div class="tile" id="tile-iob">
         <div class="tile-label">IOB</div>
         <div class="tile-value" id="iob">—</div>
-        <div class="tile-note" id="iob-note">not yet sent by device</div>
+        <div class="tile-note" id="iob-note">Not Yet Sent by Device</div>
       </div>
       <div class="tile" id="tile-dose">
         <div class="tile-label">Last dose</div>
         <div class="tile-value" id="dose">—</div>
-        <div class="tile-note" id="dose-note">not yet sent by device</div>
+        <div class="tile-note" id="dose-note">Not Yet Sent by Device</div>
       </div>
       <div class="tile" id="tile-tir">
-        <div class="tile-label">Today in range</div>
+        <div class="tile-label">Today in Range</div>
         <div class="tile-value" id="tir">—</div>
-        <div class="tile-note" id="tir-note">not yet sent by device</div>
+        <div class="tile-note" id="tir-note">Not Yet Sent by Device</div>
       </div>
     </section>
   </main>
@@ -133,18 +134,18 @@
           <circle class="ring-in" id="ring-in" cx="60" cy="60" r="50"></circle>
           <circle class="ring-above" id="ring-above" cx="60" cy="60" r="50"></circle>
         </svg>
-        <div id="morning-tir"><span id="tir-night">—</span><small>in range</small></div>
+        <div id="morning-tir"><span id="tir-night">—</span><small>In Range</small></div>
       </div>
       <dl id="morning-stats">
         <div><dt>Low</dt><dd id="night-low">—</dd></div>
         <div><dt>High</dt><dd id="night-high">—</dd></div>
-        <div><dt>Below range</dt><dd id="night-below">—</dd></div>
-        <div><dt>Above range</dt><dd id="night-above">—</dd></div>
+        <div><dt>Below Range</dt><dd id="night-below">—</dd></div>
+        <div><dt>Above Range</dt><dd id="night-above">—</dd></div>
       </dl>
     </div>
     <div id="morning-family" aria-label="family stories"></div>
-    <div id="morning-note">no report for last night yet</div>
-    <div id="morning-now">now <span id="morning-glucose">---</span> <span id="morning-trend"></span></div>
+    <div id="morning-note">No report for last night yet</div>
+    <div id="morning-now">Now <span id="morning-glucose">---</span> <span id="morning-trend"></span></div>
   </main>
 
   <script src="doctor-echo.js"></script>

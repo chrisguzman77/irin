@@ -7,10 +7,26 @@
   <link rel="stylesheet" href="style.css">
   <link rel="stylesheet" href="card.css">
 </head>
-<body>
-  <header class="top">
-    <h1>Irin Rounds <span class="muted">· inbox</span></h1>
-    <span class="mock">mock Ascend</span>
+<body class="app">
+  <!-- Sidebar (a top bar on phones). Its links only scroll to and open the panels below;
+       they send nothing. -->
+  <aside class="side" aria-label="Irin Rounds">
+    <div class="side-brand"><img src="brand/irin-logo-light.svg" alt="Irin"><span>Rounds</span></div>
+    <nav class="side-nav">
+      <a href="#" class="on">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 13h5l1.5 3h5L16 13h5M5 5h14l2 8v6H3v-6z"/></svg>Inbox</a>
+      <a href="#handoffs" class="nav-handoffs" data-open="handoffs">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h16v12H4zM2 4h20v4H2zM10 12h4"/></svg>Resources handed off</a>
+      <a href="#seen" data-open="seen">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>What Impiricus sees</a>
+    </nav>
+    <div class="side-foot"><span class="mock">mock Ascend</span></div>
+  </aside>
+
+  <div class="shell">
+  <header class="page-head">
+    <h1>Inbox</h1>
+    <p class="muted">Irin Rounds: Clinical Signal Cards from your patient's Irin</p>
   </header>
   <main>
     <!-- paired: the live inbox -->
@@ -23,10 +39,6 @@
       </div>
       <p id="status" class="note" role="status"></p>
       <div id="list"></div>
-      <details id="handoffs" class="panel">
-        <summary>Resources you handed off</summary>
-        <div id="handofflist" class="sent"></div>
-      </details>
       <div id="detail" hidden>
         <button type="button" id="back" class="linkish">← All cards</button>
         <div id="card"></div>
@@ -48,13 +60,20 @@
       <div id="sample"></div>
       <pre id="out" hidden></pre>
     </section>
-    <details id="seen" class="panel seen">
-      <summary>What Impiricus sees</summary>
-      <p class="note">The relay is a blind courier: sealed boxes it cannot open, and this log of what passed through.
-        No glucose value, no name, no card text.</p>
-      <p id="seenstatus" class="note" role="status"></p>
-      <ul id="seenlist"></ul>
-    </details>
+    <!-- the right rail on wide screens, below the list on phones -->
+    <aside class="rail">
+      <details id="handoffs" class="panel">
+        <summary>Resources you handed off</summary>
+        <div id="handofflist" class="sent"></div>
+      </details>
+      <details id="seen" class="panel seen">
+        <summary>What Impiricus sees</summary>
+        <p class="note">The relay is a blind courier: sealed boxes it cannot open, and this log of what passed through.
+          No glucose value, no name, no card text.</p>
+        <p id="seenstatus" class="note" role="status"></p>
+        <ul id="seenlist"></ul>
+      </details>
+    </aside>
   </main>
 
   <dialog id="act">
@@ -123,7 +142,14 @@
     </form>
   </dialog>
 
+  </div>
+
   <footer class="foot">Irin Rounds: a mock clinician inbox for the hackathon demo, not a medical device.</footer>
+  <script>
+    // Sidebar links open the panel they point at (the same as tapping its summary).
+    for (const a of document.querySelectorAll("[data-open]"))
+      a.addEventListener("click", () => { const d = document.getElementById(a.dataset.open); if (d) d.open = true; });
+  </script>
   <!-- tweetnacl 1.0.3 (public domain, Unlicense), vendored: defines window.nacl -->
   <script src="nacl.min.js"></script>
   <script type="module" src="inbox.js"></script>
