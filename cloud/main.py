@@ -9,7 +9,8 @@ dashboard token, sent as "Authorization: Bearer ..."), PIN (the same PIN as the
 Pi's, for creating and revoking family bearers), DEVICE_TZ (the Pi's local time
 zone, for the family page's stale flag; default America/New_York), VOICE_BACKEND,
 ELEVENLABS_API_KEY, ELEVENLABS_VOICE_ALERT (the buddy clip the relay links
-to over WhatsApp), RELAY_KEY (audio/render from the relay), DOMAIN.
+to over WhatsApp), RELAY_KEY, DOMAIN. Audio render
+(B4+) authenticates the device token, like ingest (cloud/audio.py).
 """
 
 from __future__ import annotations
@@ -20,12 +21,15 @@ import logging
 import os
 import secrets
 import uuid
+from typing import Literal
 
 import psycopg
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from fastapi.responses import FileResponse
+from pydantic import BaseModel, ConfigDict, Field
 
+import audio
 import dash as dash_mod
 from ingest import IngestBatch, ingest as ingest_batch
 
@@ -191,5 +195,31 @@ def family_bearer_delete(bearer_id: str, _pin: None = Depends(require_pin)) -> d
     if n == 0:
         raise HTTPException(status_code=404, detail="no active bearer with that id")
     return {"bearer_id": bearer_id, "revoked": True}
+class RenderRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["buddy_alert"]
+    text: str = Field(min_length=1, max_length=400)
+
+
 @app.post("/v1/audio/render")
-async def audio_render(): _stub("B4+ audio render (ElevenLabs, cached by text hash)")
+async def audio_render(req: RenderRequest, _device: str = Depends(require_device_token)) -> dict:
+    """B4+: the buddy clip, rendered once per sha256(kind, voice, text) and
+    cached (cloud/audio.py). {audio_url: null} while VOICE_BACKEND is not
+    elevenlabs; 422 on anything that looks like a glucose value; 502 when
+    ElevenLabs fails (the Pi sends the alert without a clip either way)."""
+    if audio.looks_like_glucose(req.text):
+        raise HTTPException(status_code=422, detail="the text looks like a glucose value (invariant 15)")
+    try:
+        return {"audio_url": await audio.render(req.kind, req.text)}
+    except audio.RenderError:
+        raise HTTPException(status_code=502, detail="render failed")
+
+
+@app.get("/v1/audio/{name}")
+async def audio_clip(name: str) -> FileResponse:
+    """B4+: a rendered clip, public by its unguessable hash (the watcher page
+    and WhatsApp fetch it without a credential)."""
+    h = name.removesuffix(".mp3")
+    if not name.endswith(".mp3") or not audio.HASH_RE.match(h) or not audio.clip_path(h).is_file():
+        raise HTTPException(status_code=404, detail="no such clip")
+    return FileResponse(audio.clip_path(h), media_type="audio/mpeg")

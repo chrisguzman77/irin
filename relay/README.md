@@ -49,7 +49,7 @@ separate Irin Cloud service (`cloud/`). Storage is MongoDB Atlas
 - Timestamps: every timestamp the relay returns is ISO 8601 with an explicit offset (`+00:00`; the Mongo client is tz_aware).
 - Buddy directory (B3+): `POST /v0/users`, `GET /v0/users/search?username=`, `POST /v0/match`, `POST /v0/match/{id}/accept | decline`.
 
-Pairing, cards, inbox, messages, the device poll, resolutions, and the log are live (R6); resources are live (R13); the hub is live (B3); the owner pairing, Spark, and directory routes are 501 stubs naming their step.
+Pairing, cards, inbox, messages, the device poll, resolutions, and the log are live (R6); resources are live (R13); the hub is live (B3); the WhatsApp channel is live (B4+); the owner pairing, Spark, and directory routes are 501 stubs naming their step.
 
 ## Hub (B3)
 
@@ -72,6 +72,14 @@ listings to open at TOP urgency, on the relay clock (`store.now`).
 - `GET /v0/hub/audit` (source key) -> every claim on this device's listings, oldest first: `{claim_id, listing_id, volunteer_id, claimed_at, expires_at, actions: [claim, script, call, ...], outcome}`. Each hub action (hub.listing, hub.claim, hub.script, hub.call, hub.treating, hub.resolve, hub.lease_expired, hub.treating_expired) is also written to the `/v0/log` audit with ids and kinds only, never the first name.
 - The script (demo tier), what the Pi sends: `script: {"steps": [...]}` in the clear over this key-gated HTTPS route (at most 20 steps of 500 characters); the relay seals it at rest with `HUB_SCRIPT_KEY` and opens it only for the live claim-holder. Alternatively the device seals `{"steps": [...]}` with NaCl secretbox under `HUB_SCRIPT_KEY` (32 bytes, base64, shared by the device and the relay) and posts `script_ciphertext` + `script_nonce` (both or neither; a script that does not open or is not `{steps: [str]}` is 422). The relay stores only the sealed form and opens it only for the live claim-holder. **If `HUB_SCRIPT_KEY` is unset the relay generates a random key per process** (and says so at boot): device-sealed scripts then never open, and a restart orphans stored scripts, so set it in production. The production answer (the device seals the script to the claim-holder's public key on demand at claim time) is in docs/plans/chris.md B3.
 - Env: `HUB_LEASE_S` (180), `HUB_TREATING_S` (1200), `HUB_SCRIPT_KEY`. Earlier deployments' TTL indexes on the hub's expiry fields are dropped at boot (a janitor deleting the listing would lose the TOP-urgency return).
+
+## WhatsApp channel (B4+, relay/notify.py)
+
+The second channel beside the watcher page's voice loop. The buddy's number is a contact detail: stored on the pairing document only, never returned by any GET, never written to `/v0/log`, and deleted with the pairing's keys on revoke.
+
+- `POST /v0/buddy/whatsapp` `{phone}` (bearer of a confirmed pairing with `peer_kind: buddy`; a doctor bearer is 403) -> `{registered: true}`. `phone` is E.164 (`^\+[1-9]\d{7,14}$`, e.g. `+14045550123`, no spaces), else 422. Posting again replaces the number. The watcher page adds the number field; the buddy must also send "hi" to the Irin WhatsApp number (free-form messages only reach them inside WhatsApp's 24-hour window).
+- `POST /v0/buddy/notify` `{peer_id, first_name, minutes, audio_url, is_demo}` (source key; the Pi calls it best effort after sealing a buddy_alert to that buddy) -> `{sent: bool, reason: ok | audio_failed | no_number | not_configured | graph_error}`. `peer_id` = the buddy pairing's doctor_id: 404 unknown, 403 registered by another source key, 409 not `peer_kind: buddy` or `is_demo` not the pairing's. `first_name` 1-40 characters, no digit and no `@`; `minutes` 0-1440; `audio_url` null or an Irin Cloud clip URL (`.../v1/audio/<64 hex>.mp3`). Any other field is 422, and so is any field whose name contains glucose, mgdl, mg_dl, location, or phone. When a number is registered and `WHATSAPP_TOKEN` + `WHATSAPP_PHONE_NUMBER_ID` are set, two Graph calls go to `POST https://graph.facebook.com/v21.0/{WHATSAPP_PHONE_NUMBER_ID}/messages` (Bearer WHATSAPP_TOKEN): a text "Irin: your buddy <first_name> is in trouble. The alarm has been unacknowledged for <minutes> minutes. Open https://watch.<DOMAIN>" (prefixed `[DEMO] ` for a demo pairing), then, with an audio_url, `{type: audio, audio: {link: audio_url}}`. `sent` is true once the text went out (`audio_failed` = the clip did not). `/v0/log` gets `buddy.whatsapp` and `buddy.notify` rows with ids and outcomes only.
+- Env: `WHATSAPP_TOKEN`, `WHATSAPP_PHONE_NUMBER_ID` (server only), `DOMAIN` (the watch link).
 
 ## Clinical Signal Card v0 (the sealed plaintext)
 

@@ -190,7 +190,8 @@ async def pair_revoke(pairing_id: str, x_source_key: str | None = Header(default
     if doc is None:
         raise HTTPException(status_code=404, detail="no such pairing")
     coll.update_one({"_id": doc["_id"]}, {"$set": {"status": "revoked", "revoked_at": store.now()},
-                                          "$unset": {"doctor_pk": "", "bearer_hash": "", "bearer_pending": ""}})
+                                          "$unset": {"doctor_pk": "", "bearer_hash": "", "bearer_pending": "",
+                                                     "whatsapp_phone": ""}})
     store.audit("pair.revoke", doctor_id=doc.get("doctor_id"), by="device" if x_source_key else "inbox")
     return {"status": "revoked"}
 
