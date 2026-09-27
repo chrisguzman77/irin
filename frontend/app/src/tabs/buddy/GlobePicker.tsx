@@ -17,8 +17,9 @@ const THROW_MS = 250; // inertia: how far a release carries, in ms of release ve
 const tilt = (lat: number) => -Math.max(-25, Math.min(30, lat * 0.6)); // projection phi for a city
 const reducedMotion = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-// Drag horizontally to spin; on release the city nearest the centre snaps into
-// the middle and becomes the pick. Left/right arrows step one zone.
+// Drag horizontally to spin; a throw glides to a stop where it lands (no pull
+// toward a city), and the city nearest the centre is the pick, highlighted live
+// while spinning. Left/right arrows step one zone.
 export default function GlobePicker({ initialZone, value, onChange }: GlobePickerProps) {
   const [selected, setSelected] = useState(() => startIndex(value ?? initialZone, new Date()));
   const [now, setNow] = useState(() => new Date());
@@ -90,6 +91,39 @@ export default function GlobePicker({ initialZone, value, onChange }: GlobePicke
     anim.current = requestAnimationFrame(step);
   }, [paint]);
 
+  // Highlight whichever city is nearest the centre right now (live, while spinning).
+  const pickNearest = useCallback((commit: boolean) => {
+    const i = nearestIndex(-view.current.lambda);
+    if (i !== latest.current.selected) {
+      latest.current.selected = i;
+      setSelected(i);
+    }
+    if (commit) latest.current.onChange(ZONES[i].zone);
+  }, []);
+
+  // A throw's glide: ease out from here to `rest`, no snapping; the pick is where it stops.
+  const glideTo = useCallback((rest: number) => {
+    cancelAnimationFrame(anim.current);
+    const start = view.current.lambda;
+    if (reducedMotion() || Math.abs(rest - start) < 0.5) {
+      view.current = { ...view.current, lambda: rest };
+      paint();
+      pickNearest(true);
+      return;
+    }
+    const ms = Math.min(900, 250 + Math.abs(rest - start) * 5);
+    const t0 = performance.now();
+    const step = (t: number) => {
+      const k = Math.min(1, (t - t0) / ms);
+      const e = 1 - (1 - k) ** 3;
+      view.current = { ...view.current, lambda: start + (rest - start) * e };
+      paint();
+      pickNearest(k >= 1);
+      if (k < 1) anim.current = requestAnimationFrame(step);
+    };
+    anim.current = requestAnimationFrame(step);
+  }, [paint, pickNearest]);
+
   const onPointerDown = (e: PointerEvent<HTMLCanvasElement>) => {
     cancelAnimationFrame(anim.current);
     e.currentTarget.setPointerCapture(e.pointerId);
@@ -102,6 +136,7 @@ export default function GlobePicker({ initialZone, value, onChange }: GlobePicke
     view.current = { ...view.current, lambda: d.lambda0 + ((e.clientX - d.x0) / r) * (180 / Math.PI) };
     d.samples.push({ x: e.clientX, t: e.timeStamp });
     while (d.samples.length > 2 && e.timeStamp - d.samples[0].t > 100) d.samples.shift();
+    pickNearest(false);
     paintSoon();
   };
   const onPointerUp = (e: PointerEvent<HTMLCanvasElement>) => {
@@ -115,7 +150,7 @@ export default function GlobePicker({ initialZone, value, onChange }: GlobePicke
       const degPerMs = ((e.clientX - first.x) / dt / (size / 2 - 4)) * (180 / Math.PI);
       rest += Math.max(-120, Math.min(120, degPerMs * THROW_MS));
     }
-    snapTo(nearestIndex(-rest), rest);
+    glideTo(rest);
   };
   const onKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     const dir = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
