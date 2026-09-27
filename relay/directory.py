@@ -8,7 +8,11 @@ availability, averaged per night), mirror (UTC offset difference 10-14 h),
 shared_languages (casefold compare, stored as sent); score = hours_covered +
 2 * mirror + len(shared_languages) + 3 when the candidate's home offset is
 within 60 minutes of the requester's preferred buddy zone (timezones[1], v2);
-sort, limit 3; declined candidates never return. Seeded sample profiles
+sort, limit 3; declined candidates never return. Matching is mutual (v3): a
+candidate is offered only when their preferred buddy zone (timezones[1]) is
+within 60 minutes of the requester's home, and a seed selects everyone.
+GET /v0/users/hub and its claim (v3) are the app's door into relay/hub.py's
+listing store, lease, audit and sealed scripts. Seeded sample profiles
 (seed: true, relay/seed_buddies.py) accept at once when a real user accepts,
 never post a pair link, and every row naming one carries sample: true.
 The introduction and why-this-match lines are narrative text (Muse) beside
@@ -34,10 +38,12 @@ from typing import Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
+import hub
 import store
 from relay_api import _rate_limit, require_source_key
 
@@ -145,6 +151,14 @@ def _verified(user: dict) -> dict:
     return user
 
 
+def _may_match(user: dict) -> dict:
+    """The 403 rules of POST /v0/match (and the app hub's, v3)."""
+    _verified(user)
+    if not user["optins"].get("have_buddy"):
+        raise HTTPException(status_code=403, detail="the have_buddy opt-in is off")
+    return user
+
+
 # ---------------------------------------------------------------- the scorer (deterministic)
 
 
@@ -192,6 +206,11 @@ def _availability(user: dict) -> list[tuple[int, int]]:
     return rows
 
 
+def _selects(user: dict, other: dict, at: datetime) -> bool:
+    """`user` picked `other`: user's preferred buddy zone (timezones[1]) is within 60 minutes of other's home."""
+    return len(user["timezones"]) > 1 and _wrap_diff(_offset_min(user, at, 1), _offset_min(other, at)) <= 60
+
+
 def score(req: dict, cand: dict, at: datetime) -> dict:
     """The score parts from the requester's side: hours of the requester's
     nights the candidate is awake for (average per night), mirror, shared languages."""
@@ -201,7 +220,7 @@ def score(req: dict, cand: dict, at: datetime) -> dict:
     covered = sum(max(0, min(e1, e2) - max(s1, s2)) for s1, e1 in nights for s2, e2 in awake)
     hours = round(covered / 60 / 7, 1)
     mirror = 600 <= _wrap_diff(req_off, cand_off) <= 840
-    prefers = len(req["timezones"]) > 1 and _wrap_diff(_offset_min(req, at, 1), cand_off) <= 60
+    prefers = _selects(req, cand, at)
     theirs = {x.casefold() for x in cand.get("languages", [])}
     shared = {}  # casefold -> the requester's first spelling, so "English" and "english" count once
     for x in req.get("languages", []):
@@ -264,17 +283,16 @@ async def users_search(username: str = Query(min_length=1, max_length=30), user:
 
 @router.post("/match")
 async def match(body: MatchIn | None = None, user: dict = Depends(require_user)) -> list[dict]:
-    """Up to 3 offers, best first. Declined pairs never return; accepted pairs are already buddies."""
-    _verified(user)
-    if not user["optins"].get("have_buddy"):
-        raise HTTPException(status_code=403, detail="the have_buddy opt-in is off")
+    """Up to 3 offers, best first, among candidates who selected the requester
+    (a seed selects everyone). Declined pairs never return; accepted pairs are already buddies."""
+    _may_match(user)
     matches = store.db()["matches"]
     closed = {_other(m, user["user_id"]) for m in matches.find({"users": user["user_id"],
                                                                  "status": {"$in": ["declined", "accepted"]}})}
     now = store.now()
     cands = [c for c in store.db()["users"].find({"cgm_verified": True, "optins.be_watcher": True,
                                                    "is_demo": user["is_demo"], "user_id": {"$ne": user["user_id"]}})
-             if c["user_id"] not in closed]
+             if c["user_id"] not in closed and (c.get("seed") or _selects(c, user, now))]
     ranked = sorted(((score(user, c, now), c) for c in cands), key=lambda p: (-p[0]["score"], p[1]["user_id"]))[:TOP_N]
     out = []
     for parts, c in ranked:
@@ -348,6 +366,63 @@ async def pair_link(match_id: str, req: PairLinkIn, source_key: str = Depends(re
     store.db()["matches"].update_one({"_id": m["_id"]}, {"$set": {f"pair_urls.{user['user_id']}": req.pair_url}})
     store.audit("directory.pair_link", match_id=match_id, user_id=user["user_id"])
     return {"stored": True}
+
+
+# ---------------------------------------------------------------- the app's hub (v3; relay/hub.py's store)
+
+
+def _hub_user(user: dict) -> dict:
+    """Match's 403 rules, plus the hub_volunteer opt-in (invariant 16: volunteering is its own opt-in)."""
+    _may_match(user)
+    if not user["optins"].get("hub_volunteer"):
+        raise HTTPException(status_code=403, detail="the hub_volunteer opt-in is off")
+    hub._sweep()
+    return user
+
+
+def _visible_listings(user: dict, listing_id: str | None = None) -> list[tuple[dict, list[str]]]:
+    """Unresolved listings in the user's pool plus the sample listings, never the user's own,
+    whose person shares a language with the user (casefold) -> (listing, that person's languages)."""
+    q = {"status": {"$ne": "resolved"}, "source_key_hash": {"$ne": user["source_key_hash"]},
+         "$or": [{"is_demo": user["is_demo"], "sample": {"$ne": True}}, {"sample": True}]}
+    if listing_id is not None:
+        q["listing_id"] = listing_id
+    rows = list(store.db()["hub_listings"].find(q))
+    people = {u["source_key_hash"]: u.get("languages", []) for u in
+              store.db()["users"].find({"source_key_hash": {"$in": [d["source_key_hash"] for d in rows]}})}
+    mine = {x.casefold() for x in user.get("languages", [])}
+    out = [(d, people[d["source_key_hash"]]) for d in rows
+           if d["source_key_hash"] in people and mine & {x.casefold() for x in people[d["source_key_hash"]]}]
+    return sorted(out, key=lambda p: (-p[0]["urgency"], p[0]["confidence"] != "device_confirmed", p[0]["created_at"]))
+
+
+@router.get("/users/hub")
+async def users_hub(user: dict = Depends(require_user)) -> list[dict]:
+    """The app's hub list: never a glucose value, location, contact, or script (invariants 14, 15)."""
+    rows = _visible_listings(_hub_user(user))
+    store.audit("directory.hub", user_id=user["user_id"], results=len(rows))
+    return [{"listing_id": d["listing_id"], "first_name": d["first_name"], "languages": langs,
+             "elapsed_min": d["elapsed_min"], "urgency": d["urgency"], "confidence": d["confidence"],
+             "sample": bool(d.get("sample"))} for d, langs in rows]
+
+
+@router.post("/users/hub/{listing_id}/claim")
+async def users_hub_claim(listing_id: str, user: dict = Depends(require_user)):
+    """The watcher's exclusive lease, for an app user; the script travels ONLY in this response,
+    while the claim is live (invariant 14). The live holder claiming again gets its own claim back."""
+    rows = _visible_listings(_hub_user(user), listing_id)
+    if not rows:
+        raise HTTPException(status_code=404, detail="no such listing")
+    d = rows[0][0]
+    held = d.get("claim_id") and store.db()["hub_claims"].find_one(
+        {"claim_id": d["claim_id"], "volunteer_id": user["user_id"], "closed": False, "expires_at": {"$gt": store.now()}})
+    cl = held or hub.lease(d, user["user_id"])
+    if isinstance(cl, JSONResponse):
+        return cl
+    store.db()["hub_claims"].update_one({"claim_id": cl["claim_id"]}, {"$push": {"actions": "script"}})
+    store.audit("hub.script", listing_id=d["listing_id"], claim_id=cl["claim_id"], volunteer_id=user["user_id"])
+    return {"claim_id": cl["claim_id"], "expires_at": hub._iso(cl["expires_at"]),
+            "script": {"steps": hub.open_script(d) or []}}
 
 
 def poll_matches(key_hash: str) -> list[dict]:

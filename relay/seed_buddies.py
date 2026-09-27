@@ -1,7 +1,7 @@
 """Buddy onboarding v2: 150 seeded sample profiles for the buddy directory.
 
-    python seed_buddies.py          # insert or replace the 150 seeds
-    python seed_buddies.py --wipe   # delete every seed (and the matches that name one)
+    python seed_buddies.py          # insert or replace the 150 seeds and the 8 sample hub listings
+    python seed_buddies.py --wipe   # delete every seed (and the matches, listings and claims that name one)
 
 Runs inside the relay container against ATLAS_URI through store.py, like the
 app. Every seed is flagged `seed: true`, never a real person: usernames end in
@@ -11,7 +11,12 @@ no device's key ever resolves to one. The profiles come from a fixed random
 seed, so a re-run rewrites the same 150 in place (user_ids stay stable).
 Every seed but Sam gets a single slot of 2-5 hours a day, so sam_sample
 (Tokyo, English + Japanese, 08:00-18:00 every day) is always the top match
-for a New York night that prefers Tokyo."""
+for a New York night that prefers Tokyo.
+
+Buddy v3: 8 sample hub listings from seed users (never Sam), `sample: true`,
+is_demo false, ids sample-01..08, each with a short plain emergency script
+sealed under HUB_SCRIPT_KEY exactly like a device's script (so run this with
+the relay's HUB_SCRIPT_KEY set, or the scripts will not open)."""
 
 from __future__ import annotations
 
@@ -19,6 +24,12 @@ import random
 import secrets
 import sys
 
+import base64
+import json
+
+from nacl.secret import SecretBox
+
+import hub
 import store
 from directory import UserIn
 
@@ -70,6 +81,24 @@ REGIONS = [
 ]
 
 
+SCRIPT = ["Stay on the call with {name} and ask them to check their glucose now.",
+          "If they can swallow, have them take 15 g of fast sugar: juice, regular soda, or glucose tabs.",
+          "Wait 15 minutes, then ask them to check again.",
+          "Still low or not making sense: call their local emergency number for them.",
+          "Stay on the line until they say they feel better or help arrives."]
+# (listing, the seed's home zone, speaks English?, confidence, urgency, elapsed_min, script steps)
+LISTINGS = [
+    ("sample-01", "Europe/London", True, "device_confirmed", 2, 7, 5),
+    ("sample-02", "America/Los_Angeles", True, "unconfirmed", 1, 18, 4),
+    ("sample-03", "Asia/Tokyo", False, "device_confirmed", 2, 4, 3),
+    ("sample-04", "Australia/Sydney", True, "device_confirmed", 1, 12, 5),
+    ("sample-05", "Europe/Berlin", True, "unconfirmed", 2, 25, 3),
+    ("sample-06", "America/Mexico_City", False, "unconfirmed", 1, 9, 4),
+    ("sample-07", "Africa/Lagos", True, "device_confirmed", 1, 21, 5),
+    ("sample-08", "America/Sao_Paulo", False, "device_confirmed", 2, 3, 4),
+]
+
+
 def _slots(rng: random.Random) -> list[dict]:
     """One daily slot of 2-5 hours on 3-7 weekdays; late slots run past midnight."""
     start, length = rng.choice([6, 7, 8, 9, 12, 13, 17, 18, 19, 20, 21, 22, 23]), rng.randint(2, 5)
@@ -115,10 +144,35 @@ def seed() -> int:
     return len(rows)
 
 
+def seed_listings() -> int:
+    """Insert or replace the 8 sample hub listings (open again, fresh script seal); needs the seeds."""
+    seeds, now = list(store.db()["users"].find({"seed": True, "username": {"$ne": "sam_sample"}}).sort("username", 1)), store.now()
+    coll, used = store.db()["hub_listings"], set()
+    for listing_id, zone, english, confidence, urgency, elapsed, steps in LISTINGS:
+        u = next(u for u in seeds if u["timezones"][0] == zone and u["user_id"] not in used
+                 and ("English" in u["languages"]) == english)
+        used.add(u["user_id"])
+        sealed = SecretBox(hub.SCRIPT_KEY).encrypt(json.dumps({"steps": [
+            x.format(name=u["first_name"]) for x in SCRIPT[:steps - 1] + SCRIPT[-1:]]}).encode())
+        coll.update_one({"listing_id": listing_id}, {"$set": {
+            "source_key_hash": u["source_key_hash"], "first_name": u["first_name"], "confidence": confidence,
+            "elapsed_min": elapsed, "urgency": urgency, "event_id": listing_id, "is_demo": False, "sample": True,
+            "status": "open", "claim_id": None, "claim_expires_at": None, "treating_expires_at": None,
+            "script_ciphertext": base64.b64encode(sealed.ciphertext).decode(),
+            "script_nonce": base64.b64encode(sealed.nonce).decode(), "updated_at": now},
+            "$setOnInsert": {"created_at": now}}, upsert=True)
+    coll.delete_many({"sample": True, "listing_id": {"$nin": [x[0] for x in LISTINGS]}})
+    store.audit("hub.seed", count=len(LISTINGS))
+    return len(LISTINGS)
+
+
 def wipe() -> int:
-    """Delete every seed and every match that names one."""
+    """Delete every seed and every match, sample listing and sample claim that names one."""
     ids = [u["user_id"] for u in store.db()["users"].find({"seed": True}, {"user_id": 1})]
     store.db()["matches"].delete_many({"users": {"$in": ids}})
+    samples = [d["listing_id"] for d in store.db()["hub_listings"].find({"sample": True}, {"listing_id": 1})]
+    store.db()["hub_claims"].delete_many({"listing_id": {"$in": samples}})
+    store.db()["hub_listings"].delete_many({"sample": True})
     n = store.db()["users"].delete_many({"seed": True}).deleted_count
     store.audit("directory.seed_wipe", count=n)
     return n
@@ -129,4 +183,4 @@ if __name__ == "__main__":
     if "--wipe" in sys.argv[1:]:
         print(f"wiped {wipe()} sample profiles")
     else:
-        print(f"seeded {seed()} sample profiles")
+        print(f"seeded {seed()} sample profiles and {seed_listings()} sample hub listings")

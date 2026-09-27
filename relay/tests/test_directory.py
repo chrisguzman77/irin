@@ -27,6 +27,7 @@ KEYS = [f"dir-{i}" for i in range(8)]
 NIGHT_WATCH = [{"weekday": d, "start": "22:00", "end": "08:00"} for d in range(7)]  # awake through a Bogota night
 TOKYO_DAY = [{"weekday": d, "start": "12:00", "end": "22:00"} for d in range(7)]  # the same UTC hours, from Tokyo
 OFFICE = [{"weekday": d, "start": "09:00", "end": "17:00"} for d in range(7)]
+ME = "America/Bogota"
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -47,9 +48,11 @@ def c(monkeypatch):
 
 
 def user(c, i, first_name, tz="America/Bogota", availability=(), languages=("en",), watcher=True, have_buddy=True,
-         verified=True, is_demo=True, username=None, **extra):
+         verified=True, is_demo=True, username=None, prefer=ME, **extra):
+    """prefer = timezones[1]: by default every user selects a Bogota buddy, so every candidate selects the
+    Bogota requesters (v3 mutual matching); requesters pass prefer=None so the +3 bonus stays out of the scores."""
     body = {"username": username or f"{first_name.lower()}{i}", "first_name": first_name, "languages": list(languages),
-            "timezones": [tz], "availability": list(availability),
+            "timezones": [tz, prefer] if prefer else [tz], "availability": list(availability),
             "optins": {"have_buddy": have_buddy, "be_watcher": watcher, "hub_watchable": False, "hub_volunteer": False},
             "cgm_verified": verified, "is_demo": is_demo, **extra}
     r = c.post("/v0/users", json=body, headers={"X-Source-Key": KEYS[i]})
@@ -87,7 +90,7 @@ def test_forbidden_fields_422(c, extra):
 
 
 def test_asleep_scores_zero_and_a_mirror_beats_a_twin(c):
-    _, me = user(c, 0, "Chris", languages=("en",))
+    _, me = user(c, 0, "Chris", languages=("en",), prefer=None)
     asleep, _ = user(c, 1, "Dana", availability=OFFICE, languages=("fr",))
     twin, _ = user(c, 2, "Eli", availability=NIGHT_WATCH, languages=("fr",))
     mirror, _ = user(c, 3, "Mika", tz="Asia/Tokyo", availability=TOKYO_DAY, languages=("fr",))
@@ -102,7 +105,7 @@ def test_asleep_scores_zero_and_a_mirror_beats_a_twin(c):
 
 
 def test_top_three_languages_count_and_reoffer_keeps_the_match_id(c):
-    _, me = user(c, 0, "Chris", languages=("en", "es"))
+    _, me = user(c, 0, "Chris", languages=("en", "es"), prefer=None)
     ids = [user(c, i, "Pat", availability=NIGHT_WATCH, languages=("fr",))[0] for i in (1, 2, 3)]
     both, _ = user(c, 4, "Ana", availability=NIGHT_WATCH, languages=("EN", "es"))
     first = offers(c, me)
@@ -113,7 +116,7 @@ def test_top_three_languages_count_and_reoffer_keeps_the_match_id(c):
 
 
 def test_declined_never_return(c):
-    me_id, me = user(c, 0, "Chris")
+    me_id, me = user(c, 0, "Chris", prefer="Asia/Tokyo")  # selects Mika, so the last line is a real check
     best, best_bearer = user(c, 1, "Mika", tz="Asia/Tokyo", availability=TOKYO_DAY)
     other, _ = user(c, 2, "Eli", availability=NIGHT_WATCH)
     m = offers(c, me)[0]
@@ -126,7 +129,7 @@ def test_declined_never_return(c):
 
 
 def test_both_accept_then_pair_link_reaches_the_other_poll(c):
-    me_id, me = user(c, 0, "Chris")
+    me_id, me = user(c, 0, "Chris", prefer=None)
     them_id, them = user(c, 1, "Mika", tz="Asia/Tokyo", availability=TOKYO_DAY)
     mid = offers(c, me)[0]["match_id"]
     assert c.post(f"/v0/match/{mid}/pair_link", json={"pair_url": "https://watch.x/pair#token=1"},
@@ -152,7 +155,7 @@ def test_both_accept_then_pair_link_reaches_the_other_poll(c):
 
 
 def test_demo_and_real_never_meet_and_unverified_or_opted_out_never_listed(c):
-    _, demo = user(c, 0, "Chris", is_demo=True, username="chrisd")
+    _, demo = user(c, 0, "Chris", is_demo=True, username="chrisd", prefer=None)
     _, real = user(c, 1, "Chris", is_demo=False, username="chrisr", availability=NIGHT_WATCH)
     demo_w, _ = user(c, 2, "Mika", is_demo=True, availability=NIGHT_WATCH, username="mika")
     user(c, 3, "Mila", is_demo=False, verified=False, availability=NIGHT_WATCH, username="mila")
@@ -173,7 +176,7 @@ def test_demo_and_real_never_meet_and_unverified_or_opted_out_never_listed(c):
 
 
 def test_log_holds_ids_and_kinds_only(c):
-    _, me = user(c, 0, "Chris")
+    _, me = user(c, 0, "Chris", prefer=None)
     _, them = user(c, 1, "Mika", tz="Asia/Tokyo", availability=TOKYO_DAY)
     mid = offers(c, me)[0]["match_id"]
     c.post(f"/v0/match/{mid}/accept", headers=me)
