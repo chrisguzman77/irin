@@ -63,6 +63,11 @@ def ensure_indexes() -> None:
     db()["cards"].create_index([("recipient_id", ASCENDING), ("created_at", ASCENDING)], name="inbox")
     db()["cards"].create_index([("card_id", ASCENDING)], name="card_id")
     db()["messages"].create_index([("device_id", ASCENDING), ("status", ASCENDING)], name="device_poll")
+    db()["users"].create_index([("source_key_hash", ASCENDING)], unique=True, name="source_key")
+    db()["users"].create_index([("user_id", ASCENDING)], unique=True, name="user_id")
+    db()["users"].create_index([("bearer_hash", ASCENDING)], name="bearer")
+    db()["matches"].create_index([("pair_key", ASCENDING)], unique=True, name="pair_key")
+    db()["matches"].create_index([("match_id", ASCENDING)], unique=True, name="match_id")
     db()["audit"].create_index([("at", ASCENDING)], expireAfterSeconds=30 * 24 * 3600, name="ttl_audit")
 
 
