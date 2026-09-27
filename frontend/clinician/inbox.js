@@ -1,4 +1,5 @@
 import { renderCard } from "./card.js";
+import { openPlanForm } from "./plan-form.js";
 import { clear, load, openFromDevice, relay, saveSent, sealToDevice, sentMessages } from "./session.js";
 
 // justin.md R5: the clinician inbox ("mock Ascend"). Paired (see pair.js): polls
@@ -169,6 +170,19 @@ function render() {
   const loud = all.filter((c) => c.status !== "green");
   const greens = all.filter((c) => c.status === "green");
   const out = [];
+  const loose = sent.filter((m) => !m.card_id); // plans: sent from the bar, not from a card
+  if (loose.length) {
+    const box = el("section", "sent");
+    box.append(el("h4", "", "Plans you sent"));
+    const ul = el("ul");
+    for (const m of loose) {
+      const li = el("li");
+      li.append(el("span", "", m.summary), el("span", `reply r-${m.status}`, resolutionText(m)));
+      ul.append(li);
+    }
+    box.append(ul);
+    out.push(box);
+  }
   if (!all.length) out.push(el("p", "note", "No cards yet. Irin sends a card only when there is something to decide, and a green digest weekly."));
   out.push(...loud.map(row));
   if (greens.length) {
@@ -280,6 +294,18 @@ async function sendAction(ev) {
   }
   $("actsend").disabled = true;
   $("actmsg").textContent = "Sending…";
+  const refused = await postMessage(msg, summary, card.card_id);
+  if (refused) {
+    $("actsend").disabled = false;
+    return ($("actmsg").textContent = refused);
+  }
+  $("act").close();
+  acting = null;
+}
+
+/** Seal a DoctorMessage to the device and POST it; remembers it for "Patient confirmed".
+ * Returns null once the relay stored it, or the sentence to show (nothing was sent). */
+async function postMessage(msg, summary, cardId = null) {
   try {
     const sealed = sealToDevice(s, msg);
     const res = await relay(s, "/v0/messages", {
@@ -288,20 +314,17 @@ async function sendAction(ev) {
         kind: msg.kind, is_demo: !!s.is_demo }),
     });
     if (!res.ok) {
-      $("actsend").disabled = false;
       const b = await res.json().catch(() => null);
-      return ($("actmsg").textContent = `The relay refused it: ${(b && b.detail) || res.status}. Nothing was sent.`);
+      return `The relay refused it: ${(b && b.detail) || res.status}. Nothing was sent.`;
     }
   } catch {
-    $("actsend").disabled = false;
-    return ($("actmsg").textContent = "Cannot reach the relay. Nothing was sent.");
+    return "Cannot reach the relay. Nothing was sent.";
   }
-  sent.push({ message_id: msg.message_id, card_id: card.card_id, kind: msg.kind, summary, sent_at: new Date().toISOString(),
+  sent.push({ message_id: msg.message_id, card_id: cardId, kind: msg.kind, summary, sent_at: new Date().toISOString(),
     status: "pending", resolved_at: null });
   saveSent(sent);
-  $("act").close();
-  acting = null;
   render();
+  return null;
 }
 
 async function unpair() {
@@ -326,6 +349,7 @@ if (!s || s.state !== "paired" || !s.bearer || !s.doctor_id) {
   $("pairwho").textContent = `Paired as ${s.name}${s.device_id ? ` with ${s.device_id}` : ""}`;
   $("pairdemo").hidden = !s.is_demo;
   $("unpair").addEventListener("click", unpair);
+  $("newplan").addEventListener("click", () => openPlanForm({ isDemo: !!s.is_demo, send: (msg, summary) => postMessage(msg, summary) }));
   $("back").addEventListener("click", () => { openId = null; render(); });
   $("actform").addEventListener("submit", sendAction);
   $("actcancel").addEventListener("click", () => { $("act").close(); acting = null; });

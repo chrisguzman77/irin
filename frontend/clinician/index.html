@@ -18,6 +18,7 @@
       <div class="pairbar">
         <span id="pairwho"></span>
         <span id="pairdemo" class="badge-demo" hidden>DEMO</span>
+        <button type="button" id="newplan" class="linkish">Start a Step Watch</button>
         <button type="button" id="unpair" class="linkish">Stop receiving</button>
       </div>
       <p id="status" class="note" role="status"></p>
@@ -53,6 +54,35 @@
       <div class="actbuttons">
         <button type="button" id="actcancel">Cancel</button>
         <button type="submit" id="actsend">Send to the patient</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="plan" class="wide">
+    <form id="planform" method="dialog">
+      <h3>Start a Step Watch</h3>
+      <p class="note">Pre-filled from the product label; change anything. The patient confirms the plan on their Irin
+        with their PIN before it starts.</p>
+      <label class="field"><span>Label schedule</span><select id="planschedule"></select></label>
+      <div class="planrow">
+        <label class="field"><span>Drug class</span><select id="planclass" required></select></label>
+        <label class="field"><span>Drug</span><input id="planlabel" maxlength="60" required></label>
+      </div>
+      <label class="field"><span>Start date (moves every step with it)</span><input id="planstart" type="date" required></label>
+      <table class="plansteps">
+        <thead><tr><th>Step</th><th>Dose</th><th>Starts</th><th></th></tr></thead>
+        <tbody id="plansteps"></tbody>
+      </table>
+      <button type="button" id="planadd" class="linkish">Add a step</button>
+      <p id="planstartsat" class="note"></p>
+      <label class="check"><input type="checkbox" id="planinsulin"> On insulin</label>
+      <label class="check"><input type="checkbox" id="planketone"> Ketone prompts</label>
+      <label class="check"><input type="checkbox" id="planvigil"> Step-week vigilance: raise the predicted-low alarm for 7 days after each step</label>
+      <label class="field indent"><span>by (mg/dL)</span><input id="planoffset" type="number" min="0" max="30" step="1"></label>
+      <p id="planmsg" class="msg" role="status"></p>
+      <div class="actbuttons">
+        <button type="button" id="plancancel">Cancel</button>
+        <button type="submit" id="plansend">Send the plan to the patient</button>
       </div>
     </form>
   </dialog>
