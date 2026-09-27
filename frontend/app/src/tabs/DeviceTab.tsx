@@ -167,8 +167,9 @@ export default function DeviceTab() {
       )}
       {view === "Log" && <LogView baseUrl={target.url} settings={snap?.settings} />}
       {view === "Reports" && <ReportsView baseUrl={target.url} mode={snap?.mode} />}
-      {view === "Settings" && <SettingsForm current={snap?.settings} baseUrl={target.url} />}
+      {/* Disconnect sits above the form: at the bottom the fixed Undo/Save bar covered it */}
       {view === "Settings" && !target.dev && <DisconnectDevice />}
+      {view === "Settings" && <SettingsForm current={snap?.settings} baseUrl={target.url} />}
       {view === "Demo" && <DemoPanel snap={snap} baseUrl={target.url} onClose={closeDemo} />}
     </>
   );
