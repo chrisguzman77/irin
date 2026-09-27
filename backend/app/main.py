@@ -54,6 +54,7 @@ from .rounds.relay_client import RelayClient
 from .rounds.catchup import CatchUp
 from .rounds.recall import ANSWER_UNTIL_HHMM, MorningRecall, RecallError
 from .rounds.step_watch import StepWatch
+from .rounds.vigilance import install as install_vigilance
 from .rounds.nights_adapter import NightsAdapter
 from .scheduler import Scheduler, basal_logged_on, timedatectl_synced
 from . import voice_out
@@ -496,6 +497,9 @@ async def lifespan(app: FastAPI):
         on_plan_state=lambda st: _schedule(hub.broadcast(WSMessage(type="plan_state", payload=st))))
     runtime.messages.on_plan_message = runtime.step_watch.on_plan_message
     runtime.standing.active_watch = lambda: runtime.step_watch.active_plan() is not None
+    # R14(a): step-week vigilance raises ONLY the predicted-low threshold, for 7 days after a step-up,
+    # from the active plan of the current world; the actual-low alarm is untouched
+    install_vigilance(runtime.alarm, runtime.settings, runtime.step_watch.active_plan)
     # R12: the replay seek's catch-up replays every missing morning through the same ledger, questions and budget
     runtime.catchup = CatchUp(ledger=runtime.ledger, low_events=runtime.low_events, recall=runtime.recall,
                               evaluate_night=_evaluate_night, is_demo=lambda: runtime.mode == "replay")

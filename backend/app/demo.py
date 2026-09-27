@@ -15,6 +15,7 @@ from __future__ import annotations
 
 from datetime import date as date_type, datetime, time, timedelta
 from pathlib import Path
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -152,13 +153,21 @@ async def inject_low(req: InjectRequest) -> dict:
 
 class SendCardRequest(BaseModel):
     fixture: str = Field(default="signal_card_standing", pattern=r"^signal_card_(standing|step)$")
+    mode: Literal["bedside", "brain", "both"] = "bedside"
 
 
 @router.post("/send_card", dependencies=[Depends(require_pin), Depends(require_demo)])
 async def send_fixture_card(req: SendCardRequest) -> dict:
     """R7: seal a fixture card (SYNTHETIC, badged DEMO) to every paired demo
     peer, so the inbox shell has something to list before R8 evaluates real
-    nights. The sponsor controls (Bedside | Brain-only, Spark, jump) join at R12/R14."""
+    nights (mode "bedside", the default). R14(c) Brain versus Bedside: mode
+    "both" evaluates the current Step Watch card (the Basal Check when no watch
+    is active) through the real engines twice, once as the bedside device and
+    once with brain_only forced on for that evaluation only, and sends both;
+    mode "brain" sends the brain card alone."""
+    if req.mode != "bedside":
+        cards = [_evaluated_card(brain) for brain in ((False, True) if req.mode == "both" else (True,))]
+        return {"mode": req.mode, "cards": [await _runtime.cards.send(c) for c in cards]}
     import json as _json
 
     from .config import BACKEND_DIR
@@ -170,6 +179,51 @@ async def send_fixture_card(req: SendCardRequest) -> dict:
     card = card.model_copy(update={"is_demo": True, "generated_at": clock.now(),
                                    "patient_pseudonym": pseudonym(_runtime.cards.device_id)})
     return await _runtime.cards.send(card)
+
+
+def _evaluated_card(brain: bool):
+    """One card from the real engine over the demo world, with brain_only set to
+    `brain` for this evaluation only and restored afterwards, even on error. The
+    evaluation is synchronous, so no other job sees the forced value. brain_only
+    changes confidence labels, never a value or a row. The card id carries the
+    source, so the pair sits side by side and neither replaces the morning's card."""
+    from .rounds import noise
+    from .rounds.cards import assemble
+    from .rounds.resources import categories_for
+    from .rounds.step_watch import current_step, due_kinds
+
+    night = clock.now().date() - timedelta(days=1)  # the night that just closed (its evening date)
+    saved = config.IRIN_BRAIN_ONLY
+    config.IRIN_BRAIN_ONLY = brain
+    try:
+        sw = _runtime.step_watch
+        plan = sw.active_plan() if sw is not None else None
+        if plan is not None:
+            due = next((d for back in range(29) for d in due_kinds(plan, night - timedelta(days=back))), None)
+            if due is None:  # nothing fell due yet: the current step's check so far
+                step = current_step(plan, night)
+                if step is None:
+                    raise HTTPException(status_code=409, detail="the watch has not started yet")
+                due = ("step_check", step, (max(step.planned_start, night - timedelta(days=6)), night))
+            kind, step, window = due
+            told = sw._told(noise.history_from_store(store.select_cards(limit=500)))
+            ev = sw.evaluate(plan, kind, step, window, told)
+            extra = dict(program="step_watch", period_start=ev.period_start, period_end=ev.period_end,
+                         tolerance_days=ev.tolerance_days, plan_id=plan.plan_id, step_index=ev.step_index)
+        else:
+            if _runtime.standing is None:
+                raise HTTPException(status_code=409, detail="no engine to evaluate")
+            ev = next(e for e in _runtime.standing.evaluations(night) if e.kind == "basal_check")
+            since, until = _runtime.standing.window(night)
+            extra = dict(program="standing", period_start=ev.period_start or since, period_end=ev.period_end or until,
+                         excluded_counts=ev.excluded_counts)
+        source = "irin_brain" if brain else "irin_bedside"
+        card = assemble(kind=ev.kind, status=ev.status, flags=ev.flags, metrics=ev.metrics, confidence=ev.confidence,
+                        headline=ev.headline, device_id=_runtime.cards.device_id, is_demo=True, source=source,
+                        nights=ev.nights, resource_categories=categories_for(ev.kind, ev.flags), **extra)
+    finally:
+        config.IRIN_BRAIN_ONLY = saved
+    return card.model_copy(update={"card_id": f"{card.card_id}:{source}"})
 
 
 # --- R12: the seek and the sponsor-tier controls (demo-only, PIN) ---
