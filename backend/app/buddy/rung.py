@@ -159,6 +159,7 @@ class BuddyRung:
     on_alert: Callable[[dict], None] | None = None  # buddy_alert broadcast
     on_update: Callable[[dict], None] | None = None  # hub_update broadcast (resolved, emergency, call)
     matches: Callable[[], list[dict]] = lambda: []  # B3+: the directory's matches for buddy_state
+    my_buddy: Callable[[], dict | None] = lambda: None  # buddy v3: the stored offer of the accepted match
     link_mode: Callable[[Pairing], str] = lambda p: "twin"  # B3+: "mirror" for a buddy from a mirror match
     # B4+: the voice clip (Irin Cloud) and the WhatsApp channel (relay); an unset URL or credential skips it
     cloud_url: str = field(default_factory=lambda: config.CLOUD_URL)
@@ -541,7 +542,7 @@ class BuddyRung:
         except Exception:
             link = None
         return {"link": link, "open_alert": self.alert, "treating": self.current_treating(), "morning_line": self.morning["line"] if self.morning else None,
-                "emergency": self.emergency, "matches": self._matches()}
+                "emergency": self.emergency, "matches": self._matches(), "my_buddy": self._my_buddy()}
 
     def _matches(self) -> list[dict]:
         try:
@@ -549,3 +550,10 @@ class BuddyRung:
         except Exception:
             log.exception("buddy matches unavailable")
             return []
+
+    def _my_buddy(self) -> dict | None:
+        try:
+            return self.my_buddy()
+        except Exception:
+            log.exception("my buddy unavailable")
+            return None
