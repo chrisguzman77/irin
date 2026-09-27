@@ -4,6 +4,7 @@ import { PinRejected } from "../../lib/api";
 import { ALARM_SOUNDS, applied, changedFields, saveSettings, validate } from "../../lib/settings";
 import DashboardToken from "./DashboardToken";
 import FamilySection from "./FamilySection";
+import KioskView from "./KioskView";
 
 // Step 5: every device setting, drafted from the Pi's snapshot. Save sends
 // only the changed fields; nothing is shown as saved until the Pi echoes it
@@ -260,7 +261,9 @@ export default function SettingsForm({ current, baseUrl }: { current: Settings |
     </form>
     <FamilySection current={current} baseUrl={baseUrl} />
     <DashboardToken />
-    <div className="h-28" aria-hidden />
+    <KioskView baseUrl={baseUrl} />
+    {/* clears the fixed Undo/Save bar (up to ~7.5rem with both messages) plus 1rem */}
+    <div className="h-36" aria-hidden />
     </>
   );
 }
