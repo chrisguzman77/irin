@@ -135,10 +135,18 @@ def test_basal_change_seek_yields_a_basal_check_then_a_follow_up(rig):
         kinds = {(d["card"]["kind"], d["card"]["period_end"]) for d in c.get("/api/rounds/cards").json()}
         basal = sorted(e for k, e in kinds if k == "basal_check")
         # the rise is visible before George's five Detect mornings (01-25..29) once 5 clean nights exist; one per 14 days
-        assert basal and basal[0] <= "2021-01-25" and len(basal) == 2
-        assert (date.fromisoformat(basal[1]) - date.fromisoformat(basal[0])).days >= 14
-        follow = sorted(e for k, e in kinds if k == "follow_up")
-        assert follow and follow[0] >= "2021-02-07"  # from day 7 after the confirmed change on 02-01
+        # ONE Basal Check: a later window would straddle the confirmed change on 02-01 (confounded nights)
+        assert basal and basal[0] <= "2021-01-25" and len(basal) == 1
+        cards = {d["card"]["card_id"]: d["card"] for d in c.get("/api/rounds/cards").json()}
+        follow = sorted((k["period_end"], k["headline"]) for k in cards.values() if k["kind"] == "follow_up")
+        assert len(follow) == 1 and "days 1-7" in follow[0][1], follow  # the day-7 card; day 14 is green: the digest
+        from datetime import date as _d
+        day14 = {e.kind: e for e in main.runtime.standing.evaluations(_d(2021, 2, 14))}["follow_up"]
+        assert day14.status == "green" and "days 1-14" in day14.headline and "+2 after" in day14.headline
+        day7 = next(k for k in cards.values() if k["kind"] == "follow_up" and "days 1-7" in k["headline"])
+        assert "after14_rise_median" not in day7["metrics"]  # no 14-day number before 14 days exist
+        hypo_reds = [k for k in cards.values() if k["kind"] == "hypo_response" and k["status"] == "red"]
+        assert len(hypo_reds) <= 3, len(hypo_reds)  # a window-only red once per 14 days, not every morning
         # the companion's one nocturnal low was left unanswered: no answer, never fine
         recalls = c.get("/api/rounds/recalls?date=2021-02-03", headers=H).json()
         assert [i["recall"]["answer"] for i in recalls] == [None]

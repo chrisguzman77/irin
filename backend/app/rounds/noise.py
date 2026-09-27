@@ -40,12 +40,18 @@ def _keys(event_key: str | None) -> set[str]:
 
 
 def allow(kind: str, program: str, status: str, now: datetime, history: list[Sent], *,
-          active_watch: bool = False, event_key: str | None = None) -> Verdict:
+          active_watch: bool = False, event_key: str | None = None, window_only: bool = False) -> Verdict:
+    """window_only: a red that describes the whole 14-night window (the escalated-warning
+    count, the acknowledgement median) and no new event: it goes out once per 14 days,
+    or it would repeat every morning the window rolls forward."""
     if status == "insufficient" and kind != "follow_up":
         return Verdict(False, "insufficient")  # Follow-up alone ships "not enough data yet" (budgeted like amber)
     if program == "standing" and active_watch and kind != "follow_up":
         return Verdict(False, "watch")  # Basal Check suspended; Hypo Response absorbed into the watch's safety card
     if status == "red":
+        if window_only and any(s.kind == kind and s.status == "red" and now - s.sent_at < STANDING_INTERVAL
+                               for s in history):
+            return Verdict(False, "interval")
         for s in history:
             if s.kind == kind and event_key is not None and _keys(s.event_key) & _keys(event_key):
                 return Verdict(False, "red_duplicate")  # any shared event: the same episode, already told
@@ -59,7 +65,10 @@ def allow(kind: str, program: str, status: str, now: datetime, history: list[Sen
     # amber
     if any(s.program != program and s.sent_at.date() == now.date() for s in history):
         return Verdict(False, "program_day")
-    if kind in STANDING_KINDS:
+    if kind == "follow_up":  # one per phase (day 7, day 14) of each confirmed change
+        if event_key is not None and any(s.kind == kind and s.event_key == event_key for s in history):
+            return Verdict(False, "per_phase")
+    elif kind in STANDING_KINDS:
         if any(s.kind == kind and now - s.sent_at < STANDING_INTERVAL for s in history):
             return Verdict(False, "interval")
     if kind in PER_STEP_KINDS:
