@@ -1,6 +1,8 @@
 import { renderCard } from "./card.js";
 import { openPlanForm } from "./plan-form.js";
 import { loadHandoffs, openResources } from "./resources.js";
+import { initSeen } from "./seen.js";
+import { RELAY_URL } from "./config.js";
 import { clear, load, openFromDevice, relay, saveSent, sealToDevice, sentMessages } from "./session.js";
 
 // justin.md R5: the clinician inbox ("mock Ascend"). Paired (see pair.js): polls
@@ -343,6 +345,8 @@ async function unpair() {
 }
 
 // ------------------------------------------------------------ start
+
+initSeen(s && s.state === "paired" && s.relay ? s.relay : RELAY_URL);
 
 if (!s || s.state !== "paired" || !s.bearer || !s.doctor_id) {
   showUnpaired(s && s.state === "joining" ? "A pairing is waiting for the patient's confirmation: open the pairing page again from the patient's QR code." : null);

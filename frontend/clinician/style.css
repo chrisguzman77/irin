@@ -79,3 +79,10 @@ dialog.wide { width: min(620px, calc(100vw - 32px)); }
 .resgo { align-self: flex-start; font: 700 15px system-ui, sans-serif; padding: 10px 16px; border-radius: 8px; border: 0; background: #3730a3; color: #fff; cursor: pointer; }
 .resgo:disabled { opacity: 0.4; }
 .panel summary { cursor: pointer; font-size: 14px; color: var(--muted); padding: 4px 0; }
+.seen ul { margin: 6px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; }
+.seen li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px; font-size: 12px; }
+.seen-at { color: var(--muted); font-variant-numeric: tabular-nums; }
+.seen-route { font-weight: 700; }
+.seen-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.seen-chip { background: #f3f4f6; border-radius: 4px; padding: 1px 6px; font-family: ui-monospace, Menlo, monospace; overflow-wrap: anywhere; }
+.seen .badge-demo { margin: 0; }
