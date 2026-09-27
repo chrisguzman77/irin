@@ -144,6 +144,7 @@ class MatchOffer(BaseModel):
     score: float
     intro: str
     why: str
+    sample: bool = False  # the relay's seeded sample profile (onboarding v2): never a real person
     is_demo: bool = False
 
 
@@ -352,14 +353,15 @@ class BuddyDirectory:
             intro = await asyncio.to_thread(intro_line, name, langs, mirror, hours)  # never on the event loop
             return MatchOffer(match_id=str(r["match_id"]), first_name=name, hours_covered=float(hours),
                               mirror=mirror, shared_languages=langs, score=float(r.get("score") or 0),
-                              intro=intro, why=why_line(hours, mirror, langs), is_demo=demo)
+                              intro=intro, why=why_line(hours, mirror, langs), is_demo=demo,
+                              sample=bool(r.get("sample")))
 
         offers = list(await asyncio.gather(*(offer(r) for r in rows)))
         mirrors = self._mirrors()
         for o, r in zip(offers, rows):
             mirrors[o.match_id] = o.mirror
             self._set(o.match_id, o.first_name, str(r.get("status") or "offered"),
-                      self.matches.get(o.match_id, {}).get("pair_url"))
+                      self.matches.get(o.match_id, {}).get("pair_url"), o.sample)
         store.set_kv(f"buddy_match_mirror:{self._world()}", json.dumps(mirrors))
         return offers
 
@@ -372,7 +374,8 @@ class BuddyDirectory:
         if status not in ("offered", "accepted", "declined"):
             raise DirectoryError(502, "relay answered without a match status")
         prev = self.matches.get(match_id, {})
-        self._set(match_id, str(out.get("first_name") or prev.get("first_name") or ""), status, prev.get("pair_url"))
+        self._set(match_id, str(out.get("first_name") or prev.get("first_name") or ""), status, prev.get("pair_url"),
+                  bool(out.get("sample", prev.get("sample", False))))
         if status == "accepted":
             await self._ensure_pair_link(match_id)
         return MatchStatus(match_id=match_id, status=status, is_demo=self.is_demo())
@@ -436,14 +439,16 @@ class BuddyDirectory:
 
     # --- the relay poll ---
 
-    def _set(self, match_id: str, first_name: str, status: str, pair_url: str | None) -> None:
-        new = {"match_id": match_id, "first_name": first_name, "status": status, "pair_url": pair_url}
+    def _set(self, match_id: str, first_name: str, status: str, pair_url: str | None, sample: bool = False) -> None:
+        new = {"match_id": match_id, "first_name": first_name, "status": status, "pair_url": pair_url,
+               "sample": sample}
         if self.matches.get(match_id) == new:
             return
         self.matches[match_id] = new
         if self.on_update is not None:
             try:
-                self.on_update({"event": "match", "match_id": match_id, "status": status, "pair_url": pair_url})
+                self.on_update({"event": "match", "match_id": match_id, "status": status, "pair_url": pair_url,
+                                "sample": sample})
             except Exception:
                 log.exception("hub_update observer failed")
 
@@ -459,7 +464,8 @@ class BuddyDirectory:
             mid = str(r["match_id"])
             seen.add(mid)
             pair_url = r.get("pair_url") if isinstance(r.get("pair_url"), str) else None
-            self._set(mid, str(r.get("first_name") or "")[:40], str(r.get("status") or "offered"), pair_url)
+            self._set(mid, str(r.get("first_name") or "")[:40], str(r.get("status") or "offered"), pair_url,
+                      bool(r.get("sample")))
             if r.get("status") == "accepted":
                 await self._ensure_pair_link(mid)
         for mid in [m for m in self.matches if m not in seen]:

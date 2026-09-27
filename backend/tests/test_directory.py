@@ -234,7 +234,7 @@ def test_match_offers_carry_a_template_intro_and_a_computed_why(db):
     assert sam.why == "Awake for 8 of your night hours; a mirror across time zones: their day is your night; " \
                       "you share English."
     assert set(sam.model_dump()) == {"match_id", "first_name", "hours_covered", "mirror", "shared_languages",
-                                     "score", "intro", "why", "is_demo"}
+                                     "score", "intro", "why", "is_demo", "sample"}
     [(_, _, _, headers)] = relay.to("/v0/match")
     assert headers["authorization"] == "Bearer bearer-secret"
     assert [m["status"] for m in d.snapshot()] == ["offered", "offered"]
@@ -287,7 +287,8 @@ def test_accept_by_both_starts_a_buddy_pairing_and_posts_the_pair_link_once(db):
     assert body == {"pair_url": "https://watch.test/pair#token=t0&device_pk=pk&relay=https://relay.test"}
     run(d.on_matches([{"match_id": "m1", "first_name": "Sam", "status": "accepted", "pair_url": "https://w/p#x"}]))
     assert links == [0] and len(relay.to("/pair_link")) == 1  # never a second pairing for the same match
-    assert updates[-1] == {"event": "match", "match_id": "m1", "status": "accepted", "pair_url": "https://w/p#x"}
+    assert updates[-1] == {"event": "match", "match_id": "m1", "status": "accepted", "pair_url": "https://w/p#x",
+                           "sample": False}
 
 
 def test_an_accept_seen_first_on_the_poll_starts_the_pairing_and_a_failure_retries(db):
@@ -481,8 +482,9 @@ def test_the_poll_matches_key_reaches_the_directory_and_other_keys_are_unchanged
                                   transport=relay.transport(), on_matches=d.on_matches)
     body = run(client.poll())
     assert set(body) == {"messages", "pairings", "calls", "matches"}
-    assert d.snapshot() == [{"match_id": "m1", "first_name": "Sam", "status": "offered", "pair_url": None}]
-    assert updates == [{"event": "match", "match_id": "m1", "status": "offered", "pair_url": None}]
+    assert d.snapshot() == [{"match_id": "m1", "first_name": "Sam", "status": "offered", "pair_url": None,
+                             "sample": False}]
+    assert updates == [{"event": "match", "match_id": "m1", "status": "offered", "pair_url": None, "sample": False}]
     run(client.poll())
     assert len(updates) == 1  # an unchanged match is not re-broadcast
     relay.poll_matches = []
@@ -559,12 +561,12 @@ def test_endpoints_end_to_end_in_demo(app_client):
     assert c.post("/api/buddy/match/m2/decline", headers=PIN).json()["status"] == "declined"
 
     hub_updates = [m.payload for m in sent if m.type == "hub_update"]
-    assert {"event": "match", "match_id": "m1", "status": "accepted", "pair_url": None} in hub_updates
+    assert {"event": "match", "match_id": "m1", "status": "accepted", "pair_url": None, "sample": False} in hub_updates
     with c.websocket_connect("/ws") as ws:
         snap = json.loads(ws.receive_text())
     matches = snap["payload"]["buddy_state"]["matches"]
     assert {m["match_id"]: m["status"] for m in matches} == {"m1": "accepted", "m2": "declined"}
-    assert set(matches[0]) == {"match_id", "first_name", "status", "pair_url"}
+    assert set(matches[0]) == {"match_id", "first_name", "status", "pair_url", "sample"}
 
 
 def test_a_mode_switch_hides_the_other_worlds_profile_and_matches(app_client):
@@ -580,3 +582,19 @@ def test_a_mode_switch_hides_the_other_worlds_profile_and_matches(app_client):
     finally:
         c.post("/api/mode", json={"mode": "replay"}, headers=PIN)
     assert c.get("/api/buddy/profile", headers=PIN).json()["is_demo"] is True
+
+
+def test_v2_sample_flag_passes_through_poll_rows_and_the_hub_update(db):
+    """Onboarding v2: a seeded sample profile is never shown as a real person."""
+    import asyncio
+    from app.buddy.directory import BuddyDirectory
+    ups = []
+    d = BuddyDirectory(relay_url="", source_key="", is_demo=lambda: False, verify_cgm=lambda: None,
+                       start_pairing=lambda: {}, on_update=ups.append)
+    store.set_kv("buddy_relay_world", "live")
+    asyncio.run(d.on_matches([{"match_id": "m1", "first_name": "Sam", "status": "offered", "pair_url": None,
+                               "sample": True},
+                              {"match_id": "m2", "first_name": "Ana", "status": "offered", "pair_url": None}]))
+    rows = {r["match_id"]: r for r in d.snapshot()}
+    assert rows["m1"]["sample"] is True and rows["m2"]["sample"] is False
+    assert any(u["match_id"] == "m1" and u["sample"] is True for u in ups)
