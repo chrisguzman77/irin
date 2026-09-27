@@ -782,7 +782,7 @@ function renderAlarm(num, arrow) {
     $("alarm-glucose").textContent = num;
     $("alarm-trend").textContent = arrow;
     $("alarm-sub").textContent = full
-      ? (a.state === "rearmed" ? "still low — treat now" : "treat now")
+      ? (a.state === "rearmed" ? "Still Low — Treat Now" : "Treat Now")
       : "predicted low within 30 minutes";
     $("alarm-ack-msg").textContent = state.ackMsg;
   }
