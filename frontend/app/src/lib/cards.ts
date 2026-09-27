@@ -57,3 +57,27 @@ export async function sendSampleCard(base: string, fixture: SampleFixture): Prom
     recipients: Array.isArray(b.recipients) ? (b.recipients as string[]) : [],
   };
 }
+
+// Bedside vs phone only (GET /api/rounds/cards/compare): one pair per kind,
+// the sealed card as the device recorded it and the same card recomputed
+// brain-only (labels change, rows never blank). null = this Pi predates the
+// endpoint (404), so the tab falls back to the single cards.
+export interface CardPair {
+  kind: string;
+  bedside: CardRecord;
+  brain: SignalCard;
+}
+
+export async function compareCards(base: string): Promise<CardPair[] | null> {
+  const res = await fetch(`${base}/api/rounds/cards/compare`, { cache: "no-store" });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`${res.status}`);
+  const rows = (await res.json()) as unknown[];
+  return rows.flatMap((x) => {
+    const p = x as { kind?: unknown; bedside?: unknown; brain?: unknown } | null;
+    const bedside = asRecord(p?.bedside);
+    const brain = p?.brain as SignalCard | undefined;
+    if (!bedside || !brain || typeof brain.card_id !== "string") return [];
+    return [{ kind: typeof p?.kind === "string" ? p.kind : bedside.card.kind, bedside, brain }];
+  });
+}

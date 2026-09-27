@@ -8,6 +8,8 @@ import { confirmPairing, pairStatus, qrPath, readPairingState, revokePairing, st
 // the token) and polls the Pi until the doctor's browser joins; then both the
 // phone and the bedside screen show the four-digit code and a Confirm that
 // asks for the PIN every time. Nothing is shared until Confirm succeeds.
+// Presentation: one big blue Share with doctor button at the top of the tab,
+// and the QR drawn large, front and centre, with its countdown.
 const POLL_MS = 3000;
 
 function since(iso: string | null | undefined): string {
@@ -20,8 +22,8 @@ function since(iso: string | null | undefined): string {
 function Qr({ text }: { text: string }) {
   const { size, d } = qrPath(text);
   return (
-    <div className="bg-white p-3 rounded-lg self-center">
-      <svg viewBox={`0 0 ${size} ${size}`} className="w-64 h-64 block" shapeRendering="crispEdges" role="img" aria-label="pairing QR code">
+    <div className="bg-white p-3 rounded-xl self-center w-full max-w-sm">
+      <svg viewBox={`0 0 ${size} ${size}`} className="w-full aspect-square block" shapeRendering="crispEdges" role="img" aria-label="pairing QR code">
         <path d={d} fill="#000" />
       </svg>
     </div>
@@ -164,19 +166,20 @@ export default function DoctorSharing() {
           <p>{ps.doctor_display_name ?? "Your doctor"}&apos;s screen should show this same code:</p>
           <p className="text-6xl font-extrabold tracking-[0.3em] tabular-nums">{ps.code4}</p>
           <p className="text-sm text-neutral-400">Confirm only if it matches. Nothing is shared until you do.</p>
-          <button type="button" disabled={busy} onClick={confirm} className="w-full rounded-lg bg-white text-black font-semibold py-3 disabled:opacity-40">
+          <button type="button" disabled={busy} onClick={confirm} className="w-full rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-semibold py-3 disabled:opacity-40">
             {busy ? "Confirming…" : "It matches: start sharing"}
           </button>
         </div>
       ) : qr && ps.status !== "idle" ? (
-        <div className="flex flex-col gap-3">
+        <div className="flex flex-col gap-3 items-center text-center">
+          <p className="text-2xl font-bold">Ask your doctor to scan this</p>
           <Qr text={qr.url} />
-          <p className="text-sm text-neutral-300">
-            Let your doctor scan this, or send them the link. It works once, for {Math.floor(left / 60)}:
-            {String(left % 60).padStart(2, "0")} more.
+          <p className="text-4xl font-extrabold tabular-nums" aria-label="time left">
+            {Math.floor(left / 60)}:{String(left % 60).padStart(2, "0")}
           </p>
+          <p className="text-sm text-neutral-300">It works once, until the timer runs out. You can also send them the link.</p>
           {qr.demo && <p className="text-sm text-amber-300">Demo pairing: it receives demo cards only.</p>}
-          <div className="flex gap-2">
+          <div className="flex gap-2 w-full">
             <button type="button" onClick={() => copy(qr.url)} className="flex-1 rounded-lg bg-neutral-800 py-2">
               {copied ? "Link copied" : "Copy link"}
             </button>
@@ -190,8 +193,13 @@ export default function DoctorSharing() {
       ) : qr ? (
         <p className="text-sm text-neutral-400">Starting…</p>
       ) : (
-        <button type="button" disabled={busy} onClick={start} className="rounded-lg bg-white text-black font-semibold py-3 disabled:opacity-40">
-          Share with my doctor
+        <button
+          type="button"
+          disabled={busy}
+          onClick={start}
+          className="w-full rounded-xl bg-blue-600 hover:bg-blue-500 active:bg-blue-700 text-white text-xl font-bold py-5 shadow-lg shadow-blue-900/40 disabled:opacity-40"
+        >
+          {busy ? "Starting…" : "Share with doctor"}
         </button>
       )}
       {!qr && !joined && demo && ps.status === "idle" && (
