@@ -567,7 +567,9 @@ function setPairing(ps) {
   state.pairing = ps && typeof ps === "object" ? ps : {};
   state.doctorName = window.irinDoctorName(state.pairing);
   const now = state.pairing.status;
-  if (now === "awaiting_confirm" && before !== "awaiting_confirm") pair.open = true; // the doctor joined: show the code here too
+  // the doctor joined: show the code here only when THIS screen started the pairing (pair.qr); a pairing
+  // started from the app's Irin Rounds tab is confirmed there, and the kiosk stays out of it
+  if (now === "awaiting_confirm" && before !== "awaiting_confirm" && pair.qr) pair.open = true;
   if (now !== "awaiting_scan" && now !== "awaiting_confirm" && pair.qr) endQr(""); // confirmed, expired, or the mode changed
 }
 
