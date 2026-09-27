@@ -13,13 +13,13 @@ import os
 from datetime import datetime, timezone
 
 from pymongo import ASCENDING, MongoClient
-from pymongo.errors import PyMongoError
+from pymongo.errors import OperationFailure, PyMongoError
 
 ATLAS_URI = os.environ.get("ATLAS_URI", "mongodb://localhost:27017")
 DB_NAME = os.environ.get("RELAY_DB_NAME", "relay")
 
 COLLECTIONS = (
-    "users", "buddy_links", "matches", "hub_listings", "hub_claims",
+    "users", "buddy_links", "matches", "hub_listings", "hub_claims", "hub_calls",
     "pairings", "cards", "messages", "resolutions", "audit",
 )
 
@@ -29,7 +29,8 @@ _client: MongoClient | None = None
 def client() -> MongoClient:
     global _client
     if _client is None:
-        _client = MongoClient(ATLAS_URI, serverSelectionTimeoutMS=1500)
+        # tz_aware: every datetime read back is UTC-aware, so isoformat() carries +00:00
+        _client = MongoClient(ATLAS_URI, serverSelectionTimeoutMS=1500, tz_aware=True)
     return _client
 
 
@@ -42,11 +43,20 @@ def now() -> datetime:
 
 
 def ensure_indexes() -> None:
-    """TTL janitors on the hub (the lease and treating expiry still run on
-    clock.py so 60x replay works) and the lookups the routes use."""
+    """The lookups the routes use. The hub has NO TTL on its expiry fields: an
+    expired lease reopens the listing and an expired treating window returns it
+    at TOP urgency (hub.py sweeps lazily), so a janitor deleting the document
+    would lose the listing. Older deployments' TTL indexes are dropped."""
     listings = db()["hub_listings"]
-    listings.create_index([("claim_expires_at", ASCENDING)], expireAfterSeconds=0, name="ttl_claim")
-    listings.create_index([("treating_expires_at", ASCENDING)], expireAfterSeconds=0, name="ttl_treating")
+    for old in ("ttl_claim", "ttl_treating"):
+        try:
+            listings.drop_index(old)
+        except OperationFailure:
+            pass
+    listings.create_index([("listing_id", ASCENDING)], unique=True, name="listing_id")
+    db()["hub_claims"].create_index([("claim_id", ASCENDING)], unique=True, name="claim_id")
+    db()["hub_claims"].create_index([("closed", ASCENDING), ("expires_at", ASCENDING)], name="live")
+    db()["hub_calls"].create_index([("source_key_hash", ASCENDING), ("delivered", ASCENDING)], name="device_poll")
     db()["pairings"].create_index([("token", ASCENDING)], unique=True, name="token")
     db()["pairings"].create_index([("doctor_id", ASCENDING)], name="doctor")
     db()["pairings"].create_index([("bearer_hash", ASCENDING)], name="bearer")
