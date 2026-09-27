@@ -83,6 +83,7 @@ class CatchUp:
     evaluate_night: Callable[[date], Awaitable[None]]  # main._evaluate_night: the watch, then Standing
     is_demo: Callable[[], bool] = lambda: True
     on_progress: Callable[[dict[str, Any]], None] | None = None
+    on_last_night: Callable[[Any], None] | None = None  # the buddy's morning line, once, for the newest night
 
     # --- the companion, seeded once (every write is keyed, so a second seek writes nothing new) ---
 
@@ -188,6 +189,14 @@ class CatchUp:
                 if self.on_progress is not None:
                     self.on_progress({"night_date": night_date.isoformat(), "to": to.isoformat()})
             landed = to
+            last = self.nights_until(first_row, to)
+            if last and self.on_last_night is not None:
+                record = store.select_night_record(last[-1])
+                if record is not None:
+                    try:
+                        self.on_last_night(record)
+                    except Exception:
+                        log.exception("last-night hook failed")
         finally:
             self.ledger.on_record = saved_hook
             clock.set(speed=speed, start=landed)
