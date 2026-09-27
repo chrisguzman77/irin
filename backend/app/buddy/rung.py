@@ -149,6 +149,8 @@ class BuddyRung:
     first_name: Callable[[], str] = patient_first_name
     on_alert: Callable[[dict], None] | None = None  # buddy_alert broadcast
     on_update: Callable[[dict], None] | None = None  # hub_update broadcast (resolved, emergency, call)
+    matches: Callable[[], list[dict]] = lambda: []  # B3+: the directory's matches for buddy_state
+    link_mode: Callable[[Pairing], str] = lambda p: "twin"  # B3+: "mirror" for a buddy from a mirror match
     # B4+: the voice clip (Irin Cloud) and the WhatsApp channel (relay); an unset URL or credential skips it
     cloud_url: str = field(default_factory=lambda: config.CLOUD_URL)
     cloud_device_id: str = field(default_factory=lambda: config.DEVICE_ID)
@@ -508,8 +510,13 @@ class BuddyRung:
         demo = self.is_demo()
         for p in self.recipients(demo):
             if p.peer_kind == "buddy":
-                # mode arrives with directory matching (B3+); a pre-matched demo pair is a twin
-                return {"first_name": p.doctor_display_name, "mode": "twin", "peer_id": p.doctor_id}
+                # B3+: "mirror" when this buddy came from a match flagged mirror; a pre-matched pair is a twin
+                try:
+                    mode = self.link_mode(p)
+                except Exception:
+                    log.exception("buddy link mode unavailable")
+                    mode = "twin"
+                return {"first_name": p.doctor_display_name, "mode": mode, "peer_id": p.doctor_id}
         return None
 
     def current_treating(self) -> dict | None:
@@ -523,4 +530,11 @@ class BuddyRung:
         except Exception:
             link = None
         return {"link": link, "open_alert": self.alert, "treating": self.current_treating(), "morning_line": self.morning["line"] if self.morning else None,
-                "emergency": self.emergency}
+                "emergency": self.emergency, "matches": self._matches()}
+
+    def _matches(self) -> list[dict]:
+        try:
+            return self.matches()
+        except Exception:
+            log.exception("buddy matches unavailable")
+            return []
