@@ -141,7 +141,7 @@ def test_both_accept_then_pair_link_reaches_the_other_poll(c):
     r = c.post(f"/v0/match/{mid}/pair_link", json={"pair_url": url}, headers={"X-Source-Key": KEYS[0]})
     assert r.status_code == 200 and r.json() == {"stored": True}
     poll = c.get("/v0/device/irin-b/messages", headers={"X-Source-Key": KEYS[1]}).json()
-    assert set(poll) == {"messages", "pairings", "calls", "matches"}
+    assert set(poll) == {"messages", "pairings", "calls", "matches", "owner"}
     assert poll["matches"] == [{"match_id": mid, "first_name": "Chris", "status": "accepted", "pair_url": url}]
     mine = c.get("/v0/device/irin-a/messages", headers={"X-Source-Key": KEYS[0]}).json()["matches"]
     assert mine == [{"match_id": mid, "first_name": "Mika", "status": "accepted", "pair_url": None}]

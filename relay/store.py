@@ -20,7 +20,7 @@ DB_NAME = os.environ.get("RELAY_DB_NAME", "relay")
 
 COLLECTIONS = (
     "users", "buddy_links", "matches", "hub_listings", "hub_claims", "hub_calls",
-    "pairings", "cards", "messages", "resolutions", "audit",
+    "pairings", "owner_pairings", "cards", "messages", "resolutions", "audit",
 )
 
 _client: MongoClient | None = None
@@ -60,6 +60,9 @@ def ensure_indexes() -> None:
     db()["pairings"].create_index([("token", ASCENDING)], unique=True, name="token")
     db()["pairings"].create_index([("doctor_id", ASCENDING)], name="doctor")
     db()["pairings"].create_index([("bearer_hash", ASCENDING)], name="bearer")
+    db()["owner_pairings"].create_index([("device_id", ASCENDING)], unique=True, name="device_id")
+    db()["owner_pairings"].create_index([("code", ASCENDING)], name="code")
+    db()["owner_pairings"].create_index([("token_sha256", ASCENDING)], name="token_sha256")
     db()["cards"].create_index([("recipient_id", ASCENDING), ("created_at", ASCENDING)], name="inbox")
     db()["cards"].create_index([("card_id", ASCENDING)], name="card_id")
     db()["messages"].create_index([("device_id", ASCENDING), ("status", ASCENDING)], name="device_poll")
