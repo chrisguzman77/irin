@@ -55,6 +55,7 @@ from .rounds.evaluate import StandingEngine
 from .rounds.messages import DoctorMessages, MessageError
 from .rounds.pairing import PairingError, PairingService, RelayPairing
 from .rounds.relay_client import RelayClient
+from .owner import OwnerError, OwnerPairingService, RelayOwner
 from .rounds.catchup import CatchUp
 from .rounds.recall import ANSWER_UNTIL_HHMM, MorningRecall, RecallError
 from .rounds.step_watch import StepWatch
@@ -98,6 +99,7 @@ class Runtime:
     ledger: "Ledger | None" = None
     low_events: "LowEventDetector | None" = None
     pairing: "PairingService | None" = None
+    owner: "OwnerPairingService | None" = None
     relay_client: "RelayClient | None" = None
     cards: "CardSender | None" = None
     standing: "StandingEngine | None" = None
@@ -353,6 +355,12 @@ def _broadcast_pairing_state(state: dict) -> None:
     _schedule(hub.broadcast(WSMessage(type="pairing_state", payload=state)))
 
 
+def _broadcast_owner_state(state: dict) -> None:
+    """A2: distinguished from the doctor/buddy pairing_state above by kind."""
+    _schedule(hub.broadcast(WSMessage(type="pairing_state",
+                                      payload={"kind": "owner", "state": state["state"], "username": state["username"]})))
+
+
 def _broadcast_card_sent(payload: dict) -> None:
     _schedule(hub.broadcast(WSMessage(type="card_sent", payload=payload)))
 
@@ -373,7 +381,8 @@ def _make_relay_client() -> RelayClient:
     return DirectoryRelayClient(relay_url=config.RELAY_URL, source_key=config.RELAY_SOURCE_KEY,
                                 device_id=config.DEVICE_ID or "irin-dev", is_demo=lambda: runtime.mode == "replay",
                                 on_pairings=lambda states: runtime.pairing.apply_remote_states(states),
-                                on_matches=lambda rows: runtime.directory.on_matches(rows))
+                                on_matches=lambda rows: runtime.directory.on_matches(rows),
+                                on_owner=lambda owner: runtime.owner.on_owner(owner))
 
 
 async def _cgm_feed_verified() -> bool:
@@ -409,6 +418,12 @@ def _make_pairing() -> PairingService:
                           inbox_url=_role_url(config.INBOX_URL, "doctor"), watch_url=_role_url(config.WATCH_URL, "watch"),
                           relay_url=config.RELAY_URL, is_demo=lambda: runtime.mode == "replay",
                           on_state=_broadcast_pairing_state)
+
+def _make_owner() -> OwnerPairingService:
+    return OwnerPairingService(relay=RelayOwner(config.RELAY_URL, config.RELAY_SOURCE_KEY),
+                               device_id=config.DEVICE_ID or "irin-dev", device_url=config.DEVICE_URL,
+                               app_origin=config.APP_ORIGIN, on_state=_broadcast_owner_state)
+
 
 def _buddy_calls(calls: list[dict]) -> None:
     """B4: brokered calls from the relay poll: the buddy chime (never an alarm tone, never over a sounding low)."""
@@ -530,6 +545,7 @@ async def lifespan(app: FastAPI):
     store.init_db()
     _load_settings()
     runtime.pairing = _make_pairing()  # after init_db: it loads the stored pairings
+    runtime.owner = _make_owner()
     runtime.relay_client = _make_relay_client()
     runtime.directory = _make_directory()
     runtime.buddy.matches = runtime.directory.snapshot
@@ -846,6 +862,36 @@ async def pair_revoke(doctor_id: str) -> Pairing:
 @app.get("/api/pairings", response_model=list[Pairing])
 async def pairings() -> list[Pairing]:
     return [p.model_copy(update={"doctor_pk": ""}) for p in runtime.pairing.pairings.values()]
+
+
+# --- owner pairing (A2): the phone app <-> this Pi, redeemed on the relay ---
+
+
+def _owner_error(e: OwnerError) -> HTTPException:
+    return HTTPException(status_code=e.status, detail=e.detail)
+
+
+@app.post("/api/owner/code", dependencies=[Depends(require_pin)])
+async def owner_code() -> dict:
+    """A 6-digit code and its QR (the code only, never the token); 409 unless
+    someone is standing in front of the Irin (mock hardware always allows it)."""
+    if config.IRIN_HW != "mock" and runtime.outputs.get_presence() is not True:
+        raise HTTPException(status_code=409, detail="stand in front of your Irin to pair a phone")
+    try:
+        return await asyncio.to_thread(runtime.owner.mint)
+    except OwnerError as e:
+        raise _owner_error(e)
+
+
+@app.get("/api/owner")
+async def owner_state() -> dict:
+    """No PIN: the paired state and username, never the token."""
+    return runtime.owner.state()
+
+
+@app.delete("/api/owner", dependencies=[Depends(require_pin)])
+async def owner_revoke() -> dict:
+    return await asyncio.to_thread(runtime.owner.revoke)
 
 
 def _message_error(e: MessageError) -> HTTPException:
