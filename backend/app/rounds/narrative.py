@@ -59,8 +59,10 @@ _now = time.monotonic  # the chain's deadline is network wall time, not replay t
 
 CARD_SYSTEM = (
     "You write the narrative on a clinical signal card a patient's own doctor reads. Two to three sentences, "
-    "plain language, describing only what the measurements show. Never recommend, suggest, or imply any action; "
-    "never mention a dose or a number of units. Use ONLY the numbers given, exactly as given, in digits; never "
+    "plain language, describing only what the measurements show. Never recommend, suggest, or imply any action. "
+    "Never name a dose, a drug strength, or units of anything, even ones the headline states (the card already "
+    "shows the dose): call the step \"step 2\" or \"this step\", never \"Step 2 (5 mg)\". Glucose in mg/dL is fine. "
+    "Use ONLY the numbers given, exactly as given, in digits; never "
     "invent, round differently, spell out, or derive a new number."
 )
 BUDDY_LINE_SYSTEM = (
