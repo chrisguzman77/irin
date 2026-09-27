@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#0b1020">
+  <title>Night Buddy Pairing</title>
+  <link rel="stylesheet" href="../style.css">
+</head>
+<body>
+  <header class="top">
+    <h1>Night Buddy <span class="muted">· pair as a buddy</span></h1>
+    <span id="demo" class="badge-demo" hidden>DEMO</span>
+  </header>
+  <main class="pair">
+    <section id="ask" hidden>
+      <p>Your buddy's Irin is asking you to be their overnight backstop. This browser makes its own key; alerts are
+        sealed to it and only this browser can open them. You never see their glucose, location, or phone number.</p>
+      <form id="join">
+        <label>Your first name as your buddy will see it
+          <input id="name" name="name" maxlength="40" required autocomplete="given-name" placeholder="Alex">
+        </label>
+        <button type="submit" class="btn">Join</button>
+      </form>
+    </section>
+    <section id="code" hidden>
+      <p>Tell your buddy this code. They confirm it on their Irin, with their PIN.</p>
+      <p id="code4" class="code4"></p>
+      <p class="muted">Waiting for your buddy to confirm…</p>
+    </section>
+    <section id="done" hidden>
+      <p><strong>Paired.</strong> Keep the watcher page open at night and tap On watch.</p>
+      <p><a class="btn" href="../">Open the watcher page</a></p>
+    </section>
+    <p id="msg" class="msg" role="status"></p>
+  </main>
+  <footer class="foot">Irin Night Buddy: a hackathon demo, not a medical device. In an emergency call your local emergency number.</footer>
+  <!-- tweetnacl 1.0.3 (public domain, Unlicense), vendored: defines window.nacl -->
+  <script src="../nacl.min.js"></script>
+  <script type="module" src="../pair.js"></script>
+</body>
+</html>
