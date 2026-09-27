@@ -39,6 +39,7 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       WHATSAPP_TOKEN: ${WHATSAPP_TOKEN:-}
       WHATSAPP_PHONE_NUMBER_ID: ${WHATSAPP_PHONE_NUMBER_ID:-}
+      HUB_SCRIPT_KEY: ${HUB_SCRIPT_KEY:-}  # B3: seals emergency scripts at rest; unset = lost on restart
       CLOUD_URL: http://cloud:8200
       DOMAIN: ${DOMAIN:-localhost}
     depends_on:
@@ -57,6 +58,9 @@ services:
       VOICE_BACKEND: ${VOICE_BACKEND:-none}
       ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-}
       ELEVENLABS_VOICE_ALERT: ${ELEVENLABS_VOICE_ALERT:-}
+      OWNER_BEARER: ${OWNER_BEARER:-}  # C3: the owner's dashboard token; unset = dashboards 503
+      PIN: ${PIN:-}  # C3: gates family bearer create/revoke; unset = 503
+      DEVICE_TZ: ${DEVICE_TZ:-America/New_York}
       DOMAIN: ${DOMAIN:-localhost}
     volumes:
       - audio_cache:/app/audio_cache
