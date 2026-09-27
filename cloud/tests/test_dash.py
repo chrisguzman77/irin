@@ -290,3 +290,35 @@ def test_no_plan_says_so(client, monkeypatch):
     monkeypatch.setattr(main, "DEVICE_ID", f"{DEV}-demo")              # readings, but no plan forwarded
     body = client.get("/v1/dash/step_watch", headers=OWNER).json()
     assert body["plan"] is None and body["baseline"] is None and body["empty"] is True and body["rows"] == []
+
+
+def test_forwarded_rows_draw_through_ingest(client, seeded, monkeypatch):
+    """The seam end to end: what ingest.py writes into the migrated 005 tables (hypertables
+    included) is what step_watch and buddy draw; demo rows only on the -demo device."""
+    import ingest as ingest_mod
+
+    monkeypatch.setattr(ingest_mod, "TIGER_URI", seeded)
+    monkeypatch.setattr(main, "DEVICE_TOKEN", "tok-e2e")
+    w0 = datetime(2021, 3, 1, 22)
+    batch = {
+        "device_id": DEV,
+        "night_records": [{"night_date": "2021-03-01", "window_start": w0.isoformat(),
+                           "window_end": (w0 + timedelta(hours=9)).isoformat(), "coverage_pct": 96.0,
+                           "reason_codes": ["clean"], "code_source": "logged", "low_point_mgdl": 84.0, "is_demo": True}],
+        "plans": [{"plan_id": "e2e-plan", "drug_class": "glp1", "drug_label": "semaglutide", "started_at": "2021-02-20",
+                   "steps": [{"index": 0, "dose_label": "0.25 mg", "planned_start": "2021-02-20"}],
+                   "status": "active", "is_demo": True}],
+        "symptom_checks": [{"date": "2021-03-01", "gi": "rough", "is_demo": True}],
+        "buddy_events": [{"event_id": "e2e", "kind": "alert", "at": "2021-02-28T03:00:00", "confidence": "unconfirmed",
+                          "is_demo": True}],
+    }
+    r = client.post("/v1/ingest", json=batch, headers={"X-Device-Id": DEV, "X-Device-Token": "tok-e2e"})
+    assert r.status_code == 200, r.text
+    sw = client.get("/v1/dash/step_watch?demo=true&days=30", headers=OWNER).json()
+    assert sw["device_id"] == f"{DEV}-demo" and sw["plan"]["plan_id"] == "e2e-plan"
+    assert [(n["night_date"], n["reason_codes"], n["code_source"]) for n in sw["rows"]] == [("2021-03-01", ["clean"], "logged")]
+    assert sw["checkins"] == [{"date": "2021-03-01", "gi": "rough"}]
+    bd = client.get("/v1/dash/buddy?demo=true&days=30", headers=OWNER).json()
+    assert sum(w["alerts_unconfirmed"] for w in bd["rows"]) == 1
+    real = client.get("/v1/dash/step_watch?days=60", headers=OWNER).json()
+    assert real["plan"]["plan_id"] != "e2e-plan"                       # demo never drawn as the real device
