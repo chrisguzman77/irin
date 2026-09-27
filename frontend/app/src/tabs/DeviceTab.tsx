@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useBasalNudge } from "../lib/useBasalNudge";
 import { useDevice } from "../lib/device";
-import { pairOwnerDevice } from "../lib/owner";
+import { pairOwnerDevice, takePendingPairCode } from "../lib/owner";
 import TreatingButton from "./buddy/TreatingButton";
 import AckBar from "./device/AckBar";
 import DemoPanel from "./device/DemoPanel";
@@ -23,7 +23,6 @@ type View = (typeof VIEWS)[number] | "Demo";
 // The demo panel is an in-app route (/demo) reached only by its button;
 // loading /demo directly just opens the app, and Back closes the panel.
 const DEMO_PATH = "/demo";
-const HASH_CODE_RE = /^#pair=(\d{6})$/;
 
 export default function DeviceTab() {
   const { target, socket } = useDevice();
@@ -35,12 +34,11 @@ export default function DeviceTab() {
   const [pairing, setPairing] = useState(false);
   const [pairMsg, setPairMsg] = useState("");
 
-  // A QR's link can carry the code (#pair=NNNNNN); never kept in the URL.
+  // App.tsx already read a QR's #pair=NNNNNN (it can land on any remembered
+  // tab) and switched here; take the code the one time this mounts after.
   useEffect(() => {
-    const m = HASH_CODE_RE.exec(location.hash);
-    if (!m) return;
-    setCode(m[1]);
-    history.replaceState(null, "", location.pathname + location.search);
+    const pending = takePendingPairCode();
+    if (pending) setCode(pending);
   }, []);
 
   useEffect(() => {

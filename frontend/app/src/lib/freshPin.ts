@@ -6,7 +6,7 @@
 //
 // postFresh() is the only way to call them; deviceFetch() refuses them.
 
-import { getOwnerPairing } from "./owner";
+import { clearOwnerPairing, getOwnerPairing } from "./owner";
 
 type Prompter = (title: string) => Promise<string | null>;
 
@@ -73,7 +73,14 @@ export async function postFresh(base: string, path: string, body?: unknown, titl
       headers,
       body: body === undefined ? undefined : JSON.stringify(body),
     });
-    if (res.status === 401) return { ok: false, badPin: true, reason: "That PIN was not accepted. Nothing was confirmed." };
+    if (res.status === 401) {
+      const b = (await res.json().catch(() => null)) as { detail?: unknown } | null;
+      if (b && b.detail === "pair this phone with your Irin") {
+        clearOwnerPairing();
+        return { ok: false, reason: "This phone needs to be paired with your Irin again. Nothing was confirmed." };
+      }
+      return { ok: false, badPin: true, reason: "That PIN was not accepted. Nothing was confirmed." };
+    }
     if (!res.ok) {
       const b = (await res.json().catch(() => null)) as { detail?: unknown } | null;
       const detail = b && typeof b.detail === "string" ? b.detail : null;

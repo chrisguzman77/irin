@@ -22,18 +22,38 @@ export interface OwnerPairing {
 // 501 stub there while the relay side is being built in parallel.
 type DevicePairResponse = OwnerPairing;
 
+// useSyncExternalStore compares snapshots with Object.is: parsing fresh on
+// every call would return a new object each time and loop forever once a
+// pairing is stored. Cache keyed on the raw string so the same localStorage
+// contents always yield the same reference.
+let cachedRaw: string | null = null;
+let cachedValue: OwnerPairing | null = null;
+let cachedOnce = false;
+
 function read(): OwnerPairing | null {
+  let raw: string | null;
   try {
-    const raw = localStorage.getItem(KEY);
-    if (!raw) return null;
-    const p = JSON.parse(raw) as Partial<OwnerPairing>;
-    if (typeof p.device_id === "string" && typeof p.device_url === "string" && typeof p.token === "string") {
-      return { device_id: p.device_id, device_url: p.device_url, token: p.token };
-    }
-    return null;
+    raw = localStorage.getItem(KEY);
   } catch {
-    return null;
+    raw = null;
   }
+  if (cachedOnce && raw === cachedRaw) return cachedValue;
+  cachedRaw = raw;
+  cachedOnce = true;
+  if (!raw) {
+    cachedValue = null;
+    return cachedValue;
+  }
+  try {
+    const p = JSON.parse(raw) as Partial<OwnerPairing>;
+    cachedValue =
+      typeof p.device_id === "string" && typeof p.device_url === "string" && typeof p.token === "string"
+        ? { device_id: p.device_id, device_url: p.device_url, token: p.token }
+        : null;
+  } catch {
+    cachedValue = null;
+  }
+  return cachedValue;
 }
 
 export function getOwnerPairing(): OwnerPairing | null {
@@ -115,4 +135,19 @@ export async function unpairOwnerDevice(): Promise<{ ok: true } | { ok: false; n
   } catch {
     return { ok: false, note: "Disconnected on this phone, but Irin's relay could not be reached." };
   }
+}
+
+// A QR's #pair=NNNNNN can land on whichever tab App.tsx last remembered, not
+// necessarily Device. App.tsx reads and clears the hash once on load and
+// leaves the code here; DeviceTab takes it the one time it mounts after.
+let pendingPairCode: string | null = null;
+
+export function setPendingPairCode(code: string): void {
+  pendingPairCode = code;
+}
+
+export function takePendingPairCode(): string | null {
+  const c = pendingPairCode;
+  pendingPairCode = null;
+  return c;
 }
