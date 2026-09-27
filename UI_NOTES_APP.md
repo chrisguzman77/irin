@@ -1,0 +1,14 @@
+# UI notes — the Irin app (frontend/app)
+
+Collected while walking the app as a user (local demo data). One row per change.
+Priority: P1 = before judging, P2 = nice to have, P3 = later.
+Owner: "app" = visual change on this branch (frontend/app/src only);
+anything else names who must do it (Chris: backend/relay/cloud/contracts).
+
+| # | Screen | What | Why | Priority | Owner | Status |
+|---|--------|------|-----|----------|-------|--------|
+| 1 | Device → Live | Brand palette from the logo (ink #2E2F29, leaf #7F9C6F, mint #B1D2BD, cream #EEEEEA) as `irin-*` theme colours in index.css; the reading sits in a rounded warm card with a "Your glucose right now" label, cream number, mint trend arrow, forecast as a soft pill; basal nudge and the Live/Log/Reports/Settings pills in mint/ink. DEMO bar, stale grey + strike-through, red forecast under 70, HIGH and acked-low pills unchanged. | Feel friendly, warm and trustworthy; match the brand and the kiosk's mint | P1 | app | done, not committed |
+| 2 | Device → Live | Reading time in 12-hour AM/PM ("last reading 2:19 PM") instead of 24-hour | Kiosk switched to 12-hour; the two screens should agree | P2 | app | done, not committed |
+| 3 | Whole app (shell) | Page background and top tab bar in brand ink (#2E2F29) instead of pure black; active-tab underline mint instead of amber; inactive tabs sage. Live card lifted to a lighter surface with a soft leaf border | The first look was too subtle (olive on black); warm the whole page so it feels friendly and trustworthy | P1 | app | done, not committed |
+| 4 | Device → Demo panel | Calm regrouping, same controls and same requests: four brand-coloured groups (Playback · Show a moment · Doctor/Irin Rounds · Night Buddy), each control with a plain name and a one-line explanation under it; pill buttons (mint = main action, outlined = secondary); LIVE/DEMO as a rounded switch (LIVE leaf green, DEMO amber kept); the Pi's reply now pinned at the bottom of the screen instead of the top; Inject stays red. Hint wording tidied; buddy-rung hint no longer says "arrives with the Night Buddy tier" (it has landed). | Easier to understand at the demo table, calm feel, nothing removed | P1 | app | done, not committed |
+| 5 | Device → Demo panel | Second pass, same controls and requests: colour flows leaf → mint → sage down the page (each group washed with its tint, a two-tone brand wave under the mode switch, leaf→mint gradient on main buttons, the selected speed and the LIVE side); single-action controls are now one row with the button on the right (Sensor feed, Basal nudge, Spark, Latest evaluations, Buddy rung); paired buttons in a 2-column grid; step/day side by side with Jump full width under the date; Brain only is an on/off switch; mg/dL sits inside the inject field. | Smoother, simpler, calmer; less scrolling and clearer where to tap | P1 | app | done, not committed |
