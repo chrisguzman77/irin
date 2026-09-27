@@ -3,8 +3,8 @@ import type { components } from "../../types/pi";
 import { deviceFetch, PinRejected } from "../../lib/api";
 import type { StateSnapshot } from "../../lib/contracts";
 import {
-  basalNudge, buddyRung, injectLow, listScenarios, playScenario, seek, setBrainOnly, setPaused, setSpeed, sparkOffer,
-  type ScenarioList, type SeekResult,
+  basalNudge, buddyRung, injectLow, listScenarios, playScenario, seek, sendEvaluatedCard, setBrainOnly, setPaused, setSpeed,
+  sparkOffer, type ScenarioList, type SeekResult,
 } from "../../lib/demo";
 import { sendSampleCard, type SampleFixture } from "../../lib/cards";
 
@@ -351,6 +351,36 @@ export default function DemoPanel({ snap, baseUrl, onClose }: { snap: StateSnaps
           >
             {brainOnly ? "Brain only (tap for Bedside)" : "Bedside (tap for Brain only)"}
           </button>
+        </Control>
+
+        <Control title="Send the real card" hint="today's card from the engine: Brain only, or Bedside and Brain side by side">
+          <div className="flex gap-2">
+            {(
+              [
+                ["brain", "Brain-only"],
+                ["both", "Bedside + Brain"],
+              ] as const
+            ).map(([m, label]) => (
+              <button
+                key={m}
+                type="button"
+                className={`${btn} flex-1 bg-neutral-900 text-neutral-200`}
+                onClick={() =>
+                  run(async () => {
+                    const r = await sendEvaluatedCard(baseUrl, m);
+                    if (!r.ok) return r.reason;
+                    const lines = r.body.cards.map(
+                      (c) => `${c.card_id.includes("brain") ? "Brain" : "Bedside"} ${c.kind.replace(/_/g, " ")}: ${SEND_OUTCOME[c.status] ?? c.status}`,
+                    );
+                    setMsg({ text: lines.join(" ") || "No card was due.", error: r.body.cards.some((c) => c.status === "no_recipient") });
+                    return "";
+                  }, "")
+                }
+              >
+                {label}
+              </button>
+            ))}
+          </div>
         </Control>
 
         <Control title="Simulate a Spark offer" hint="Impiricus Spark (simulated) offers the scenario's plan">

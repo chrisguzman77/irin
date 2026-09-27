@@ -91,3 +91,11 @@ export const sparkOffer = (base: string) =>
   postJson<{ message_id: string; plan_id: string; status: string }>(base, "spark_offer");
 /** 404 until the Night Buddy tier lands. */
 export const buddyRung = (base: string) => postJson<{ status: string }>(base, "buddy_rung");
+
+/** R14(c) Brain versus Bedside: the real engine's current card (the Step Watch
+ * card, else the Basal Check), sealed as the bedside device, as Brain only, or
+ * both side by side. Brain only changes confidence labels, never a row. */
+export type SendMode = "bedside" | "brain" | "both";
+export interface SentCard { card_id: string; kind: string; program: string; status: string; recipients: string[]; is_demo: boolean }
+export const sendEvaluatedCard = (base: string, mode: Exclude<SendMode, "bedside">) =>
+  postJson<{ mode: SendMode; cards: SentCard[] }>(base, "send_card", { mode });
