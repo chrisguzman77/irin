@@ -64,6 +64,8 @@ const SOUNDING = ["pending", "active", "rearmed"]; // pending = the predicted-lo
 
 const toMs = (iso) => new Date(iso).getTime(); // naive Pi-local timestamps; only differences matter
 const hhmm = (ms) => new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
+// the top-right clock only: 12-hour with AM/PM ("9:29 PM"), George's choice
+const hm12 = (ms) => new Date(ms).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true });
 
 // --- data ---
 
@@ -305,7 +307,7 @@ function render() {
   $("night-clock").textContent = now === null ? "--:--" : hhmm(now);
   // top-right clock: the Pi's time, blank until the Pi's clock has synced (no
   // RTC battery: an unsynced wall clock is untrusted and is never shown as the time)
-  $("topclock").textContent = now === null || !state.clockSynced ? "" : hhmm(now);
+  $("topclock").textContent = now === null || !state.clockSynced ? "" : hm12(now);
   const pred = predictionText();
   for (const id of ["prediction", "night-prediction"]) {
     $(id).textContent = pred ?? "";
