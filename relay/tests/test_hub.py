@@ -271,3 +271,17 @@ def test_buddy_alert_rides_cards_to_the_watchers_inbox(c):
     inbox = c.get(f"/v0/inbox/{buddy_id}", headers=watcher).json()
     assert [(m["kind"], m["card_id"]) for m in inbox] == [("buddy_alert", "alert-1"), ("buddy_alert", "alert-2")]
     assert inbox[0]["created_at"].endswith("+00:00")
+
+
+def test_a_plain_script_from_the_device_is_sealed_at_rest_and_opens_for_the_holder(c, clock):
+    """The device sends {steps} in the clear over the key-gated route; the relay seals it."""
+    _, h1 = pair(c, "f1" * 16)
+    body = {"listing_id": "LP", "first_name": "Sam", "confidence": "device_confirmed", "elapsed_min": 12, "urgency": 5,
+            "is_demo": True, "event_id": "ev-p", "script": {"steps": STEPS}}
+    assert c.post("/v0/hub/listing", json=body, headers=SRC).status_code == 200
+    dump = json.dumps([store.public(d) for d in store.db()["hub_listings"].find()], default=str)
+    assert all(step not in dump for step in STEPS)
+    cid = c.post("/v0/hub/claim", json={"listing_id": "LP"}, headers=h1).json()["claim_id"]
+    assert c.get(f"/v0/hub/claim/{cid}/script", headers=h1).json() == {"steps": STEPS}
+    bad = {**body, "listing_id": "LQ", "script": {"steps": STEPS, "phone": "555"}}
+    assert c.post("/v0/hub/listing", json=bad, headers=SRC).status_code == 422

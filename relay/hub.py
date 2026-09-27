@@ -73,6 +73,7 @@ class ListingIn(BaseModel):
     event_id: str = Field(pattern=ID)
     script_ciphertext: str | None = Field(default=None, pattern=B64, max_length=20_000)
     script_nonce: str | None = Field(default=None, pattern=B64, max_length=64)
+    script: dict | None = None  # {steps: [str]} in the clear over the key-gated route; sealed at rest here
 
     @model_validator(mode="before")
     @classmethod
@@ -180,6 +181,16 @@ def _live_claim(claim_id: str, volunteer: dict) -> dict:
 async def post_listing(req: ListingIn, source_key: str = Depends(_source)) -> dict:
     """Open or refresh a listing (upsert by listing_id; the device re-posts
     with a new elapsed_min). Status is the relay's, never the body's."""
+    if req.script is not None:
+        if req.script_ciphertext is not None:
+            raise HTTPException(status_code=422, detail="send script or script_ciphertext, not both")
+        steps = req.script.get("steps")
+        if set(req.script) != {"steps"} or not isinstance(steps, list) or not all(isinstance(x, str) and len(x) <= 500 for x in steps) or len(steps) > 20:
+            raise HTTPException(status_code=422, detail="the script must be {steps: [str]} (at most 20 steps of 500 chars)")
+        box = SecretBox(SCRIPT_KEY)  # the demo tier: encrypted at rest with the relay's key, opened only for the live claim-holder
+        sealed = box.encrypt(json.dumps({"steps": steps}).encode())
+        req = req.model_copy(update={"script": None, "script_ciphertext": base64.b64encode(sealed.ciphertext).decode(),
+                                     "script_nonce": base64.b64encode(sealed.nonce).decode()})
     if (req.script_ciphertext is None) != (req.script_nonce is None):
         raise HTTPException(status_code=422, detail="script_ciphertext and script_nonce travel together")
     if req.script_ciphertext is not None:
