@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { PinRejected } from "../../lib/api";
-import { hhmm, postTreating, readBuddyState } from "../../lib/buddy";
+import { buddyCalled, hhmm, postTreating, readBuddyState } from "../../lib/buddy";
 import type { StateSnapshot } from "../../lib/contracts";
 
 // B1: one giant "I'm treating" while the snapshot's buddy_state.open_alert is
@@ -46,6 +46,7 @@ export default function TreatingButton({ snap, baseUrl }: { snap: StateSnapshot 
       ) : (
         <p className="text-sm text-neutral-400 text-center">Your buddy has been alerted. One tap tells them you are on it.</p>
       )}
+      {buddyCalled(snap) && <p className="text-sm text-sky-200 text-center">Your buddy called through the relay.</p>}
       {err && <p role="status" className="text-sm text-red-400 text-center">{err}</p>}
     </div>
   );
