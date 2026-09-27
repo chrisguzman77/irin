@@ -499,7 +499,7 @@ def test_b5_morning_line_after_a_quiet_night_is_the_template_sealed_to_the_buddy
     [(env, payload)] = _lines(rig)  # the demo buddy only: never the doctor, never the real-world buddy
     assert env["recipient_id"] == "buddy-demo" and env["program"] == "buddy" and env["is_demo"] is True
     assert env["card_id"] == "bl-2019-12-31"
-    assert payload == {"line": quiet, "kind": "buddy_line", "night_date": "2019-12-31"}
+    assert payload == {"line": quiet, "kind": "buddy_line", "night_date": "2019-12-31", "line_kind": "morning", "listing_id": None}
     assert {"event": "morning", "line": quiet, "night_date": "2019-12-31"} in rig.updates  # live to an open app
 
 
@@ -521,7 +521,10 @@ def test_b5_close_out_after_a_resolved_episode_broadcast_sealed_and_kept_for_the
     assert {"listing_id": listing_id, "event": "resolved", "line": line} in rig.updates
     [(env, payload)] = _lines(rig)
     assert env["recipient_id"] == "buddy-demo" and payload["line"] == line and payload["night_date"] == "2019-12-31"
-    text = json.dumps(payload) + json.dumps([u for u in rig.updates if "line" in u])
+    assert payload["line_kind"] == "close_out" and payload["listing_id"]  # the watcher closes exactly this alert
+    ids = ("listing_id", "event_id")  # ids carry timestamp digits; the check is for glucose values in the words
+    text = json.dumps({k: v for k, v in payload.items() if k not in ids}) + json.dumps(
+        [{k: v for k, v in u.items() if k not in ids} for u in rig.updates if "line" in u])
     assert "61.7" not in text and "80" not in text and "95" not in text and "mg" not in text.lower()
     # the next ledger row keeps the close-out as that night's line, re-sent under the same card_id
     rig.rung.on_night(_record())
