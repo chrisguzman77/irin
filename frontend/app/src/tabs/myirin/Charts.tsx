@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type {
-  AlarmRow, BasalRow, HeatRow, NearMissRow, NightRow, ProfileRow, SensorRow, TirRow, UnderTheHood,
+  AlarmRow, BasalRow, BuddyRow, HeatRow, NearMissRow, NightRow, ProfileRow, SensorRow, StepNightRow, StepWatchBody, TirRow,
+  UnderTheHood,
 } from "../../lib/dash";
 
 // One small SVG drawing per dashboard, from the fields cloud/README.md pins and
@@ -326,5 +327,93 @@ export function UnderTheHoodView({ u }: { u: UnderTheHood }) {
         </div>
       ))}
     </dl>
+  );
+}
+
+// ------------------------------------------------------------ step_watch: low point against the baseline band
+
+const GI_COLOR: Record<string, string> = { fine: "#34d399", rough: "#f59e0b", cant_eat: "#ef4444" };
+const GI_LABEL: Record<string, string> = { fine: "fine", rough: "rough", cant_eat: "can't eat" };
+
+export function StepWatchChart({ body, rows }: { body: StepWatchBody; rows: StepNightRow[] }) {
+  const H = 150, top = 8, bot = 112, x0 = 34;
+  const sorted = [...rows].sort((a, b) => a.night_date.localeCompare(b.night_date));
+  const base = body.baseline?.low_point_mgdl ?? null;
+  const vals = sorted.map((r) => r.low_point_mgdl).filter((v): v is number => v !== null);
+  const lo = Math.min(54, ...vals, base ?? 200) - 5, hi = Math.max(120, ...vals, base ?? 0) + 5;
+  const n = sorted.length;
+  const x = (i: number) => x0 + (n <= 1 ? (W - x0 - 10) / 2 : (i / (n - 1)) * (W - x0 - 10));
+  const y = (v: number) => bot - ((v - lo) / (hi - lo)) * (bot - top);
+  const idx = new Map(sorted.map((r, i) => [r.night_date, i]));
+  const plan = body.plan;
+  return (
+    <div className="flex flex-col gap-2">
+      {plan && (
+        <p className="text-sm text-neutral-300">
+          {plan.drug_label} · {plan.status} · since {md(plan.started_at)} ·{" "}
+          {plan.steps.map((s) => `${s.dose_label} from ${md(s.planned_start)}`).join(", ")}
+        </p>
+      )}
+      <svg viewBox={`0 0 ${W} ${H}`} className="w-full" role="img" aria-label="nightly low point against baseline">
+        <Axis y={y(70)} label="70" x0={x0} color="#7f1d1d" />
+        {base !== null && <Axis y={y(base)} label={String(Math.round(base))} x0={x0} dash color="#a3a3a3" />}
+        {sorted.map((r, i) =>
+          r.low_point_mgdl === null ? null : (
+            <circle key={r.night_date} cx={x(i)} cy={y(r.low_point_mgdl)} r="3.5"
+              fill={r.coverage_pct < 85 ? "none" : "#e5e5e5"} stroke="#e5e5e5" strokeWidth="1.5">
+              <title>{`${md(r.night_date)}: low ${Math.round(r.low_point_mgdl)}${
+                r.vs_baseline_mgdl !== null ? ` (${r.vs_baseline_mgdl > 0 ? "+" : ""}${num1(r.vs_baseline_mgdl)} vs baseline)` : ""
+              }, ${r.minutes_below_70} min under 70, coverage ${num1(r.coverage_pct)}%; ${r.reason_codes.join(", ")} (${r.code_source})`}</title>
+            </circle>
+          ),
+        )}
+        {/* the tolerance strip: one mark per answered check-in; a missing day is absent */}
+        {(body.checkins ?? []).map((c) =>
+          idx.has(c.date) ? (
+            <rect key={c.date} x={x(idx.get(c.date)!) - 3} y={bot + 8} width="6" height="8" fill={GI_COLOR[c.gi] ?? "#737373"}>
+              <title>{`${md(c.date)}: ${GI_LABEL[c.gi] ?? c.gi}`}</title>
+            </rect>
+          ) : null,
+        )}
+        {/* adherence: one dot per logged shot, hollow when not confirmed */}
+        {(body.injections ?? []).map((j) => {
+          const i = idx.get(j.time.slice(0, 10));
+          return i === undefined ? null : (
+            <circle key={j.time} cx={x(i)} cy={bot + 24} r="3" fill={j.confirmed ? "#60a5fa" : "none"} stroke="#60a5fa">
+              <title>{`${md(j.time)} ${j.time.slice(11, 16)}: ${j.dose_label ?? "shot"}${j.confirmed ? "" : " (not confirmed)"}`}</title>
+            </circle>
+          );
+        })}
+        {n > 0 && <Ends first={md(sorted[0].night_date)} last={md(sorted[n - 1].night_date)} y={H - 2} />}
+      </svg>
+      <p className="text-xs text-neutral-500">
+        Dots: each night&apos;s low point (hollow = coverage under 85%). Dashed line: baseline
+        {body.baseline && base !== null ? `, median of ${body.baseline.nights} nights ${md(body.baseline.from)}–${md(body.baseline.to)}` : " (none)"}.
+        Strip: stomach check-ins (green fine, amber rough, red can&apos;t eat). Blue: shots taken. Reason codes are marked logged
+        or inferred in each night&apos;s detail; your doctor&apos;s card says what a shift means, not this picture.
+      </p>
+    </div>
+  );
+}
+
+// ------------------------------------------------------------ buddy: events per week
+
+export function BuddyChart({ rows }: { rows: BuddyRow[] }) {
+  const sorted = [...rows].sort((a, b) => a.week.localeCompare(b.week));
+  const sum = (k: keyof BuddyRow) => sorted.reduce((s, r) => s + (r[k] as number), 0);
+  return (
+    <div className="flex flex-col gap-2">
+      <WeekBars
+        weeks={sorted.map((r) => r.week)}
+        stacks={[
+          { key: "confirmed", color: "#38bdf8", values: sorted.map((r) => r.alerts_device_confirmed) },
+          { key: "unconfirmed", color: "#737373", values: sorted.map((r) => r.alerts_unconfirmed) },
+        ]}
+        legend={`Buddy alerts per week: blue device-confirmed (${sum("alerts_device_confirmed")}), grey unconfirmed (${sum("alerts_unconfirmed")}).`}
+      />
+      <p className="text-xs text-neutral-400">
+        In all: {sum("claims")} claimed, {sum("calls")} calls, {sum("treating")} marked treating, {sum("resolved")} resolved.
+      </p>
+    </div>
   );
 }

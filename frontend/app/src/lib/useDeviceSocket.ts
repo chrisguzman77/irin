@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { applyTreatingSet } from "./buddy";
 import { addMessage, removeMessage } from "./doctorMessages";
 import { recallItems, type RecallItem } from "./recall";
 import type { AlarmState, Forecast, Reading, Settings, StateSnapshot, WSMessage } from "./contracts";
@@ -66,6 +67,8 @@ export function applyMessage(snap: StateSnapshot | null, msg: WSMessage): StateS
     case "symptom_check_due":
       // the same keys as GET /api/rounds/checkin; todays_checkin_status also carries the recalls
       return { ...snap, todays_checkin_status: { ...(snap.todays_checkin_status ?? {}), ...p } };
+    case "treating_set":
+      return applyTreatingSet(snap, p);
     case "presence_change":
       return { ...snap, presence: ((p.presence ?? p) as unknown) as StateSnapshot["presence"] };
     default:
