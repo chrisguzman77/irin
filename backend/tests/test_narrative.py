@@ -333,3 +333,20 @@ def test_no_scope_means_memory_off(monkeypatch):
 def test_second_opinion_prompt_loads():
     system, user = narrative._second_opinion_prompt()
     assert "invented_number" in system and "{narrative_text}" in user
+
+
+def test_card_echoing_the_headline_dose_ships_the_template_and_step_n_passes(monkeypatch, live):
+    """The Step Watch headline shows the dose ("Step 2 (5 mg)"); the narrative never repeats it."""
+    ctx = {**CARD_CONTEXT, "kind": "step_check", "headline": "Step 2 (5 mg), days 3 to 7."}
+    metrics = {**CARD_METRICS, "step_index": 2, "headline_numbers": [5.0, 3.0, 7.0]}
+    Fakes(monkeypatch, backboard="During Step 2 (5 mg), overnight glucose rose on 6 of 8 clean nights.",
+          backboard_opinion=CLEAN)
+    assert narrative.generate("card", ctx, metrics) == template("card", ctx, metrics)
+    good = "During step 2, overnight glucose rose on 6 of 8 clean nights."
+    Fakes(monkeypatch, backboard=good, backboard_opinion=CLEAN)
+    assert narrative.generate("card", ctx, metrics) == good
+
+
+def test_card_prompt_forbids_any_dose_even_the_headlines():
+    s = narrative.CARD_SYSTEM.lower()
+    assert "drug strength" in s and "even" in s and "headline" in s and "this step" in s
