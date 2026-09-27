@@ -228,3 +228,26 @@ def test_pairing_state_broadcast_reaches_the_loop_from_a_worker_thread(monkeypat
             msg = json.loads(ws.receive_text())
             assert msg["type"] == "pairing_state" and msg["payload"]["status"] == "awaiting_scan"
         main.runtime.pairing.pending = None
+
+
+def test_card_narrative_runs_the_chain_off_the_loop_and_falls_back_to_the_template(monkeypatch):
+    """R13 wiring: with_narrative asks narrative.generate for task "card" in a worker
+    thread; the template mode (every laptop and the suite) returns the template."""
+    from app.rounds import narrative
+    from app.rounds.cards import template_narrative, with_narrative
+
+    card = fixture_card()
+    seen = {}
+
+    def fake(task, context, metrics):
+        seen.update(task=task, on_loop=narrative._on_event_loop(), kind=context["kind"])
+        return "Validated text."
+
+    monkeypatch.setattr(narrative, "generate", fake)
+    out = asyncio.run(with_narrative(card))
+    assert out.narrative == "Validated text." and seen == {"task": "card", "on_loop": False, "kind": card.kind}
+    monkeypatch.setattr(narrative, "generate", lambda *a: (_ for _ in ()).throw(RuntimeError("down")))
+    assert asyncio.run(with_narrative(card)).narrative == card.narrative  # any failure: the stored template stands
+    monkeypatch.undo()
+    real = asyncio.run(with_narrative(card))  # NARRATIVE_BACKEND=template in the suite
+    assert real.narrative == template_narrative(card.kind, card.headline, card.metrics, card.confidence)
