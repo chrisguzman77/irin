@@ -53,6 +53,10 @@ class Forwarder:
     treatments: RowidRows = _no_rows
     alarm_events: RowidRows = _no_rows  # R2
     low_events: RowidRows = _no_rows  # R4
+    night_records: RowidRows = _no_rows  # C5: the step_watch dashboard's nights strip
+    plans: RowidRows = _no_rows
+    symptom_checks: RowidRows = _no_rows
+    buddy_events: RowidRows = _no_rows  # B2+: the buddy dashboard
     replay_readings: ReplayRows = _no_replay  # (run key, rows) while the replay source is active
     cloud_url: str = ""
     device_id: str = ""
@@ -79,7 +83,9 @@ class Forwarder:
     def batch(self) -> tuple[dict[str, Any], dict[str, int], datetime | None] | None:
         """(payload, new rowid cursors, new replay cursor), or None when nothing is new."""
         sources = {"readings": self.readings, "treatments": self.treatments,
-                   "alarm_events": self.alarm_events, "low_events": self.low_events}
+                   "alarm_events": self.alarm_events, "low_events": self.low_events,
+                   "night_records": self.night_records, "plans": self.plans,
+                   "symptom_checks": self.symptom_checks, "buddy_events": self.buddy_events}
         lists: dict[str, list[dict[str, Any]]] = {}
         advance: dict[str, int] = {}
         for name, fn in sources.items():
@@ -161,6 +167,12 @@ class Forwarder:
 
 
 def from_config(replay_readings: ReplayRows) -> Forwarder:
+    def table(name):
+        return lambda after, limit: store.select_json_rows(name, after, limit)
+
     return Forwarder(readings=store.select_reading_rows, treatments=store.select_treatment_rows,
+                     alarm_events=table("alarm_events"), low_events=table("low_events"),
+                     night_records=table("night_records"), plans=table("plans"),
+                     symptom_checks=table("symptom_checks"), buddy_events=table("buddy_events"),
                      replay_readings=replay_readings, cloud_url=config.CLOUD_URL, device_id=config.DEVICE_ID,
                      device_token=config.DEVICE_TOKEN)
