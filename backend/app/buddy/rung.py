@@ -444,7 +444,7 @@ class BuddyRung:
         except Exception:
             log.exception("buddy close-out line failed")
             return
-        self.morning = {"line": line, "kind": "close_out", "night_date": night.isoformat()}
+        self.morning = {"line": line, "kind": "close_out", "night_date": night.isoformat(), "listing_id": listing_id}
         self._update({"listing_id": listing_id, "event": "resolved", "line": line})
         await self._deliver_line(dict(self.morning), demo)
 
@@ -486,7 +486,9 @@ class BuddyRung:
         """Sealed {line, kind: buddy_line, night_date} to every paired buddy of this world."""
         if not self.settings.night_buddy.have_buddy:
             return 0
-        payload = {"line": morning["line"], "kind": "buddy_line", "night_date": morning["night_date"]}
+        # line_kind + listing_id let the watcher close exactly the alert this close-out belongs to
+        payload = {"line": morning["line"], "kind": "buddy_line", "night_date": morning["night_date"],
+                   "line_kind": morning.get("kind", "morning"), "listing_id": morning.get("listing_id")}
         sent = 0
         for p in self.recipients(demo):
             if p.peer_kind != "buddy" or p.is_demo != demo:
