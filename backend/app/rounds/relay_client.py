@@ -32,6 +32,7 @@ class RelayClient:
     on_messages: Callable[[list[dict]], Any] | None = None  # R9 consumes doctor messages
     on_pairings: Callable[[list[dict]], Any] | None = None  # R5: revocations from the inbox
     on_tick: Callable[[], Any] | None = None  # R7: retry unsent cards
+    on_calls: Callable[[list[dict]], Any] | None = None  # B4: brokered buddy calls [{listing_id, claim_id, at}]
     polls: int = 0
     failures: int = 0
     last_error: str | None = None
@@ -74,6 +75,24 @@ class RelayClient:
             self.last_error = f"resolution: {type(e).__name__}"
             return False
 
+    async def post_hub(self, path: str, body: dict[str, Any]) -> bool:
+        """B2/B4: POST /v0/hub/{listing | resolve | treating}. True when the relay took it."""
+        if not self.enabled:
+            return False
+        try:
+            async with self._client() as c:
+                r = await c.post(f"/v0/hub/{path}", json=body)
+            if r.status_code != 200:
+                self.last_error = f"hub {path}: {r.status_code} {r.text[:120]}"
+                log.warning("relay refused hub %s: %s", path, self.last_error)
+                return False
+            return True
+        except httpx.HTTPError as e:
+            self.failures += 1
+            self.last_error = f"hub {path}: {type(e).__name__}"
+            log.warning("relay unreachable for hub %s (%s)", path, type(e).__name__)
+            return False
+
     async def poll(self) -> dict[str, Any] | None:
         """One poll; hands messages and pairing states to the observers."""
         if not self.enabled:
@@ -91,7 +110,7 @@ class RelayClient:
             return None
         self.polls += 1
         self.last_error = None
-        for observer, key in ((self.on_pairings, "pairings"), (self.on_messages, "messages")):
+        for observer, key in ((self.on_pairings, "pairings"), (self.on_messages, "messages"), (self.on_calls, "calls")):
             if observer is not None and body.get(key):
                 try:
                     result = observer(body[key])
