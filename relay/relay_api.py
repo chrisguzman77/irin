@@ -199,6 +199,9 @@ async def pair_revoke(pairing_id: str, x_source_key: str | None = Header(default
 # ---------------------------------------------------------------- cards and the inbox (R6/R7)
 
 
+BUDDY_KINDS = ("buddy_alert", "buddy_line")  # the only envelope kinds a buddy pairing receives
+
+
 class Envelope(BaseModel):
     recipient_id: str = Field(pattern=ID)
     sender_id: str = Field(pattern=ID)
@@ -206,7 +209,7 @@ class Envelope(BaseModel):
     ciphertext: str = Field(pattern=B64, max_length=400_000)
     source: Literal["irin_bedside", "irin_brain"]
     kind: str = Field(pattern=r"^[a-z_]{1,40}$")
-    program: Literal["standing", "step_watch", "buddy"] | None = None  # buddy (or absent) for kind buddy_alert
+    program: Literal["standing", "step_watch", "buddy"] | None = None  # buddy (or absent) for buddy_alert / buddy_line
     is_demo: bool = False
     card_id: str | None = Field(default=None, pattern=ID)
 
@@ -225,15 +228,15 @@ async def post_card(env: Envelope, source_key: str = Depends(require_source_key)
     pairing = _owned(_confirmed_pairing(env.recipient_id), source_key)
     if pairing["is_demo"] != env.is_demo:
         raise HTTPException(status_code=409, detail="is_demo does not match the pairing")
-    # a buddy pairing receives buddy alerts and nothing else (no card ever reaches a buddy);
-    # a doctor pairing never receives a buddy alert
+    # a buddy pairing receives buddy alerts and buddy lines and nothing else (no card ever reaches a buddy);
+    # a doctor pairing never receives either
     is_buddy = pairing.get("peer_kind") == "buddy"
-    if is_buddy != (env.kind == "buddy_alert"):
-        raise HTTPException(status_code=409, detail="buddy_alert goes to a buddy pairing, and only buddy_alert does")
+    if is_buddy != (env.kind in BUDDY_KINDS):
+        raise HTTPException(status_code=409, detail="buddy_alert and buddy_line go to a buddy pairing, and only they do")
     if is_buddy and env.program not in (None, "buddy"):
-        raise HTTPException(status_code=422, detail="a buddy_alert's program is absent or buddy")
+        raise HTTPException(status_code=422, detail="a buddy envelope's program is absent or buddy")
     if not is_buddy and env.program == "buddy":
-        raise HTTPException(status_code=422, detail="program buddy is for buddy_alert only")
+        raise HTTPException(status_code=422, detail="program buddy is for buddy_alert and buddy_line only")
     doc = {**env.model_dump(), "created_at": store.now()}
     coll = store.db()["cards"]
     if env.card_id:
