@@ -1,13 +1,23 @@
 /* Kiosk display: dark, glanceable from across the room. Sized in vw/vh so it
-   fits whatever panel the Pi drives. */
+   fits whatever panel the Pi drives.
+   Base theme = the Irin brand palette (docs/brand/README.txt): charcoal
+   background, off-white text, sage accents, mint for the prediction. The
+   SAFETY colours (--amber, --red, --grey, and every alarm / DEMO / STALE /
+   HIGH / DISCONNECTED style below) are deliberately not brand colours: they
+   must stay loud and unmistakable. */
 :root {
-  --bg: #000;
-  --fg: #eee;
-  --dim: #888;
-  --faint: #444;
-  --grey: #777;
-  --amber: #ffb000;
-  --red: #ff3b30;
+  --bg: #2E2F29;          /* brand Charcoal */
+  --bg-night: #161713;    /* charcoal, darkened: the night screen must not light the room */
+  --panel: #37382F;       /* tiles, buttons: one step above the background */
+  --line: #4A4C41;        /* borders, gridlines */
+  --fg: #EFEEEA;          /* brand Off-white */
+  --dim: #A9AA9E;         /* warm grey for labels */
+  --faint: #6C6E62;
+  --sage: #7D9B6E;        /* brand Sage green */
+  --mint: #B1D2BD;        /* brand Mint */
+  --grey: #777;           /* stale: unchanged */
+  --amber: #ffb000;       /* warning / DEMO / high: unchanged */
+  --red: #ff3b30;         /* low / disconnected: unchanged */
 }
 
 html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
@@ -17,7 +27,7 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
   flex-wrap: wrap; z-index: 25; pointer-events: none; } /* above the alarm takeover: DEMO is on every screen */
 .flag { font-weight: 800; padding: 0.6vh 1.2vw; border-radius: 0.4rem; font-size: 2.2vh; letter-spacing: 0.04em; }
 .flag-demo { background: var(--amber); color: #000; font-size: 3vh; }
-.flag-clock { background: #333; color: var(--fg); border: 1px solid var(--grey); }
+.flag-clock { background: var(--line); color: var(--fg); border: 1px solid var(--grey); }
 .flag-stale { background: var(--grey); color: #000; }
 .flag-disc { background: var(--red); color: #fff; }
 
@@ -29,12 +39,12 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
 #now { grid-area: now; display: flex; flex-direction: column; justify-content: center; align-items: center; }
 #reading { display: flex; align-items: center; gap: 1.5vw; line-height: 1; }
 #glucose { font-size: min(12.5vw, 34vh); font-weight: 750; font-variant-numeric: tabular-nums; }
-#trend { font-size: min(10vw, 18vh); color: #bbb; }
+#trend { font-size: min(10vw, 18vh); color: #D6D5CE; }
 #units { font-size: 2.6vh; color: var(--dim); margin-top: 0.5vh; }
 #reading-time { font-size: 2.4vh; color: var(--dim); margin-top: 1vh; }
 /* The 30-min prediction: under the number, smaller, and the same colour as the
    graph's dotted line (PREDICTION_COLOR in display.js). */
-.prediction { color: #B1D2BD; font-size: 3.4vh; font-weight: 500; margin-top: 0.8vh; text-align: center; }
+.prediction { color: var(--mint); font-size: 3.4vh; font-weight: 500; margin-top: 0.8vh; text-align: center; }
 #night-prediction { font-size: 2.6vh; margin-top: 1.5vh; opacity: 0.7; }  /* dimmed like the rest of the night screen */
 
 /* Stale or disconnected: the number is never shown as fresh. */
@@ -46,7 +56,7 @@ body.is-stale #glucose { text-decoration: line-through; text-decoration-thicknes
 #graph { position: absolute; inset: 0; width: 100%; height: 100%; }
 
 #tiles { grid-area: tiles; display: grid; grid-template-columns: repeat(3, 1fr); gap: 2vw; }
-.tile { border: 1px solid #222; border-radius: 0.8rem; padding: 1.2vh 1.5vw; background: #0b0b0b; }
+.tile { border: 1px solid var(--line); border-radius: 0.8rem; padding: 1.2vh 1.5vw; background: var(--panel); }
 .tile-label { font-size: 2.2vh; color: var(--dim); text-transform: uppercase; letter-spacing: 0.06em; }
 .tile-value { font-size: 5.5vh; font-weight: 700; font-variant-numeric: tabular-nums; margin-top: 0.3vh; }
 .tile-note { font-size: 1.8vh; color: var(--faint); min-height: 1.8vh; }
@@ -62,12 +72,13 @@ body.is-stale #glucose { text-decoration: line-through; text-decoration-thicknes
 
 /* --- Night: dim clock, smaller number (step 2) --- */
 #night { height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; }
-#night-clock { font-size: min(26vw, 45vh); font-weight: 300; color: #3a3a3a; font-variant-numeric: tabular-nums; line-height: 1; }
-#night-reading { display: flex; align-items: center; gap: 1.2vw; margin-top: 3vh; color: #6a6a6a; }
+body.mode-night { background: var(--bg-night); }
+#night-clock { font-size: min(26vw, 45vh); font-weight: 300; color: #4A4B42; font-variant-numeric: tabular-nums; line-height: 1; }
+#night-reading { display: flex; align-items: center; gap: 1.2vw; margin-top: 3vh; color: #8C8D82; }
 #night-glucose { font-size: min(9vw, 16vh); font-weight: 700; font-variant-numeric: tabular-nums; }
 #night-trend { font-size: min(5vw, 9vh); }
 body.mode-night .flag-clock { opacity: 0.75; } /* DEMO, STALE, DISCONNECTED stay full strength */
-body.mode-night.is-stale #night-glucose, body.mode-night.is-disconnected #night-glucose { color: #3a3a3a; }
+body.mode-night.is-stale #night-glucose, body.mode-night.is-disconnected #night-glucose { color: #45463E; }
 body.mode-night.is-stale #night-glucose { text-decoration: line-through; }
 
 /* --- Morning: overnight summary (step 2) --- */
@@ -77,8 +88,8 @@ body.mode-night.is-stale #night-glucose { text-decoration: line-through; }
 #morning-ring-wrap { position: relative; height: min(55vh, 40vw); aspect-ratio: 1; }
 #morning-ring { width: 100%; height: 100%; transform: rotate(-90deg); }
 #morning-ring circle { fill: none; stroke-width: 12; }
-.ring-track { stroke: #1c1c1c; }
-.ring-in { stroke: #3cb46e; }
+.ring-track { stroke: var(--line); }
+.ring-in { stroke: var(--sage); }
 .ring-below { stroke: var(--red); }
 .ring-above { stroke: var(--amber); }
 #morning-tir { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; }
@@ -92,7 +103,7 @@ body.mode-night.is-stale #night-glucose { text-decoration: line-through; }
 #morning-family { display: flex; flex-wrap: wrap; justify-content: center; gap: 1vw; min-height: 0; }
 #morning-family:empty { display: none; }
 .fam-chip { font-size: 2.6vh; font-weight: 700; padding: 0.6vh 1.4vw; border-radius: 999px; }
-.fam-sent { background: #1f7a4a; color: #fff; }
+.fam-sent { background: var(--sage); color: var(--bg); }
 .fam-wait { border: 1px solid var(--amber); color: var(--amber); }
 .fam-demo { border: 1px solid var(--amber); color: var(--fg); }
 .fam-demo b { background: var(--amber); color: #000; padding: 0 0.5vw; border-radius: 0.3rem; margin-right: 0.5vw; }
@@ -109,8 +120,8 @@ body.mode-morning.is-stale #morning-glucose, body.mode-morning.is-disconnected #
    pulse, strobe on re-arm. Flashes stay at or under 2 per second. --- */
 .flag-high { background: var(--amber); color: #000; }
 .flag-acked { background: #400; color: #fff; border: 1px solid var(--red); }
-/* the basal nudge: a reminder, never an alarm colour */
-.flag-basal { background: #0d2238; color: #cfe6ff; border: 1px solid #3d7ab8; font-weight: 700; }
+/* the basal nudge: a reminder, never an alarm colour (brand mint) */
+.flag-basal { background: var(--bg); color: var(--mint); border: 1px solid var(--mint); font-weight: 700; }
 body.mode-night .flag-basal { opacity: 0.75; }
 body.alarm-high::after { content: ""; position: fixed; inset: 0; pointer-events: none;
   background: rgba(255, 176, 0, 0.12); box-shadow: inset 0 0 0 0.8vh var(--amber); }
@@ -120,7 +131,7 @@ body.alarm-high::after { content: ""; position: fixed; inset: 0; pointer-events:
    sweep up and off (0-1.4 s) while the dusk background fades to the main
    screen (0.8-2 s). .instant (alarm or low) skips it: gone at once. */
 #idle { position: fixed; inset: 0; z-index: 19; pointer-events: none; overflow: hidden;
-  background: linear-gradient(#1d2b3a, #2f4858);
+  background: linear-gradient(#2E2F29, #3A4234);  /* charcoal to a sage-tinted dusk */
   opacity: 0; visibility: hidden; transition: opacity 0.2s ease-out, visibility 0s linear 0.2s; }
 #idle.on { opacity: 1; visibility: visible; transition: opacity 1.5s ease; }
 #idle.instant { transition: none; }
@@ -182,7 +193,7 @@ body.mode-night #doctor { background: #03101d; }
 
 #watch-strip { margin-top: 2vh; font-size: 2.4vh; color: #8fb3d9; text-align: center; } /* R1: glance only, no buttons */
 #share-open { margin-top: 3vh; font: 600 2.2vh system-ui, sans-serif; padding: 1.2vh 2vw;
-  border-radius: 1vh; border: 1px solid #333; background: #111; color: #aaa; }
+  border-radius: 1vh; border: 1px solid var(--sage); background: var(--panel); color: var(--fg); }
 #pair { position: fixed; inset: 0; z-index: 12; background: #071a2e; color: #e8f1fb; display: flex; flex-direction: column;
   align-items: center; justify-content: center; gap: 2vh; padding: 6vh 6vw; text-align: center; } /* under the doctor takeover, alarm, DEMO, keypad */
 #pair-title { font-size: 4vh; font-weight: 700; }
@@ -198,13 +209,13 @@ body.mode-night #doctor { background: #03101d; }
 #pair-start:disabled, #pair-confirm:disabled { opacity: 0.35; }
 #pair-msg { font-size: 2.4vh; color: #ffd27a; min-height: 2.4vh; }
 
-#keypad { position: fixed; inset: 0; z-index: 30; background: rgba(0,0,0,0.94); display: flex;
+#keypad { position: fixed; inset: 0; z-index: 30; background: rgba(46, 47, 41, 0.97); display: flex;
   flex-direction: column; align-items: center; justify-content: center; gap: 2vh; }
 #keypad-title { font-size: 4vh; color: var(--fg); }
 #keypad-dots { font-size: 5vh; letter-spacing: 1vw; min-height: 6vh; color: var(--fg); }
 #keypad-keys { display: grid; grid-template-columns: repeat(3, 13vh); gap: 1.5vh; }
-#keypad-keys button { font: inherit; font-size: 5vh; height: 11vh; border-radius: 1.2vh; border: 1px solid #333;
-  background: #151515; color: var(--fg); cursor: pointer; }
-#keypad-keys button:active { background: #333; }
+#keypad-keys button { font: inherit; font-size: 5vh; height: 11vh; border-radius: 1.2vh; border: 1px solid var(--sage);
+  background: var(--panel); color: var(--fg); cursor: pointer; }
+#keypad-keys button:active { background: var(--sage); color: var(--bg); }
 #alarm.tier-full.strobe #alarm-ack { background: #000; color: #fff; border-color: #000; } /* visible on red and white frames */
 body.alarm-on .flag-demo { background: #000; color: #ffb000; box-shadow: 0 0 0 0.3vh #ffb000; } /* stays readable on amber and red */

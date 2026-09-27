@@ -17,7 +17,7 @@ const GAP_MIN = 15;            // don't join points across a gap this long (matc
 const DISCONNECT_BANNER_MS = 15000;
 const TARGET_LOW = 70;         // time-in-range band, consensus 70-180 mg/dL
 const TARGET_HIGH = 180;
-const LINE_IN = "#e8e8e8";     // graph line in range (70-180)
+const LINE_IN = "#EFEEEA";     // graph line in range (70-180): brand Off-white
 const LINE_HIGH = "#ffd60a";   // graph line above range: yellow
 const LINE_LOW = "#ff3b30";    // graph line below range: red
 const POLL_MS = 5000;          // the Pi's clock and display mode, polled (at 60x replay: 5 clock-min)
@@ -848,7 +848,7 @@ function drawGraph() {
   const y = (v) => padT + (1 - (Math.min(Math.max(v, yMin), yMax) - yMin) / (yMax - yMin)) * plotH;
 
   // target band
-  ctx.fillStyle = "rgba(60, 180, 110, 0.14)";
+  ctx.fillStyle = "rgba(125, 155, 110, 0.20)";  // target band: brand Sage
   ctx.fillRect(padL, y(TARGET_HIGH), plotW, y(TARGET_LOW) - y(TARGET_HIGH));
 
   // y gridlines
@@ -856,16 +856,16 @@ function drawGraph() {
   ctx.textAlign = "right";
   ctx.textBaseline = "middle";
   for (const v of [TARGET_LOW, TARGET_HIGH, 250].filter((v) => v < yMax)) {
-    ctx.strokeStyle = v === TARGET_LOW ? "rgba(255,59,48,0.5)" : "#262626";
+    ctx.strokeStyle = v === TARGET_LOW ? "rgba(255,59,48,0.5)" : "#4A4C41";
     ctx.lineWidth = 1;
     ctx.beginPath(); ctx.moveTo(padL, y(v)); ctx.lineTo(padL + plotW, y(v)); ctx.stroke();
-    ctx.fillStyle = "#777";
+    ctx.fillStyle = "#A9AA9E";
     ctx.fillText(String(v), padL - fs * 0.4, y(v));
   }
 
   if (!r) {
     ctx.textAlign = "center";
-    ctx.fillStyle = "#555";
+    ctx.fillStyle = "#8C8D82";
     ctx.fillText("waiting for readings", padL + plotW / 2, padT + plotH / 2);
     return;
   }
@@ -873,17 +873,17 @@ function drawGraph() {
   // x labels: every hour, Pi clock
   ctx.textAlign = "center";
   ctx.textBaseline = "top";
-  ctx.fillStyle = "#777";
+  ctx.fillStyle = "#A9AA9E";
   const hour = 3600000;
   for (let t = Math.ceil(tStart / hour) * hour; t <= tEnd; t += hour) {
-    ctx.strokeStyle = "#1a1a1a";
+    ctx.strokeStyle = "#3A3B33";
     ctx.beginPath(); ctx.moveTo(x(t), padT); ctx.lineTo(x(t), padT + plotH); ctx.stroke();
     ctx.fillText(hhmm(t), x(t), padT + plotH + fs * 0.4);
   }
 
   // "now" divider between history and forecast
   const tNow = toMs(r.timestamp);
-  ctx.strokeStyle = "#333";
+  ctx.strokeStyle = "#5C5E52";
   ctx.setLineDash([2, 4]);
   ctx.beginPath(); ctx.moveTo(x(tNow), padT); ctx.lineTo(x(tNow), padT + plotH); ctx.stroke();
   ctx.setLineDash([]);
@@ -941,7 +941,7 @@ function drawGraph() {
   if (!fc && state.forecastNote && !dim) {
     ctx.textAlign = "right";
     ctx.textBaseline = "top";
-    ctx.fillStyle = "#999";
+    ctx.fillStyle = "#A9AA9E";
     ctx.font = `${Math.round(fs * 0.85)}px system-ui, sans-serif`;
     ctx.fillText(state.forecastNote, padL + plotW, padT);
   }
