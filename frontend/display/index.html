@@ -23,6 +23,9 @@
        range). Never during any alarm or a low reading; the alarm takeover and
        the flags (DEMO) sit above it. Purely visual: it sends nothing. -->
   <div id="idle" aria-hidden="true"><img src="idle-leaves.svg" alt=""></div>
+  <!-- The wake transition's flood of leaves: display.js fills it when someone
+       comes back and empties it when the leaves have fallen. -->
+  <div id="idle-flood" aria-hidden="true"></div>
 
   <!-- Alarm takeover (step 3): amber = predicted low (WARNING), red = actual low (FULL).
        The tier comes from alarm.trigger_type; it covers every screen mode. -->
