@@ -282,7 +282,7 @@ from .. import store as _store
 from ..clock import clock as _clock
 from ..contracts import DoctorMessage, SymptomCheck
 from . import noise as _noise
-from .cards import CardSender, assemble
+from .cards import CardSender, assemble, with_narrative
 from .nights_adapter import NightsAdapter
 from .resources import categories_for
 
@@ -466,6 +466,7 @@ class StepWatch:
                             source="irin_brain" if self.brain_only() else "irin_bedside", nights=ev.nights,
                             tolerance_days=ev.tolerance_days, plan_id=plan.plan_id, step_index=ev.step_index,
                             resource_categories=categories_for(ev.kind, ev.flags))
+            card = await with_narrative(card)
             try:
                 entry["sent"] = await self.sender.send(card, event_key=key)
             except Exception:

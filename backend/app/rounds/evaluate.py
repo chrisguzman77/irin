@@ -18,7 +18,7 @@ from .. import store
 from ..clock import clock
 from ..contracts import Settings
 from . import noise
-from .cards import CardSender, assemble
+from .cards import CardSender, assemble, with_narrative
 from .resources import categories_for
 from .standing import Evaluation, Thresholds, evaluate_basal_check, evaluate_follow_up, evaluate_hypo_response
 
@@ -120,6 +120,7 @@ class StandingEngine:
                                 is_demo=self.is_demo(), source="irin_brain" if self.brain_only() else "irin_bedside",
                                 nights=ev.nights, excluded_counts=ev.excluded_counts,
                                 resource_categories=categories_for(ev.kind, ev.flags))
+                card = await with_narrative(card)
                 try:
                     entry["sent"] = await self.sender.send(card, event_key=key)
                 except Exception:

@@ -99,6 +99,24 @@ def assemble(*, program: str, kind: str, status: str, flags: list[str], metrics:
     return card
 
 
+async def with_narrative(card: SignalCard) -> SignalCard:
+    """R13: the card's narrative through narrative.py's chain (the validator and the
+    second opinion run inside it; any miss ships the deterministic template), in a
+    worker thread so a slow model never stalls the loop, the poller or an alarm.
+    Memory off: a card carries no scope. The numbers are the card's own labeled metrics."""
+    import asyncio
+
+    from .narrative import generate
+
+    try:
+        text = await asyncio.to_thread(generate, "card", {"kind": card.kind, "headline": card.headline,
+                                                          "confidence": dict(card.confidence)}, dict(card.metrics))
+    except Exception:
+        log.exception("card narrative failed; the template stands")
+        return card
+    return card.model_copy(update={"narrative": text}) if text else card
+
+
 def envelope(card: SignalCard, recipient_id: str, doctor_pk: str, device_id: str) -> dict[str, Any]:
     sealed = crypto.seal(card.model_dump_json(), doctor_pk)
     return {"recipient_id": recipient_id, "sender_id": device_id, "nonce": sealed["nonce"],
