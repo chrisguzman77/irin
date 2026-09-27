@@ -199,6 +199,28 @@ def select_reading_rows(after_rowid: int, limit: int, conn: sqlite3.Connection |
                                 "source": r["source"], "is_stale": bool(r["is_stale"]), "is_demo": False}) for r in rows]
 
 
+FORWARDED_JSON_TABLES = ("alarm_events", "low_events", "night_records", "plans", "symptom_checks", "buddy_events")
+
+
+def select_json_rows(table: str, after_rowid: int, limit: int, conn: sqlite3.Connection | None = None) -> list[tuple[int, dict]]:
+    """The forwarder's reader for the JSON-document tables: rows past a rowid,
+    oldest first. INSERT OR REPLACE gives a rebuilt row a new rowid, so a
+    re-coded night or an updated plan is forwarded again and upserted."""
+    if table not in FORWARDED_JSON_TABLES:
+        raise ValueError(f"not a forwarded table: {table}")
+    own = conn is None
+    conn = conn or connect()
+    try:
+        rows = conn.execute(f"SELECT rowid AS rid, json FROM {table} WHERE rowid > ? ORDER BY rowid LIMIT ?",
+                            (after_rowid, limit)).fetchall()
+    except sqlite3.OperationalError:  # a table a later step creates (buddy_events) is simply empty until then
+        rows = []
+    finally:
+        if own:
+            conn.close()
+    return [(int(r["rid"]), json.loads(r["json"])) for r in rows]
+
+
 def select_treatment_rows(after_rowid: int, limit: int, conn: sqlite3.Connection | None = None) -> list[tuple[int, dict]]:
     own = conn is None
     conn = conn or connect()
