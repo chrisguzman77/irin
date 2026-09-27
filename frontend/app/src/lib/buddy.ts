@@ -33,7 +33,8 @@ export interface BuddyState {
 /** buddy_state.matches[i]; pair_url is the other side's watcher /pair link, once both accepted */
 export interface MatchState {
   match_id: string;
-  first_name: string;
+  /** null until the Pi's snapshot names it (hub_update "match" carries no name) */
+  first_name: string | null;
   status: "offered" | "accepted" | "declined" | string;
   pair_url: string | null;
 }
@@ -64,7 +65,7 @@ export function readBuddyState(snap: StateSnapshot | null): BuddyState {
       const o = obj(m);
       const id = str(o?.match_id);
       return o && id
-        ? [{ match_id: id, first_name: str(o.first_name) ?? "your match", status: str(o.status) ?? "offered", pair_url: str(o.pair_url) }]
+        ? [{ match_id: id, first_name: str(o.first_name), status: str(o.status) ?? "offered", pair_url: str(o.pair_url) }]
         : [];
     }),
   };
@@ -149,6 +150,7 @@ export interface ProfileReply {
   /** why the feed is not verified, when the Pi says */
   cgm_reason: string | null;
   user_id: string | null;
+  is_demo: boolean;
 }
 export interface MatchCard {
   match_id: string;
@@ -160,13 +162,16 @@ export interface MatchCard {
   /** relay/Muse text, validated upstream; shown as given */
   intro: string | null;
   why: string | null;
+  is_demo: boolean;
 }
 type Result<T> = { ok: true; value: T } | { ok: false; reason: string };
 
 async function reason(res: Response): Promise<string> {
   try {
     const b = await res.json();
-    if (b && typeof b.detail === "string") return `Your Irin said (${res.status}): ${b.detail}`;
+    if (b && typeof b.detail === "string")
+      // a 403 / 409 detail is written for the user ("set up the buddy profile first")
+      return res.status === 403 || res.status === 409 ? b.detail : `Your Irin said (${res.status}): ${b.detail}`;
   } catch {
     /* no body */
   }
@@ -180,13 +185,17 @@ function readProfileReply(v: unknown): ProfileReply {
     cgm_verified: o.cgm_verified === true,
     cgm_reason: str(o.cgm_reason),
     user_id: str(o.user_id),
+    is_demo: o.is_demo === true,
   };
 }
 
 export async function getProfile(base: string): Promise<Result<ProfileReply>> {
   const res = await deviceFetch(base, "/api/buddy/profile", { pinned: true });
-  if (res.status === 404) return { ok: true, value: { profile: null, cgm_verified: false, cgm_reason: null, user_id: null } };
-  return res.ok ? { ok: true, value: readProfileReply(await res.json()) } : { ok: false, reason: await reason(res) };
+  const none: ProfileReply = { profile: null, cgm_verified: false, cgm_reason: null, user_id: null, is_demo: false };
+  if (res.status === 404) return { ok: true, value: none };
+  if (!res.ok) return { ok: false, reason: await reason(res) };
+  const body = await res.json();
+  return { ok: true, value: body === null ? none : readProfileReply(body) };
 }
 
 export async function saveProfile(base: string, p: BuddyProfile): Promise<Result<ProfileReply>> {
@@ -213,6 +222,7 @@ export async function findMatches(base: string): Promise<Result<MatchCard[]>> {
         score: typeof o.score === "number" ? o.score : 0,
         intro: str(o.intro),
         why: str(o.why),
+        is_demo: o.is_demo === true,
       }];
     }),
   };

@@ -69,7 +69,7 @@ export default function ProfileForm({ base, settings, demo }: { base: string; se
     <section className="rounded-xl border border-neutral-800 px-4 py-3 flex flex-col gap-2">
       <h3 className="text-xs uppercase tracking-wider text-neutral-400 flex items-center gap-2">
         Buddy profile
-        {demo && <span className="bg-amber-400 text-black text-xs font-bold px-2 py-0.5 rounded">DEMO</span>}
+        {(demo || reply?.is_demo) && <span className="bg-amber-400 text-black text-xs font-bold px-2 py-0.5 rounded">DEMO</span>}
       </h3>
       {reply?.profile &&
         (reply.cgm_verified ? (

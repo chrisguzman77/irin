@@ -54,7 +54,9 @@ export default function FindBuddy({ base, matches, demo }: { base: string; match
   // an unanswered suggestion shows as its full card, and only there
   const suggestions = (cards ?? []).filter((c) => !answered[c.match_id] && (rows.get(c.match_id)?.status ?? "offered") === "offered");
   const shown = new Set(suggestions.map((c) => c.match_id));
-  const mine = [...rows.values()].filter((m) => !shown.has(m.match_id));
+  const mine = [...rows.values()]
+    .filter((m) => !shown.has(m.match_id))
+    .map((m) => ({ ...m, first_name: m.first_name ?? cards?.find((c) => c.match_id === m.match_id)?.first_name ?? "your match" }));
 
   return (
     <section className="rounded-xl border border-neutral-800 px-4 py-3 flex flex-col gap-3">
@@ -72,7 +74,7 @@ export default function FindBuddy({ base, matches, demo }: { base: string; match
             <span className="text-xs rounded-full border border-sky-600 text-sky-200 px-2 py-0.5">
               {c.mirror ? "mirror (opposite time zone)" : "twin"}
             </span>
-            {demo && <span className={badge}>DEMO</span>}
+            {(demo || c.is_demo) && <span className={badge}>DEMO</span>}
           </div>
           {c.intro && <p className="text-sm text-neutral-200">{c.intro}</p>}
           {c.why && <p className="text-sm text-neutral-400 border-l-2 border-sky-500 pl-3">{c.why}</p>}
