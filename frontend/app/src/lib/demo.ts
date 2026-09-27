@@ -99,3 +99,22 @@ export type SendMode = "bedside" | "brain" | "both";
 export interface SentCard { card_id: string; kind: string; program: string; status: string; recipients: string[]; is_demo: boolean }
 export const sendEvaluatedCard = (base: string, mode: Exclude<SendMode, "bedside">) =>
   postJson<{ mode: SendMode; cards: SentCard[] }>(base, "send_card", { mode });
+
+/** GET /api/rounds/evaluations: the latest Standing evaluation per kind and the
+ * noise budget's verdict (a green goes to the digest and never interrupts, so
+ * the panel is where the presenter shows it). */
+export interface Evaluation { kind: string; status: string; headline: string; budget: string | null; sent: unknown }
+export async function latestEvaluations(base: string): Promise<Evaluation[]> {
+  const res = await fetch(`${base}/api/rounds/evaluations`, { cache: "no-store" });
+  if (!res.ok) throw new Error(`${res.status}`);
+  const b = (await res.json()) as Record<string, Partial<Evaluation> | null>;
+  return Object.entries(b ?? {})
+    .filter(([, e]) => e && typeof e === "object")
+    .map(([k, e]) => ({
+      kind: typeof e!.kind === "string" ? e!.kind : k,
+      status: typeof e!.status === "string" ? e!.status : "",
+      headline: typeof e!.headline === "string" ? e!.headline : "",
+      budget: typeof e!.budget === "string" ? e!.budget : null,
+      sent: e!.sent ?? null,
+    }));
+}
