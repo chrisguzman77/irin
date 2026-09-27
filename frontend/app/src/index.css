@@ -65,3 +65,28 @@
 .sc-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .sc-action { font: 600 13px system-ui, sans-serif; padding: 6px 10px; border-radius: 8px; border: 1px solid #d1d5db; background: #f9fafb; color: #9ca3af; }
 .sc-foot { font-size: 11px; color: #9ca3af; overflow-wrap: anywhere; }
+
+/* The app shell in the Irin brand (docs: irin-brand-kit): charcoal with a faint
+   sage glow, off-white text, a mint underline that slides between tabs, each tab
+   fading up on entry, and a small press on buttons. Amber stays reserved for the
+   DEMO banner and warnings. Motion is off for "reduce motion" users. */
+.app-shell {
+  background:
+    radial-gradient(1100px 420px at 12% -8%, rgba(125, 155, 110, 0.22), transparent 70%),
+    radial-gradient(900px 380px at 110% 18%, rgba(177, 210, 189, 0.10), transparent 70%),
+    #2E2F29;
+  background-attachment: fixed;
+}
+.tab-indicator { transition: transform 280ms cubic-bezier(0.22, 1, 0.36, 1); }
+.tab-enter { animation: tab-enter 220ms ease-out both; }
+@keyframes tab-enter {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: none; }
+}
+.app-shell button { transition: transform 90ms ease, background-color 150ms ease, color 150ms ease; }
+.app-shell button:active:not(:disabled) { transform: scale(0.97); }
+@media (prefers-reduced-motion: reduce) {
+  .tab-indicator, .app-shell button { transition: none; }
+  .tab-enter { animation: none; }
+  .app-shell button:active:not(:disabled) { transform: none; }
+}
