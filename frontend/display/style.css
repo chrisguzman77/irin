@@ -20,10 +20,23 @@
   --red: #ff3b30;         /* low / disconnected: unchanged */
 }
 
+/* Nunito (the brand font; SIL OFL, fonts/Nunito-OFL.txt), weight 800, SUBSET to
+   the digits and "-" only: used for the big glucose numbers and nothing else.
+   Bundled, never fetched, so the kiosk works with no internet. Nunito's digits
+   are all one width (600 units), so 99 -> 100 never shifts sideways. */
+@font-face { font-family: "Nunito Digits"; src: url("fonts/Nunito-Digits-800.woff") format("woff");
+  font-weight: 800; font-style: normal; font-display: block; }
+
 html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
   font-family: system-ui, -apple-system, "Segoe UI", sans-serif; overflow: hidden; }
 
-#flags { position: fixed; top: 1.5vh; left: 1.5vw; right: 1.5vw; display: flex; gap: 1vw;
+/* The Irin logo, top left (docs/brand horizontal, for dark backgrounds). Under
+   every takeover (pairing 12, doctor 15, idle 19, alarm 20) so nothing competes
+   with an alarm; the flags (DEMO etc.) sit to its right and stay above all. */
+#logo { position: fixed; top: 1.5vh; left: 1.5vw; height: 5vh; width: auto; z-index: 5; pointer-events: none; }
+body.mode-night #logo { opacity: 0.35; }  /* dimmed at night like the rest of the screen */
+
+#flags { position: fixed; top: 1.5vh; left: calc(1.5vw + 12.4vh + 1.2vw); right: 1.5vw; display: flex; gap: 1vw;
   flex-wrap: wrap; z-index: 25; pointer-events: none; } /* above the alarm takeover: DEMO is on every screen */
 .flag { font-weight: 800; padding: 0.6vh 1.2vw; border-radius: 0.4rem; font-size: 2.2vh; letter-spacing: 0.04em; }
 .flag-demo { background: var(--amber); color: #000; font-size: 3vh; }
@@ -38,7 +51,8 @@ html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
 
 #now { grid-area: now; display: flex; flex-direction: column; justify-content: center; align-items: center; }
 #reading { display: flex; align-items: center; gap: 1.5vw; line-height: 1; }
-#glucose { font-size: min(12.5vw, 34vh); font-weight: 750; font-variant-numeric: tabular-nums; }
+#glucose { font-size: min(12.5vw, 34vh); font-weight: 800; font-variant-numeric: tabular-nums;
+  font-family: "Nunito Digits", system-ui, -apple-system, "Segoe UI", sans-serif; font-synthesis: none; }
 #trend { font-size: min(10vw, 18vh); color: #D6D5CE; }
 #units { font-size: 2.6vh; color: var(--dim); margin-top: 0.5vh; }
 #reading-time { font-size: 2.4vh; color: var(--dim); margin-top: 1vh; }
@@ -75,7 +89,8 @@ body.is-stale #glucose { text-decoration: line-through; text-decoration-thicknes
 body.mode-night { background: var(--bg-night); }
 #night-clock { font-size: min(26vw, 45vh); font-weight: 300; color: #4A4B42; font-variant-numeric: tabular-nums; line-height: 1; }
 #night-reading { display: flex; align-items: center; gap: 1.2vw; margin-top: 3vh; color: #8C8D82; }
-#night-glucose { font-size: min(9vw, 16vh); font-weight: 700; font-variant-numeric: tabular-nums; }
+#night-glucose { font-size: min(9vw, 16vh); font-weight: 800; font-variant-numeric: tabular-nums;
+  font-family: "Nunito Digits", system-ui, -apple-system, "Segoe UI", sans-serif; font-synthesis: none; }
 #night-trend { font-size: min(5vw, 9vh); }
 body.mode-night .flag-clock { opacity: 0.75; } /* DEMO, STALE, DISCONNECTED stay full strength */
 body.mode-night.is-stale #night-glucose, body.mode-night.is-disconnected #night-glucose { color: #45463E; }
@@ -151,7 +166,8 @@ body.alarm-high::after { content: ""; position: fixed; inset: 0; pointer-events:
   align-items: center; justify-content: center; gap: 2vh; color: #000; }
 #alarm-title { font-size: 7vh; font-weight: 900; letter-spacing: 0.08em; }
 #alarm-reading { display: flex; align-items: center; gap: 2vw; line-height: 1; }
-#alarm-glucose { font-size: min(18vw, 32vh); font-weight: 800; font-variant-numeric: tabular-nums; }
+#alarm-glucose { font-size: min(18vw, 32vh); font-weight: 800; font-variant-numeric: tabular-nums;
+  font-family: "Nunito Digits", system-ui, -apple-system, "Segoe UI", sans-serif; font-synthesis: none; }
 #alarm-trend { font-size: min(9vw, 16vh); }
 #alarm-sub { font-size: 3vh; font-weight: 600; }
 #alarm-ack { font: inherit; font-size: 5vh; font-weight: 800; padding: 2.5vh 8vw; border-radius: 1.5vh;
