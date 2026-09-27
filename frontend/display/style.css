@@ -20,22 +20,29 @@
   --red: #ff3b30;         /* low / disconnected: unchanged */
 }
 
-/* Nunito, the brand font (the logo's; SIL OFL, fonts/Nunito-OFL.txt), weight
-   800, SUBSET to what uses it: the big glucose numbers (digits, "-") and the
-   top-right clock (":", space, A, P, M). Bundled, never fetched, so the kiosk
-   works with no internet. Nunito's digits are all one width (600 units), so
-   99 -> 100 never shifts sideways. */
-@font-face { font-family: "Nunito Irin"; src: url("fonts/Nunito-800-subset.woff") format("woff");
-  font-weight: 800; font-style: normal; font-display: block; }
+/* Nunito, the brand font (the logo's; SIL OFL, fonts/Nunito-OFL.txt), for ALL
+   kiosk text: the variable font (Latin, weights 200-1000), so every element
+   keeps its own weight. Bundled, never fetched, so the kiosk works with no
+   internet. Nunito's digits are all one width (600 units), so 99 -> 100 never
+   shifts sideways. Glyphs outside Latin (the trend arrows) fall back to the
+   system font. */
+@font-face { font-family: "Nunito Irin"; src: url("fonts/Nunito-Variable-latin.woff2") format("woff2");
+  font-weight: 200 1000; font-style: normal; font-display: block; }
 
 html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
-  font-family: system-ui, -apple-system, "Segoe UI", sans-serif; overflow: hidden; }
+  font-family: "Nunito Irin", system-ui, -apple-system, "Segoe UI", sans-serif; overflow: hidden; }
+/* Form controls do not inherit the page font by default. */
+button, input { font-family: inherit; }
 
 /* The Irin logo, top left (docs/brand horizontal, for dark backgrounds). Under
    every takeover (pairing 12, doctor 15, idle 19, alarm 20) so nothing competes
    with an alarm; the flags (DEMO etc.) sit to its right and stay above all. */
-#logo { position: fixed; top: 1.5vh; left: 1.5vw; height: 5vh; width: auto; z-index: 5; pointer-events: none; }
-body.mode-night #logo { opacity: 0.35; }  /* dimmed at night like the rest of the screen */
+.logo { position: fixed; top: 1.5vh; left: 1.5vw; height: 5vh; width: auto; z-index: 5; pointer-events: none; }
+/* At night the colour logo gives way to the one-colour white one
+   (docs/brand/mono), dimmed like the rest of the night screen. */
+#logo-night { display: none; opacity: 0.35; }
+body.mode-night #logo { display: none; }
+body.mode-night #logo-night { display: block; }
 /* The current time (the Pi's clock), top right, in brand mint. Same layer as the
    logo: under every takeover. Hidden at night, where the big clock is the screen. */
 #topclock { position: fixed; top: 1.5vh; right: 1.5vw; z-index: 5; pointer-events: none;
