@@ -5,14 +5,17 @@ import type { Settings } from "../lib/contracts";
 import { useDevice } from "../lib/device";
 import { revokePairing } from "../lib/pairing";
 import { applied, saveSettings } from "../lib/settings";
+import FindBuddy from "./buddy/FindBuddy";
+import ProfileForm from "./buddy/ProfileForm";
 import TreatingButton from "./buddy/TreatingButton";
 
 // Irin Buddy tab, B1: the buddy card (paired name, twin | mirror, revoke, this
 // morning's line), the four opt-ins (all off by default, each revocable at
 // once: invariant 16), the emergency-script editor, and the treating button
 // while an alert is open. Everything renders from the snapshot; a setting
-// shows as saved only when the Pi's settings_change carries it. A5 (Find a
-// Buddy) is not built.
+// shows as saved only when the Pi's settings_change carries it. B3+: the
+// directory profile, "Find a buddy", and my matches (buddy/ProfileForm,
+// buddy/FindBuddy); the full A5 flow (globe, typed availability) is not built.
 type OptIns = NonNullable<Settings["night_buddy"]>;
 const OPT_INS: [keyof OptIns, string, string][] = [
   ["have_buddy", "I want a buddy", "One paired T1D adult is the last human rung of your alarm ladder."],
@@ -241,11 +244,14 @@ export default function BuddyTab() {
   if (!snap) return <p className="text-neutral-400">Waiting for your Irin…</p>;
   const base = target.url;
   const state = readBuddyState(snap);
+  const demo = snap.mode === "replay";
   return (
     <section className="flex flex-col gap-4">
       <h2 className="text-xl font-semibold">Irin Buddy</h2>
       <TreatingButton snap={snap} baseUrl={base} />
       <BuddyCard state={state} base={base} />
+      <ProfileForm base={base} settings={snap.settings} demo={demo} />
+      <FindBuddy base={base} matches={state.matches} demo={demo} />
       {snap.settings && <OptInToggles current={snap.settings} base={base} />}
       {snap.settings && <ScriptEditor current={snap.settings} base={base} />}
     </section>
