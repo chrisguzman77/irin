@@ -1,5 +1,18 @@
 @import "tailwindcss";
 
+/* Irin brand palette, taken from the logo (brand.png): charcoal-olive ground,
+   leaf green, mint, cream. Warm, calm colours for everyday screens; alarm red,
+   warning amber, the DEMO amber and stale grey stay Tailwind's and never use these. */
+@theme {
+  --color-irin-ink: #2e2f29;
+  --color-irin-surface: #383a32;
+  --color-irin-line: #4a4d42;
+  --color-irin-leaf: #7f9c6f;
+  --color-irin-mint: #b1d2bd;
+  --color-irin-cream: #eeeeea;
+  --color-irin-sage: #a9b3a0;
+}
+
 /* Clinical Signal Card v0 — ONE design for the app's Rounds tab (R3, "What my
    doctor sees") and the clinician inbox (R5). This block is kept IDENTICAL in
    frontend/app/src/index.css and frontend/clinician/card.css so both render

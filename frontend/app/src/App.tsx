@@ -44,16 +44,16 @@ export default function App() {
 
   return (
     <DeviceProvider>
-      <div className="min-h-dvh bg-black text-white">
+      <div className="min-h-dvh bg-irin-ink text-irin-cream">
         <StatusBar />
         <DoctorTakeover />
         <FreshPinPrompt />
-        <nav className="flex border-b border-neutral-800 bg-black">
+        <nav className="flex border-b border-irin-line bg-irin-ink">
           {TABS.map((t) => (
             <button
               key={t}
               className={`flex-1 py-3 text-sm sm:text-base ${
-                t === tab ? "border-b-2 border-amber-400 text-white font-semibold" : "text-neutral-400"
+                t === tab ? "border-b-2 border-irin-mint text-irin-cream font-semibold" : "text-irin-sage"
               }`}
               onClick={() => select(t)}
             >
