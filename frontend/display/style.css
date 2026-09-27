@@ -168,6 +168,13 @@ body.alarm-high::after { content: ""; position: fixed; inset: 0; pointer-events:
 #idle.on { opacity: 1; visibility: visible; transition: opacity 1.5s ease; }
 #idle.instant { transition: none; }
 #idle img { display: block; width: 100%; height: 100%; object-fit: cover; will-change: transform; }
+/* Demo mode only: the Irin logo, centred and soft, BEHIND the falling leaves
+   (the leaves are positioned above it). It sits inside #idle, so it fades with
+   the dusk background on wake. Live mode keeps the bedside idle screen bare. */
+#idle #idle-logo { display: none; position: absolute; top: 50%; left: 50%; width: min(46vw, 80vh);
+  height: auto; object-fit: contain; transform: translate(-50%, -50%); opacity: 0.85; z-index: 0; }
+body.is-demo #idle #idle-logo { display: block; }
+#idle #idle-leaves { position: relative; z-index: 1; }
 #idle.waking { animation: idle-bg-out 0.7s ease forwards; }
 @keyframes idle-bg-out {
   0%, 50% { opacity: 1; }

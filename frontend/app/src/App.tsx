@@ -9,6 +9,7 @@ import DeviceTab from "./tabs/DeviceTab";
 import MyIrinTab from "./tabs/MyIrinTab";
 import BuddyTab from "./tabs/BuddyTab";
 import RoundsTab from "./tabs/RoundsTab";
+import logo from "./assets/irin-logo.svg";
 
 // A1: the gate and the shell. The code lives in sessionStorage (usePin) and is
 // sent as X-PIN on every mutating call (lib/api.ts); the active tab is
@@ -44,24 +45,33 @@ export default function App() {
 
   return (
     <DeviceProvider>
-      <div className="min-h-dvh bg-black text-white">
+      <div className="app-shell min-h-dvh text-[#EFEEEA]">
         <StatusBar />
         <DoctorTakeover />
         <FreshPinPrompt />
-        <nav className="flex border-b border-neutral-800 bg-black">
+        <header className="flex items-center px-4 pt-3 pb-2">
+          <img src={logo} alt="Irin" className="h-7 w-auto select-none" draggable={false} />
+        </header>
+        <nav className="relative flex border-b border-white/10">
           {TABS.map((t) => (
             <button
               key={t}
-              className={`flex-1 py-3 text-sm sm:text-base ${
-                t === tab ? "border-b-2 border-amber-400 text-white font-semibold" : "text-neutral-400"
+              className={`flex-1 py-3 text-sm sm:text-base transition-colors duration-200 ${
+                t === tab ? "text-white font-semibold" : "text-neutral-400 hover:text-neutral-200"
               }`}
               onClick={() => select(t)}
             >
               {t}
             </button>
           ))}
+          {/* the active-tab underline slides between the four equal-width tabs */}
+          <span
+            aria-hidden="true"
+            className="tab-indicator absolute bottom-0 left-0 h-0.5 rounded-full bg-[#B1D2BD]"
+            style={{ width: `${100 / TABS.length}%`, transform: `translateX(${TABS.indexOf(tab) * 100}%)` }}
+          />
         </nav>
-        <main className="p-4 max-w-2xl mx-auto">
+        <main key={tab} className="tab-enter p-4 max-w-2xl mx-auto">
           {tab === "Irin Device" && <DeviceTab />}
           {tab === "My Irin" && <MyIrinTab />}
           {tab === "Irin Buddy" && <BuddyTab />}

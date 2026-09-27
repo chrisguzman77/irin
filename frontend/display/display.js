@@ -286,6 +286,7 @@ function render() {
   const disconnected = isDisconnected();
 
   $("badge-demo").classList.toggle("hidden", state.mode !== "replay");
+  document.body.classList.toggle("is-demo", state.mode === "replay"); // the idle screen shows the logo in demo mode
   $("badge-clock").classList.toggle("hidden", state.clockSynced);
   const a = state.alarm || {};
   const staleAlarm = a.trigger_type === "stale" && a.state !== "idle";
