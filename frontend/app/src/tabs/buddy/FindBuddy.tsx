@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { PinRejected } from "../../lib/api";
 import { answerMatch, findMatches, type MatchCard, type MatchState } from "../../lib/buddy";
 
@@ -11,7 +11,10 @@ import { answerMatch, findMatches, type MatchCard, type MatchState } from "../..
 const badge = "bg-amber-400 text-black text-xs font-bold px-2 py-0.5 rounded";
 const btn = "flex-1 rounded-lg py-2 font-semibold disabled:opacity-40";
 
-export default function FindBuddy({ base, matches, demo }: { base: string; matches: MatchState[]; demo: boolean }) {
+const sampleBadge = "border border-neutral-500 text-neutral-300 text-xs px-2 py-0.5 rounded";
+
+/** autoFind: the wizard's step 6 searches once on mount. */
+export default function FindBuddy({ base, matches, demo, autoFind = false }: { base: string; matches: MatchState[]; demo: boolean; autoFind?: boolean }) {
   const [cards, setCards] = useState<MatchCard[] | null>(null);
   // this phone's own answers, until the snapshot / hub_update says more
   const [answered, setAnswered] = useState<Record<string, { status: string; mine: "accept" | "decline"; first_name: string }>>({});
@@ -37,6 +40,14 @@ export default function FindBuddy({ base, matches, demo }: { base: string; match
       else setMsg(r.reason);
     });
 
+  const started = useRef(false);
+  useEffect(() => {
+    if (autoFind && !started.current) {
+      started.current = true;
+      void find();
+    }
+  });
+
   const answer = (id: string, first_name: string, verb: "accept" | "decline") =>
     run(async () => {
       const r = await answerMatch(base, id, verb);
@@ -49,14 +60,17 @@ export default function FindBuddy({ base, matches, demo }: { base: string; match
   for (const [id, a] of Object.entries(answered)) {
     const m = rows.get(id);
     const status = m && m.status !== "offered" ? m.status : a.mine === "decline" ? "declined" : m?.status ?? a.status;
-    rows.set(id, { match_id: id, first_name: m?.first_name ?? a.first_name, status, pair_url: m?.pair_url ?? null });
+    rows.set(id, { match_id: id, first_name: m?.first_name ?? a.first_name, status, pair_url: m?.pair_url ?? null, sample: m?.sample ?? false });
   }
   // an unanswered suggestion shows as its full card, and only there
   const suggestions = (cards ?? []).filter((c) => !answered[c.match_id] && (rows.get(c.match_id)?.status ?? "offered") === "offered");
   const shown = new Set(suggestions.map((c) => c.match_id));
   const mine = [...rows.values()]
     .filter((m) => !shown.has(m.match_id))
-    .map((m) => ({ ...m, first_name: m.first_name ?? cards?.find((c) => c.match_id === m.match_id)?.first_name ?? "your match" }));
+    .map((m) => {
+      const c = cards?.find((x) => x.match_id === m.match_id);
+      return { ...m, first_name: m.first_name ?? c?.first_name ?? "your match", sample: m.sample || !!c?.sample };
+    });
 
   return (
     <section className="rounded-xl border border-neutral-800 px-4 py-3 flex flex-col gap-3">
@@ -66,6 +80,7 @@ export default function FindBuddy({ base, matches, demo }: { base: string; match
       <button type="button" disabled={busy} className="rounded-lg px-3 py-2 bg-sky-400 text-black font-semibold disabled:opacity-40" onClick={find}>
         {cards ? "Look again" : "Find a buddy"}
       </button>
+      {busy && !cards && <p className="text-sm text-neutral-300 animate-pulse">Finding your buddy…</p>}
       {cards && suggestions.length === 0 && <p className="text-sm text-neutral-400">No new suggestions right now.</p>}
       {suggestions.map((c) => (
         <article key={c.match_id} className="rounded-lg bg-neutral-900 p-3 flex flex-col gap-2">
@@ -75,6 +90,7 @@ export default function FindBuddy({ base, matches, demo }: { base: string; match
               {c.mirror ? "mirror (opposite time zone)" : "twin"}
             </span>
             {(demo || c.is_demo) && <span className={badge}>DEMO</span>}
+            {c.sample && <span className={sampleBadge}>Sample profile</span>}
           </div>
           {c.intro && <p className="text-sm text-neutral-200">{c.intro}</p>}
           {c.why && <p className="text-sm text-neutral-400 border-l-2 border-sky-500 pl-3">{c.why}</p>}
@@ -99,11 +115,14 @@ export default function FindBuddy({ base, matches, demo }: { base: string; match
           <div className="flex items-center gap-2">
             <span className="font-semibold">{m.first_name}</span>
             {demo && <span className={badge}>DEMO</span>}
+            {m.sample && <span className={sampleBadge}>Sample profile</span>}
           </div>
           {m.status === "declined" ? (
             <p className="text-sm text-neutral-500">Declined.</p>
           ) : m.status === "accepted" ? (
-            m.pair_url ? (
+            m.sample ? (
+              <p className="text-sm text-neutral-300">Sample profile: no watch link.</p>
+            ) : m.pair_url ? (
               <a href={m.pair_url} target="_blank" rel="noopener noreferrer"
                 className="rounded-lg px-3 py-2 bg-sky-400 text-black font-semibold text-center">
                 Watch {m.first_name} from this phone

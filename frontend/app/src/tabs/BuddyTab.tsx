@@ -5,6 +5,7 @@ import type { Settings } from "../lib/contracts";
 import { useDevice } from "../lib/device";
 import { revokePairing } from "../lib/pairing";
 import { applied, saveSettings } from "../lib/settings";
+import BuddyWizard from "./buddy/BuddyWizard";
 import FindBuddy from "./buddy/FindBuddy";
 import ProfileForm from "./buddy/ProfileForm";
 import TreatingButton from "./buddy/TreatingButton";
@@ -15,7 +16,9 @@ import TreatingButton from "./buddy/TreatingButton";
 // while an alert is open. Everything renders from the snapshot; a setting
 // shows as saved only when the Pi's settings_change carries it. B3+: the
 // directory profile, "Find a buddy", and my matches (buddy/ProfileForm,
-// buddy/FindBuddy); the full A5 flow (globe, typed availability) is not built.
+// buddy/FindBuddy). Onboarding v2: with no buddy linked the tab is only the
+// guided wizard (buddy/BuddyWizard), plus the treating button, which shows
+// only while an alert is open (invariant 17).
 type OptIns = NonNullable<Settings["night_buddy"]>;
 const OPT_INS: [keyof OptIns, string, string][] = [
   ["have_buddy", "I want a buddy", "One paired T1D adult is the last human rung of your alarm ladder."],
@@ -245,6 +248,14 @@ export default function BuddyTab() {
   const base = target.url;
   const state = readBuddyState(snap);
   const demo = snap.mode === "replay";
+  if (!state.link)
+    return (
+      <section className="flex flex-col gap-4">
+        <h2 className="text-xl font-semibold">Irin Buddy</h2>
+        <TreatingButton snap={snap} baseUrl={base} />
+        <BuddyWizard base={base} demo={demo} settings={snap.settings} matches={state.matches} />
+      </section>
+    );
   return (
     <section className="flex flex-col gap-4">
       <h2 className="text-xl font-semibold">Irin Buddy</h2>
