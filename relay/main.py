@@ -6,7 +6,7 @@ authoritative) is present as a 501 stub naming the step that fills it in.
 Environment: RELAY_SOURCE_KEYS (comma-separated device keys, checked as the
 X-Source-Key header), RELAY_ADMIN_KEY (the demo-only Spark simulation),
 RELAY_KEY (encrypts emergency numbers at rest), ATLAS_URI, NARRATIVE_BACKEND,
-NARRATIVE_ROUTING, BACKBOARD_API_KEY, META_MODEL_API_KEY, ANTHROPIC_API_KEY
+HUB_SCRIPT_KEY, HUB_LEASE_S, HUB_TREATING_S (hub.py), NARRATIVE_ROUTING, BACKBOARD_API_KEY, META_MODEL_API_KEY, ANTHROPIC_API_KEY
 (the same four-link narrative chain as the Pi, for the buddy line, the match
 explanation, and the emergency script), WHATSAPP_TOKEN, WHATSAPP_PHONE_NUMBER_ID.
 """
@@ -19,6 +19,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
+import hub
 import relay_api
 import store
 
@@ -63,6 +64,7 @@ async def health() -> dict:
 
 
 app.include_router(relay_api.router)  # R6: pairing, cards, inbox, messages, device poll, resolutions, log; R13: resources
+app.include_router(hub.router)  # B3: the hub
 
 # --- owner pairing (R5+) ---
 @app.post("/v0/device/pairings")
@@ -75,24 +77,6 @@ async def device_unpair(): _stub("R5+ owner unpair")
 # --- Spark, resources, log (R10, R13) ---
 @app.post("/v0/spark/new_rx")
 async def spark_new_rx(): _stub("R10 simulated Spark offer (demo-only, RELAY_ADMIN_KEY)")
-
-# --- hub (B3) ---
-@app.post("/v0/hub/listing")
-async def hub_listing(): _stub("B3 hub listing")
-@app.get("/v0/hub/list")
-async def hub_list(): _stub("B3 hub list")
-@app.post("/v0/hub/claim")
-async def hub_claim(): _stub("B3 hub claim")
-@app.get("/v0/hub/claim/{claim_id}/script")
-async def hub_script(claim_id: str): _stub("B3 hub script")
-@app.post("/v0/hub/call")
-async def hub_call(): _stub("B3 hub call")
-@app.post("/v0/hub/treating")
-async def hub_treating(): _stub("B3 hub treating")
-@app.post("/v0/hub/resolve")
-async def hub_resolve(): _stub("B3 hub resolve")
-@app.get("/v0/hub/audit")
-async def hub_audit(): _stub("B3 hub audit")
 
 # --- buddy directory (B3+) ---
 @app.post("/v0/users")
