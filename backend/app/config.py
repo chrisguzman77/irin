@@ -89,10 +89,25 @@ class Config:
         return p if p.is_absolute() else REPO_ROOT / p
 
 
+def default_routing(meta_key: str) -> dict:
+    """NARRATIVE_ROUTING when the env var is unset (chris.md R13+). Cards and the
+    morning report stay on Claude (they carry glucose values); the second opinion
+    is OpenAI through Backboard, never a writer's own family. Muse Spark writes
+    the family story and the buddy lines only when the Meta key is set; without
+    it those rows are absent and they fall back to Claude as before. Model
+    names match reports.DEFAULT_MODEL and narrative.META_MODEL (tested)."""
+    routing = {"clinician_card": ["anthropic", "claude-sonnet-5"], "morning_report": ["anthropic", "claude-sonnet-5"],
+               "second_opinion": ["openai", "gpt-5-mini"]}
+    if meta_key:
+        for task in ("family_story", "buddy_line", "match_explanation"):
+            routing[task] = ["meta", "muse-spark-1.3"]
+    return routing
+
+
 def load_config() -> Config:
     _load_dotenv()
     env = os.environ
-    routing: dict = {}
+    routing: dict = default_routing(env.get("META_MODEL_API_KEY", ""))
     raw = env.get("NARRATIVE_ROUTING", "")
     if raw:
         try:
