@@ -28,8 +28,11 @@ listed with their inferred reasons. It fires every morning through 2021-01-29.
 
 Panel: select `basal_change_1`, then `seek {"date": "2021-01-25"}`. The catch-up
 replays every morning; the budget sends ONE Basal Check per 14 days, so the card in the
-inbox is the first morning the rise crossed the rule (the panel's evaluations show the
-01-25 numbers above). Line: "Same CGM line, opposite prescriptions. Rounds knows which."
+inbox is the FIRST morning the rise crossed the rule (window 2021-01-11 to 01-20): "5 clean
+nights of 10; median overnight rise +109 mg/dL, 4 of 5 in the same direction" (rehearsed
+2026-09-27). Say those numbers from the card on screen; the 01-25 numbers above are what the
+panel's evaluations show that morning, not the card. The same seek also sends one red Hypo
+Response (escalated warnings over the window); it arrives once, not every morning. Line: "Same CGM line, opposite prescriptions. Rounds knows which."
 
 ### 3. Decide
 The judge taps "adjust basal", types the units and a start date (the doctor types every
@@ -43,12 +46,17 @@ illustrative" unless Chris confirms they are his): the Follow-up at days 1-7 sti
 rising nights (+78.5 on 6 clean nights); at days 1-14 the overnight rise is flat (+2 on 11
 clean nights). Say it as "since the change", never "the change caused".
 
-Panel: `seek {"date": "2021-02-15"}`. Line: "Rounds would have flagged this N weeks earlier."
+Panel: `seek {"date": "2021-02-15"}`. The inbox gets the DAY-7 Follow-up only (amber:
+"+58 before the change, +78 after, days 1-7, 6 clean nights"). The day-14 result is green
+("+2 after, days 1-14, 11 clean nights") and green never interrupts a doctor, so it waits in
+the digest: show it from the demo panel's evaluations (GET /api/rounds/evaluations). No Basal
+Check is sent across the change (those nights are confounded). Line: "Rounds would have
+flagged this N weeks earlier."
 
 ### 5. The therapy start
 Panel: select `titration_synthetic` (say SYNTHETIC, it is labeled everywhere), then
-"simulate Spark offer". The judge's inbox and the kiosk show the offer as a doctor
-message: "Impiricus Spark (simulated): start a Step Watch, tirzepatide 2.5 mg, first
+"simulate Spark offer". The KIOSK and the app show the offer as a doctor message (the
+simulated sender lives on the device, so the judge's inbox does not list it): "Impiricus Spark (simulated): start a Step Watch, tirzepatide 2.5 mg, first
 increase on 2020-02-12". Nothing is applied until Chris confirms it with a fresh PIN;
 that confirm IS "start watch". Do the offer and the confirm BEFORE the seek: a seek
 jumps days and a pending offer expires after 24 hours of scenario time.
@@ -61,6 +69,10 @@ remembered. Rough stomach 3 of 5 days." Every row carries its label (measured / 
 / inferred). The judge taps "hold 4 weeks" and "adjust insulin"; the kiosk echoes each,
 Chris confirms each with a fresh PIN. The held step moves; the gate before the new date
 is a new gate.
+
+The seek lands at 1x speed so the screen holds; raise the speed from the panel only if the
+beat needs time to pass. The morning-recall card is shown on `the_save`, not here: the
+titration scenario's only question is answered by its companion ("don't remember").
 
 ### 7. The pharma moment
 On the amber card the stomach row offers a category ("GI side-effect education"); on a
