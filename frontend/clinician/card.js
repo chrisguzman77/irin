@@ -21,7 +21,7 @@ function section(title) {
 const LATER = { resources: "arrives with R13" };
 
 /** @param {object} card a SignalCard
- * @param {{actions?: boolean, sample?: boolean, onAction?: (key: string) => void}} opts
+ * @param {{actions?: boolean, sample?: boolean, onAction?: (key: string) => void, onResource?: (category: string) => void}} opts
  * @returns {HTMLElement} the card, ready to insert */
 export function renderCard(card, opts = {}) {
   const m = cardModel(card, opts);
@@ -89,8 +89,18 @@ export function renderCard(card, opts = {}) {
   }
 
   if (m.resources.length) {
+    // the inbox passes onResource(category) to start the handoff flow, a preview lists them
     const s = section("Resources");
-    s.append(el("div", "", m.resources.join(" · ")));
+    if (typeof opts.onResource === "function") {
+      const a = el("div", "sc-actions");
+      (card.resource_categories || []).forEach((key, i) => {
+        const b = el("button", "sc-action", m.resources[i]);
+        b.type = "button";
+        b.addEventListener("click", () => opts.onResource(String(key)));
+        a.append(b);
+      });
+      s.append(a);
+    } else s.append(el("div", "", m.resources.join(" · ")));
     root.append(s);
   }
 

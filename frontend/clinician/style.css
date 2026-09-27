@@ -64,3 +64,18 @@ dialog.wide { width: min(620px, calc(100vw - 32px)); }
 #plansend { font: 700 15px system-ui, sans-serif; padding: 10px 16px; border-radius: 8px; border: 0; background: var(--fg); color: #fff; cursor: pointer; }
 #plancancel { font: 600 15px system-ui, sans-serif; padding: 10px 16px; border-radius: 8px; border: 1px solid #d1d5db; background: #fff; cursor: pointer; }
 .pairbar .linkish + .linkish { margin-left: 8px; }
+.resbox { display: flex; flex-direction: column; gap: 12px; padding: 16px; }
+.resbox h3 { margin: 0; font-size: 17px; }
+.reschoices { display: flex; flex-direction: column; gap: 6px; }
+.reschoice { font: 600 15px system-ui, sans-serif; text-align: left; padding: 10px 12px; border-radius: 8px; border: 1px solid #d1d5db; background: #fff; cursor: pointer; }
+.reschoice:hover { border-color: var(--fg); }
+#resclose { font: 600 15px system-ui, sans-serif; padding: 8px 14px; border-radius: 8px; border: 1px solid #d1d5db; background: #fff; cursor: pointer; }
+#resback { margin-right: auto; }
+.ascend { display: flex; flex-direction: column; gap: 10px; border: 1px solid #c7d2fe; background: #eef2ff; border-radius: 10px; padding: 14px; }
+.ascend-brand { font: 800 12px system-ui, sans-serif; letter-spacing: 0.08em; text-transform: uppercase; color: #3730a3; }
+.ascend-banner { font: 700 16px system-ui, sans-serif; background: #166534; color: #fff; border-radius: 8px; padding: 10px 12px; }
+.ascend-fields { border-collapse: collapse; font-size: 14px; } .ascend-fields td { padding: 3px 12px 3px 0; } .ascend-fields td:first-child { color: var(--muted); }
+.ascend p { margin: 0; }
+.resgo { align-self: flex-start; font: 700 15px system-ui, sans-serif; padding: 10px 16px; border-radius: 8px; border: 0; background: #3730a3; color: #fff; cursor: pointer; }
+.resgo:disabled { opacity: 0.4; }
+.panel summary { cursor: pointer; font-size: 14px; color: var(--muted); padding: 4px 0; }

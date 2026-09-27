@@ -1,5 +1,6 @@
 import { renderCard } from "./card.js";
 import { openPlanForm } from "./plan-form.js";
+import { loadHandoffs, openResources } from "./resources.js";
 import { clear, load, openFromDevice, relay, saveSent, sealToDevice, sentMessages } from "./session.js";
 
 // justin.md R5: the clinician inbox ("mock Ascend"). Paired (see pair.js): polls
@@ -156,8 +157,10 @@ function render() {
   const card = openId ? cards.get(openId) : null;
   $("detail").hidden = !card;
   $("list").hidden = !!card;
+  $("handoffs").hidden = !!card;
   if (card) {
-    $("card").replaceChildren(renderCard(card, { actions: true, onAction: (key) => openAction(card, key) }));
+    $("card").replaceChildren(renderCard(card, { actions: true, onAction: (key) => openAction(card, key),
+      onResource: (c) => openResources(s, card.resource_categories || [], () => loadHandoffs(s, "handofflist"), c) }));
     const mine = sent.filter((m) => m.card_id === card.card_id);
     $("sent").hidden = !mine.length;
     $("sentlist").replaceChildren(...mine.map((m) => {
@@ -351,6 +354,7 @@ if (!s || s.state !== "paired" || !s.bearer || !s.doctor_id) {
   $("unpair").addEventListener("click", unpair);
   $("newplan").addEventListener("click", () => openPlanForm({ isDemo: !!s.is_demo, send: (msg, summary) => postMessage(msg, summary) }));
   $("back").addEventListener("click", () => { openId = null; render(); });
+  $("handoffs").addEventListener("toggle", () => { if ($("handoffs").open) loadHandoffs(s, "handofflist"); });
   $("actform").addEventListener("submit", sendAction);
   $("actcancel").addEventListener("click", () => { $("act").close(); acting = null; });
   status("Loading…");

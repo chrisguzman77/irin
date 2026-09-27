@@ -23,6 +23,10 @@
       </div>
       <p id="status" class="note" role="status"></p>
       <div id="list"></div>
+      <details id="handoffs" class="panel">
+        <summary>Resources you handed off</summary>
+        <div id="handofflist" class="sent"></div>
+      </details>
       <div id="detail" hidden>
         <button type="button" id="back" class="linkish">← All cards</button>
         <div id="card"></div>
@@ -56,6 +60,17 @@
         <button type="submit" id="actsend">Send to the patient</button>
       </div>
     </form>
+  </dialog>
+
+  <dialog id="res">
+    <div class="resbox">
+      <h3 id="restitle"></h3>
+      <div id="resbody"></div>
+      <div class="actbuttons">
+        <button type="button" id="resback" class="linkish" hidden>← Back</button>
+        <button type="button" id="resclose">Close</button>
+      </div>
+    </div>
   </dialog>
 
   <dialog id="plan" class="wide">
