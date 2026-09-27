@@ -63,7 +63,12 @@ const LOW_TRIGGERS = ["predicted_low", "actual_low"];
 const SOUNDING = ["pending", "active", "rearmed"]; // pending = the predicted-low warning
 
 const toMs = (iso) => new Date(iso).getTime(); // naive Pi-local timestamps; only differences matter
-const hhmm = (ms) => new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
+// Every time on the kiosk is 12-hour with AM/PM (George's choice): "9:29 PM".
+// Chromium puts a narrow no-break space (U+202F) before AM/PM; Nunito has no
+// glyph for it, so it becomes a plain space.
+const plainSpace = (s) => s.replace(/[\u202f\u00a0]/g, " ");
+const hm12 = (ms) => plainSpace(new Date(ms).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true }));
+const hour12 = (ms) => plainSpace(new Date(ms).toLocaleTimeString("en-US", { hour: "numeric", hour12: true }));  // graph axis: "7 PM"
 
 // --- data ---
 
@@ -302,10 +307,21 @@ function render() {
   $("night-glucose").textContent = $("morning-glucose").textContent = num;
   $("night-trend").textContent = $("morning-trend").textContent = arrow;
   const now = state.piClock ?? (r ? toMs(r.timestamp) : null);
-  $("night-clock").textContent = now === null ? "--:--" : hhmm(now);
+  // the night clock: the time big, AM/PM small beside it (a full-size "AM" would
+  // make an already huge clock much wider)
+  if (now === null) {
+    $("night-clock").textContent = "--:--";
+  } else {
+    const [hm, ap] = hm12(now).split(" ");
+    $("night-clock").textContent = hm;
+    const suffix = document.createElement("span");
+    suffix.className = "ampm";
+    suffix.textContent = ap;
+    $("night-clock").append(suffix);
+  }
   // top-right clock: the Pi's time, blank until the Pi's clock has synced (no
   // RTC battery: an unsynced wall clock is untrusted and is never shown as the time)
-  $("topclock").textContent = now === null || !state.clockSynced ? "" : hhmm(now);
+  $("topclock").textContent = now === null || !state.clockSynced ? "" : hm12(now);
   const pred = predictionText();
   for (const id of ["prediction", "night-prediction"]) {
     $(id).textContent = pred ?? "";
@@ -316,7 +332,7 @@ function render() {
   if (r) {
     $("glucose").textContent = Math.round(r.glucose_mgdl);
     $("trend").textContent = r.is_stale ? "" : (TREND_ARROWS[r.trend] ?? "?");
-    $("reading-time").textContent = `reading at ${hhmm(toMs(r.timestamp))}`;
+    $("reading-time").textContent = `reading at ${hm12(toMs(r.timestamp))}`;
   } else {
     $("glucose").textContent = "---";
     $("trend").textContent = "";
@@ -908,7 +924,7 @@ function drawGraph() {
   for (let t = Math.ceil(tStart / hour) * hour; t <= tEnd; t += hour) {
     ctx.strokeStyle = "#3A3B33";
     ctx.beginPath(); ctx.moveTo(x(t), padT); ctx.lineTo(x(t), padT + plotH); ctx.stroke();
-    ctx.fillText(hhmm(t), x(t), padT + plotH + fs * 0.4);
+    ctx.fillText(hour12(t), x(t), padT + plotH + fs * 0.4);
   }
 
   // "now" divider between history and forecast
