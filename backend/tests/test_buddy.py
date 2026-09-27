@@ -475,9 +475,10 @@ from app.rounds import narrative  # noqa: E402
 NIGHT = date(2019, 12, 31)  # the night T0 (03:00) belongs to, keyed by its evening like the ledger
 
 
-def _record(coverage=95.0, demo=True):
+def _record(coverage=95.0, demo=True, alarm_event_ids=(), minutes_below_70=0):
     return SimpleNamespace(night_date=NIGHT, window_start=datetime(2019, 12, 31, 22, 0),
-                           window_end=datetime(2020, 1, 1, 7, 0), coverage_pct=coverage, is_demo=demo)
+                           window_end=datetime(2020, 1, 1, 7, 0), coverage_pct=coverage, is_demo=demo,
+                           alarm_event_ids=list(alarm_event_ids), minutes_below_70=minutes_below_70)
 
 
 def _no_model(monkeypatch):
@@ -571,3 +572,21 @@ def test_b5_no_line_is_sent_without_have_buddy(rig, monkeypatch):
     rig.rung.on_night(_record())
     rig.drain()
     assert _lines(rig) == [] and rig.rung.state()["morning_line"] is not None
+
+
+@pytest.mark.parametrize("ids,below", [(["ae-20191231T230000000000-actual_low"], 0),
+                                       (["ae-20191231T230000000000-predicted_low"], 0), ([], 12)])
+def test_b5_a_night_with_a_low_that_never_reached_the_rung_is_never_all_quiet(rig, monkeypatch, ids, below):
+    """Rehearsal: a night whose low was answered (or loaded by a seek) read "all quiet with 0 alerts"."""
+    _no_model(monkeypatch)
+    rig.rung.on_night(_record(alarm_event_ids=ids, minutes_below_70=below))
+    rig.drain()
+    line = rig.rung.state()["morning_line"]
+    assert line == rung_mod.LOW_LINE and "quiet" not in line.lower()
+
+
+def test_b5_a_stale_or_high_alarm_alone_still_reads_quiet(rig, monkeypatch):
+    _no_model(monkeypatch)
+    rig.rung.on_night(_record(alarm_event_ids=["ae-20191231T230000000000-stale", "ae-20191231T231000000000-high"]))
+    rig.drain()
+    assert rig.rung.state()["morning_line"] == narrative._buddy_line_template({"kind": "all_quiet"}, {})
