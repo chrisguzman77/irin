@@ -52,7 +52,7 @@ body.mode-night #topclock { display: none; }
 
 #flags { position: fixed; top: 1.5vh; left: calc(1.5vw + 12.4vh + 1.2vw); right: calc(1.5vw + 24vh); display: flex; gap: 1vw;
   flex-wrap: wrap; z-index: 25; pointer-events: none; } /* above the alarm takeover: DEMO is on every screen */
-.flag { font-weight: 800; padding: 0.6vh 1.2vw; border-radius: 0.4rem; font-size: 2.2vh; letter-spacing: 0.04em; }
+.flag { font-weight: 800; padding: 0.6vh 1.2vw; border-radius: 3px; font-size: 2.2vh; letter-spacing: 0.04em; }
 .flag-demo { background: var(--amber); color: #000; font-size: 3vh; }
 .flag-clock { background: var(--line); color: var(--fg); border: 1px solid var(--grey); }
 .flag-stale { background: var(--grey); color: #000; }
@@ -84,7 +84,7 @@ body.is-stale #glucose { text-decoration: line-through; text-decoration-thicknes
 #graph { position: absolute; inset: 0; width: 100%; height: 100%; }
 
 #tiles { grid-area: tiles; display: grid; grid-template-columns: repeat(3, 1fr); gap: 2vw; }
-.tile { border: 1px solid var(--line); border-radius: 0.8rem; padding: 1.2vh 1.5vw; background: var(--panel); }
+.tile { border: 1px solid var(--line); border-radius: 6px; padding: 1.2vh 1.5vw; background: var(--panel); }
 .tile-label { font-size: 2.2vh; color: var(--dim); text-transform: uppercase; letter-spacing: 0.06em; }
 .tile-value { font-size: 5.5vh; font-weight: 700; font-variant-numeric: tabular-nums; margin-top: 0.3vh; }
 .tile-note { font-size: 1.8vh; color: var(--faint); min-height: 1.8vh; }
@@ -132,11 +132,11 @@ body.mode-night.is-stale #night-glucose { text-decoration: line-through; }
 /* Family Story chips (F2): passive, no buttons on the kiosk */
 #morning-family { display: flex; flex-wrap: wrap; justify-content: center; gap: 1vw; min-height: 0; }
 #morning-family:empty { display: none; }
-.fam-chip { font-size: 2.6vh; font-weight: 700; padding: 0.6vh 1.4vw; border-radius: 999px; }
+.fam-chip { font-size: 2.6vh; font-weight: 700; padding: 0.6vh 1.4vw; border-radius: 4px; }
 .fam-sent { background: var(--sage); color: var(--bg); }
 .fam-wait { border: 1px solid var(--amber); color: var(--amber); }
 .fam-demo { border: 1px solid var(--amber); color: var(--fg); }
-.fam-demo b { background: var(--amber); color: #000; padding: 0 0.5vw; border-radius: 0.3rem; margin-right: 0.5vw; }
+.fam-demo b { background: var(--amber); color: #000; padding: 0 0.5vw; border-radius: 2px; margin-right: 0.5vw; }
 .fam-other { border: 1px solid var(--faint); color: var(--dim); }
 #morning-note { font-size: 2vh; color: var(--faint); text-align: center; min-height: 2vh; }
 #morning-now { font-size: 3.2vh; color: var(--dim); text-align: right; }
@@ -199,7 +199,7 @@ body.alarm-high::after { content: ""; position: fixed; inset: 0; pointer-events:
   font-family: "Nunito Irin", system-ui, -apple-system, "Segoe UI", sans-serif; font-synthesis: none; }
 #alarm-trend { font-size: min(9vw, 16vh); }
 #alarm-sub { font-size: 3vh; font-weight: 600; }
-#alarm-ack { font: inherit; font-size: 5vh; font-weight: 800; padding: 2.5vh 8vw; border-radius: 1.5vh;
+#alarm-ack { font: inherit; font-size: 5vh; font-weight: 800; padding: 2.5vh 8vw; border-radius: 6px;
   border: 0.6vh solid #000; background: #000; color: #fff; cursor: pointer; min-width: 50vw; }
 #alarm-ack:active { transform: scale(0.98); }
 #alarm-ack-msg { font-size: 2.4vh; font-weight: 700; min-height: 2.4vh; }
@@ -229,7 +229,7 @@ body.is-stale #alarm-glucose, body.is-disconnected #alarm-glucose { opacity: 0.5
 #doctor-units { font-size: min(14vh, 11vw); font-weight: 800; font-variant-numeric: tabular-nums; line-height: 1; }
 #doctor-note { font-size: 2.8vh; color: #cfe0f2; max-width: 70vw; }
 #doctor-buttons { display: flex; gap: 3vw; margin-top: 2vh; }
-#doctor-buttons button { font: 800 4vh system-ui, sans-serif; padding: 2.4vh 5vw; border-radius: 1.2vh; border: 0.3vh solid #8fb3d9; }
+#doctor-buttons button { font: 800 4vh "Nunito Irin", system-ui, sans-serif; padding: 2.4vh 5vw; border-radius: 6px; border: 0.3vh solid #8fb3d9; }
 #doctor-decline { background: transparent; color: #e8f1fb; }
 #doctor-confirm { background: #e8f1fb; color: #071a2e; }
 #doctor-confirm:disabled { opacity: 0.35; }
@@ -237,18 +237,18 @@ body.is-stale #alarm-glucose, body.is-disconnected #alarm-glucose { opacity: 0.5
 body.mode-night #doctor { background: #03101d; }
 
 #watch-strip { margin-top: 2vh; font-size: 2.4vh; color: #8fb3d9; text-align: center; } /* R1: glance only, no buttons */
-#share-open { margin-top: 3vh; font: 600 2.2vh system-ui, sans-serif; padding: 1.2vh 2vw;
-  border-radius: 1vh; border: 1px solid var(--sage); background: var(--panel); color: var(--fg); }
+#share-open { margin-top: 3vh; font: 600 2.2vh "Nunito Irin", system-ui, sans-serif; padding: 1.2vh 2vw;
+  border-radius: 6px; border: 1px solid var(--sage); background: var(--panel); color: var(--fg); }
 #pair { position: fixed; inset: 0; z-index: 12; background: #071a2e; color: #e8f1fb; display: flex; flex-direction: column;
   align-items: center; justify-content: center; gap: 2vh; padding: 6vh 6vw; text-align: center; } /* under the doctor takeover, alarm, DEMO, keypad */
 #pair-title { font-size: 4vh; font-weight: 700; }
 #pair-list { font-size: 2.6vh; color: #8fb3d9; }
-#pair-qr { background: #fff; padding: 1.5vh; border-radius: 1vh; line-height: 0; }
+#pair-qr { background: #fff; padding: 1.5vh; border-radius: 4px; line-height: 0; }
 #pair-qr svg { width: 44vh; height: 44vh; display: block; }
 #pair-code { font-size: min(16vh, 12vw); font-weight: 800; letter-spacing: 2vw; font-variant-numeric: tabular-nums; line-height: 1; }
 #pair-text { font-size: 2.8vh; max-width: 70vw; color: #cfe0f2; }
 #pair-buttons { display: flex; gap: 3vw; }
-#pair-buttons button { font: 800 3.6vh system-ui, sans-serif; padding: 2vh 4vw; border-radius: 1.2vh; border: 0.3vh solid #8fb3d9; }
+#pair-buttons button { font: 800 3.6vh "Nunito Irin", system-ui, sans-serif; padding: 2vh 4vw; border-radius: 6px; border: 0.3vh solid #8fb3d9; }
 #pair-close { background: transparent; color: #e8f1fb; }
 #pair-start, #pair-confirm { background: #e8f1fb; color: #071a2e; }
 #pair-start:disabled, #pair-confirm:disabled { opacity: 0.35; }
@@ -259,7 +259,7 @@ body.mode-night #doctor { background: #03101d; }
 #keypad-title { font-size: 4vh; color: var(--fg); }
 #keypad-dots { font-size: 5vh; letter-spacing: 1vw; min-height: 6vh; color: var(--fg); }
 #keypad-keys { display: grid; grid-template-columns: repeat(3, 13vh); gap: 1.5vh; }
-#keypad-keys button { font: inherit; font-size: 5vh; height: 11vh; border-radius: 1.2vh; border: 1px solid var(--sage);
+#keypad-keys button { font: inherit; font-size: 5vh; height: 11vh; border-radius: 6px; border: 1px solid var(--sage);
   background: var(--panel); color: var(--fg); cursor: pointer; }
 #keypad-keys button:active { background: var(--sage); color: var(--bg); }
 #alarm.tier-full.strobe #alarm-ack { background: #000; color: #fff; border-color: #000; } /* visible on red and white frames */
