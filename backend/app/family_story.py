@@ -13,9 +13,10 @@ SMTP path with an unsubscribe line and the cached ElevenLabs clip attached;
 demo stories are badged DEMO and NEVER reach SMTP (invariant 19). Save
 celebrations are never part of the automatic story.
 
-The model link is the direct Claude call until R13, when narrative.py's
-chain (Muse Spark through Backboard / the Meta Model API, then Claude, then
-this template, the validator after every link) takes over."""
+The words come from narrative.py's chain (task family_story: Muse Spark
+through Backboard / the Meta Model API, then Claude, then this template, the
+validator after every link), one family scope per recipient, memory Readonly.
+build() runs in a worker thread (main._build_night), never on the event loop."""
 
 from __future__ import annotations
 
@@ -30,9 +31,9 @@ from typing import Callable
 
 from . import store
 from .clock import clock
-from .config import config
-from .contracts import FamilyRecipient, FamilyStory, Settings
-from .reports import Mailer, claude_narrative, extract_numbers, validate_narrative
+from .contracts import FamilyRecipient, FamilyStory, NarrativeScope, Settings
+from .reports import Mailer, extract_numbers, validate_narrative
+from .rounds import narrative
 
 log = logging.getLogger("irin.family_story")
 
@@ -103,7 +104,7 @@ def validate_family_text(text: str, level: str, stats: dict) -> bool:
     return validate_narrative(text, stats)
 
 
-# --- the prompt (the direct Claude call until R13) ---
+# --- the prompt (narrative.py's family_story task) ---
 
 FAMILY_SYSTEM_PROMPT = (
     "You write two or three sentences to a family member of an adult with type 1 diabetes about last night, "
@@ -131,26 +132,15 @@ class FamilyStoryService:
     settings: Settings
     mailer: Mailer | None = None
     render_clip: Callable[[str], Path | None] = lambda text: None  # voice_out.render when a voice backend is set
-    model_call: Callable[[str, str], str] | None = None  # (prompt, system) -> text; default the direct Claude call
-    narrative_backend: str | None = None  # None = config.NARRATIVE_BACKEND
     family_view_url: str = ""
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False)
 
     def _text(self, stats: dict, recipient: FamilyRecipient) -> str:
-        fallback = template_story(stats, recipient.level, recipient.name)
-        backend = self.narrative_backend or config.NARRATIVE_BACKEND
-        if backend == "template":
-            return fallback
-        call = self.model_call or (lambda prompt, system: claude_narrative(prompt, system=system, task="family_story"))
-        try:
-            text = call(family_prompt(stats, recipient.level), FAMILY_SYSTEM_PROMPT).strip()
-        except Exception as e:
-            log.warning("family narrative failed (%s); using the template", type(e).__name__)
-            return fallback
-        if not text or not validate_family_text(text, recipient.level, stats):
-            log.warning("family narrative failed the %s validator; using the template", recipient.level)
-            return fallback
-        return text
+        """narrative.generate validates every link's words with validate_family_text at the recipient's
+        level and falls back to template_story; the family scope keeps Backboard memory Readonly."""
+        return narrative.generate("family_story", {
+            "level": recipient.level, "name": recipient.name,
+            "scope": NarrativeScope(kind="family", scope_id=recipient.recipient_id)}, stats)
 
     def build(self, night_date: date, stats: dict, is_demo: bool) -> list[FamilyStory]:
         """One story per active recipient (paused and revoked get nothing).

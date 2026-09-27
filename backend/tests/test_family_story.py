@@ -51,7 +51,19 @@ def recipients(*specs):
 
 
 def service(settings, mailer=None, **kw):
-    return FamilyStoryService(settings=settings, mailer=mailer, narrative_backend=kw.pop("backend", "template"), **kw)
+    return FamilyStoryService(settings=settings, mailer=mailer, **kw)  # conftest pins NARRATIVE_BACKEND=template
+
+
+@pytest.fixture
+def chain(monkeypatch):
+    """narrative.py's chain live, its three link functions faked (tests/test_narrative.py's Fakes): nothing
+    reaches the network. family_story routes to Meta direct, as in the real routing table."""
+    from app.rounds import narrative
+    from tests.test_narrative import ROUTING, Fakes
+
+    monkeypatch.setattr(narrative.config, "NARRATIVE_BACKEND", "backboard")
+    monkeypatch.setattr(narrative.config, "NARRATIVE_ROUTING", ROUTING)
+    return lambda **replies: Fakes(monkeypatch, **replies)
 
 
 # --- F2: the inverted validator and the template ---
@@ -84,16 +96,45 @@ def test_templates_pass_their_own_validators(stats):
     assert "STORY ONLY" in family_prompt(stats, "story_only") and "ONLY the numbers" in family_prompt(stats, "story_and_view")
 
 
-def test_smuggled_number_from_a_model_falls_back_to_the_template(db, stats):
+def test_smuggled_number_from_a_model_falls_back_to_the_template(db, stats, chain):
     settings = Settings(family_recipients=recipients(("Mom", "story_only", "automatic", "active", True)))
-    smuggled = lambda prompt, system: "A rough patch near 2:18 AM, down to 50, but they handled it. How's the garden?"
-    svc = service(settings, FakeMailer(), backend="anthropic", model_call=smuggled)
-    [story] = svc.build(NIGHT, stats, is_demo=False)
+    chain(meta="A rough patch near 2:18 AM, down to 50, but they handled it. How's the garden?")
+    [story] = service(settings, FakeMailer()).build(NIGHT, stats, is_demo=False)
     assert story.text == template_story(stats, "story_only", "Mom") and story.status == "sent"
-    good = lambda prompt, system: "A low came around 2:18 AM; they caught it and treated it. Ask them about the game."
-    svc = service(settings, FakeMailer(), backend="anthropic", model_call=good)
-    [story] = svc.build(NIGHT, stats, is_demo=False)
+    chain(meta="A low came around 2:18 AM; they caught it and treated it. Ask them about the game.")
+    [story] = service(settings, FakeMailer()).build(NIGHT, stats, is_demo=False)
     assert story.text.startswith("A low came around 2:18 AM")
+
+
+def test_the_story_goes_through_the_narrative_chain_to_meta_with_no_glucose_value(db, stats, chain):
+    """The Meta entry's built half: Muse Spark writes the story (routing row meta), its prompt carries no
+    glucose value, and the recipient's family scope rides along (Backboard memory Readonly for family)."""
+    settings = Settings(family_recipients=recipients(("Mom", "story_only", "automatic", "active", True)))
+    fakes = chain(backboard="x", meta="A low came around 2:18 AM; they caught it and treated it.")
+    [story] = service(settings, FakeMailer()).build(NIGHT, stats, is_demo=False)
+    assert story.text.startswith("A low came around 2:18 AM") and fakes.names() == ["meta"]
+    prompt = fakes.calls[0][1]
+    assert "STORY ONLY" in prompt and "low_mgdl" not in prompt and "insulin" not in prompt
+    assert f"{stats['low_mgdl']}" not in prompt.replace(stats["low_at"], "")
+
+
+def test_the_family_scope_is_the_recipients_and_readonly(db, stats, chain, monkeypatch):
+    from app.rounds import narrative
+    from tests.test_narrative import ROUTING
+
+    monkeypatch.setattr(narrative.config, "NARRATIVE_ROUTING", {**ROUTING, "family_story": ["anthropic", "claude-sonnet-5"]})
+    settings = Settings(family_recipients=recipients(("Mom", "story_only", "automatic", "active", True)))
+    fakes = chain(backboard="A low came around 2:18 AM; they caught it and treated it.")
+    service(settings, FakeMailer()).build(NIGHT, stats, is_demo=False)
+    name, _, kw = fakes.calls[0]
+    assert name == "backboard" and kw["scope"].kind == "family" and kw["scope"].scope_id == "r0"
+
+
+def test_a_model_calling_a_no_data_night_fine_ships_the_template(db, chain):
+    settings = Settings(family_recipients=recipients(("Mom", "story_only", "automatic", "active", True)))
+    chain(meta="Irin didn't have data last night, but it was probably fine.")
+    [story] = service(settings, FakeMailer()).build(NIGHT, NO_DATA, is_demo=False)
+    assert story.text == template_story(NO_DATA, "story_only", "Mom") and "fine" not in story.text.lower()
 
 
 # --- F1 + F3: consent, the send hook, approval, demo ---
