@@ -20,6 +20,7 @@ from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 import hub
+import notify
 import relay_api
 import store
 
@@ -65,6 +66,7 @@ async def health() -> dict:
 
 app.include_router(relay_api.router)  # R6: pairing, cards, inbox, messages, device poll, resolutions, log; R13: resources
 app.include_router(hub.router)  # B3: the hub
+app.include_router(notify.router)  # B4+: the WhatsApp channel (buddy number, notify)
 
 # --- owner pairing (R5+) ---
 @app.post("/v0/device/pairings")

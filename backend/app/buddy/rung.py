@@ -25,13 +25,25 @@ that time whatever any claim, call, or treating status says; only the
 patient's own ack or the episode closing (recovery, a mode switch) disarms
 it. Demo tier: a stored event, a WS line, and buddy_state.emergency.
 
+B4+: before sealing, the spawned delivery asks Irin Cloud for the voice clip
+(POST {CLOUD_URL}/v1/audio/render, the device token, the text "Your buddy
+<first name> is in trouble. The alarm has been unacknowledged for <minutes
+spelled out> minutes.", never a glucose value) and puts the returned
+audio_url in the BuddyAlert; any failure, a missing CLOUD_URL or device
+token, or AUDIO_TIMEOUT_S (3 s) passing means audio_url null and the alert
+is sealed anyway. After each buddy's envelope is stored, a best-effort POST
+{RELAY_URL}/v0/buddy/notify (X-Source-Key) asks the relay to send the
+WhatsApp text and clip; it is spawned, so nothing waits on it.
+
 ADDITIVE ONLY (invariant 13): the rung observes alarm.py and never calls into
 it; nothing here delays, quiets, or gates a local alarm. Time is clock.py's.
 Network sends are handed to `spawn` so the engine's observer call and the
-tick never wait on the relay."""
+tick never wait on the relay or the cloud."""
 
 from __future__ import annotations
 
+import asyncio
+import copy
 import json
 import logging
 import os
@@ -39,9 +51,12 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Awaitable, Callable
 
+import httpx
+
 from .. import store
 from ..alarm import Transition
 from ..clock import clock
+from ..config import config
 from ..contracts import AlarmState, BuddyAlert, HubListing, Pairing, Reading, Settings
 from ..rounds import crypto
 
@@ -63,6 +78,31 @@ LEVEL2_READINGS = 2
 FULL_STATES = ("active", "rearmed")
 EPISODE_STATES = ("active", "acknowledged", "rearmed")
 EMERGENCY_TEXT = "emergency contact alerted (simulated)"
+AUDIO_TIMEOUT_S = 3.0  # the most the clip may hold back the sealed alert (invariant 13)
+NOTIFY_TIMEOUT_S = 10.0  # spawned: nothing waits on it
+
+_ONES = ("zero one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen "
+         "seventeen eighteen nineteen").split()
+_TENS = "_ _ twenty thirty forty fifty sixty seventy eighty ninety".split()
+
+
+def number_words(n: int) -> str:
+    """0-999999 in words (the spoken clip carries no digits at all)."""
+    n = max(0, int(n))
+    if n < 20:
+        return _ONES[n]
+    if n < 100:
+        return _TENS[n // 10] + ("" if n % 10 == 0 else "-" + _ONES[n % 10])
+    if n < 1000:
+        return _ONES[n // 100] + " hundred" + ("" if n % 100 == 0 else " and " + number_words(n % 100))
+    return number_words(n // 1000) + " thousand" + ("" if n % 1000 == 0 else " " + number_words(n % 1000))
+
+
+def alert_voice_text(first_name: str, minutes: int) -> str:
+    """The buddy clip: a first name and minutes in words, never a glucose value."""
+    who = "Your buddy" if first_name == "Your buddy" else f"Your buddy {first_name}"
+    unit = "minute" if minutes == 1 else "minutes"
+    return f"{who} is in trouble. The alarm has been unacknowledged for {number_words(minutes)} {unit}."
 
 
 def patient_first_name() -> str:
@@ -91,6 +131,13 @@ class BuddyRung:
     first_name: Callable[[], str] = patient_first_name
     on_alert: Callable[[dict], None] | None = None  # buddy_alert broadcast
     on_update: Callable[[dict], None] | None = None  # hub_update broadcast (resolved, emergency, call)
+    # B4+: the voice clip (Irin Cloud) and the WhatsApp channel (relay); an unset URL or credential skips it
+    cloud_url: str = field(default_factory=lambda: config.CLOUD_URL)
+    cloud_device_id: str = field(default_factory=lambda: config.DEVICE_ID)
+    cloud_device_token: str = field(default_factory=lambda: config.DEVICE_TOKEN)
+    relay_url: str = field(default_factory=lambda: config.RELAY_URL)
+    source_key: str = field(default_factory=lambda: config.RELAY_SOURCE_KEY)
+    transport: httpx.AsyncBaseTransport | None = None  # tests inject a MockTransport
     # the episode
     crossing_at: datetime | None = None
     stretch_at: datetime | None = None  # start of the current unanswered stretch (crossing or re-arm)
@@ -253,7 +300,15 @@ class BuddyRung:
                 log.exception("buddy_alert observer failed")
 
     async def _deliver(self, payload: dict, demo: bool, source: str) -> int:
-        """Seal to every paired buddy of this world (a demo alert only to a demo pairing)."""
+        """Seal to every paired buddy of this world (a demo alert only to a demo pairing),
+        with the voice clip's audio_url when the cloud answers within AUDIO_TIMEOUT_S."""
+        payload = copy.deepcopy(payload)
+        name, minutes = payload["listing"]["first_name"], payload["listing"]["elapsed_min"]
+        audio_url = await self._render_audio(name, minutes)
+        if audio_url is not None:
+            payload["alert"]["audio_url"] = audio_url
+            if self.alert is not None and self.alert["alert"]["alert_id"] == payload["alert"]["alert_id"]:
+                self.alert["alert"]["audio_url"] = audio_url  # the snapshot carries the clip too
         sent = 0
         for p in self.recipients(demo):
             if p.peer_kind != "buddy" or p.is_demo != demo:
@@ -264,7 +319,42 @@ class BuddyRung:
                    "is_demo": demo, "card_id": payload["alert"]["alert_id"]}
             if await self.post_card(env):
                 sent += 1
+                self.spawn(self._notify({"peer_id": p.doctor_id, "first_name": name, "minutes": minutes,
+                                         "audio_url": audio_url, "is_demo": demo}))
         return sent
+
+    async def _render_audio(self, first_name: str, minutes: int) -> str | None:
+        """The cloud-rendered clip's URL, or None on any failure or after AUDIO_TIMEOUT_S."""
+        if not (self.cloud_url and self.cloud_device_id and self.cloud_device_token):
+            return None
+
+        async def call() -> httpx.Response:
+            async with httpx.AsyncClient(timeout=AUDIO_TIMEOUT_S, transport=self.transport) as client:
+                return await client.post(f"{self.cloud_url.rstrip('/')}/v1/audio/render",
+                                         json={"kind": "buddy_alert", "text": alert_voice_text(first_name, minutes)},
+                                         headers={"X-Device-Id": self.cloud_device_id,
+                                                  "X-Device-Token": self.cloud_device_token})
+
+        try:
+            r = await asyncio.wait_for(call(), AUDIO_TIMEOUT_S)
+            url = r.json().get("audio_url") if r.status_code == 200 else None
+            return url if isinstance(url, str) and url.startswith(("https://", "http://")) else None
+        except Exception as e:  # cloud down, slow, or odd: the alert goes out without a clip
+            log.info("buddy clip unavailable (%s); alert sealed without audio", type(e).__name__)
+            return None
+
+    async def _notify(self, body: dict) -> bool:
+        """Best effort: the relay's WhatsApp channel for one buddy (an id, a first name, minutes; never glucose)."""
+        if not (self.relay_url and self.source_key):
+            return False
+        try:
+            async with httpx.AsyncClient(timeout=NOTIFY_TIMEOUT_S, transport=self.transport) as client:
+                r = await client.post(f"{self.relay_url.rstrip('/')}/v0/buddy/notify", json=body,
+                                      headers={"X-Source-Key": self.source_key})
+            return r.status_code == 200 and bool(r.json().get("sent"))
+        except Exception as e:
+            log.info("buddy notify failed (%s)", type(e).__name__)
+            return False
 
     def _resolve(self, outcome: str) -> None:
         payload, self.alert = self.alert, None

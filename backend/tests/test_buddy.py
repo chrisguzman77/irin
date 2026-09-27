@@ -11,6 +11,7 @@ observes alarm.py. No network, no sleep: clock.advance and a MockTransport."""
 import asyncio
 import inspect
 import json
+import time
 from datetime import datetime
 
 import httpx
@@ -35,14 +36,26 @@ T0 = datetime(2020, 1, 1, 3, 0)
 
 
 class FakeRelay:
+    """The relay and Irin Cloud behind one MockTransport (the cloud answers
+    audio_url None, VOICE_BACKEND=none, unless a test sets audio_url)."""
+
     def __init__(self):
         self.cards: list[dict] = []
         self.hub: list[tuple[str, dict]] = []
         self.calls: list[dict] = []
+        self.renders: list[tuple[dict, dict]] = []
+        self.notifies: list[tuple[dict, dict]] = []
+        self.audio_url: str | None = None
 
     def transport(self):
         def handler(request: httpx.Request) -> httpx.Response:
             path = request.url.path
+            if path == "/v1/audio/render":
+                self.renders.append((json.loads(request.content), dict(request.headers)))
+                return httpx.Response(200, json={"audio_url": self.audio_url})
+            if path == "/v0/buddy/notify":
+                self.notifies.append((json.loads(request.content), dict(request.headers)))
+                return httpx.Response(200, json={"sent": True, "reason": "ok"})
             if path == "/v0/cards":
                 self.cards.append(json.loads(request.content))
                 return httpx.Response(200, json={"stored": True})
@@ -94,7 +107,9 @@ class Rig:
             recipients=lambda d: [p for p in self.pairs.values() if p.status == "paired" and p.is_demo == d],
             post_card=self.client.post_card, post_hub=self.client.post_hub, spawn=self.pending.append,
             device_id="irin-test", is_demo=lambda: self.demo, brain_only=lambda: self.brain,
-            first_name=lambda: "Chris", on_alert=self.alerts.append, on_update=self.updates.append)
+            first_name=lambda: "Chris", on_alert=self.alerts.append, on_update=self.updates.append,
+            cloud_url="http://cloud.test", cloud_device_id="irin-test", cloud_device_token="dev-tok",
+            relay_url="http://relay.test", source_key="k", transport=self.relay.transport())
         self.eng.on_transition(self.rung)
 
     def feed(self, mgdl):
@@ -129,7 +144,8 @@ class Rig:
 def rig(tmp_path, monkeypatch):
     r = Rig(tmp_path, monkeypatch)
     yield r
-    r.drain()  # every spawned send is awaited
+    while r.pending:  # every spawned send is awaited (a delivery spawns its notifies)
+        r.drain()
     clock.reset()
 
 
@@ -309,8 +325,76 @@ def test_a_live_alert_goes_only_to_the_live_buddy(tmp_path, monkeypatch):
         r.advance(10.5, present=True)
         r.drain()
         assert [c["recipient_id"] for c in r.relay.cards] == ["buddy-real"] and r.relay.cards[0]["is_demo"] is False
+        r.drain()  # the notify the delivery spawned
+        assert [b["peer_id"] for b, _ in r.relay.notifies] == ["buddy-real"]
     finally:
         clock.reset()
+
+
+AUDIO = "https://cloud.example.test/v1/audio/" + "a" * 64 + ".mp3"
+
+
+def test_b4_audio_url_from_the_cloud_rides_the_sealed_alert_and_notify_is_posted(rig):
+    rig.relay.audio_url = AUDIO
+    rig.feed(61.7)
+    rig.advance(10.5, present=True)
+    assert rig.alerts[0]["alert"]["audio_url"] is None  # the local broadcast never waits on the cloud
+    rig.drain()  # the delivery: render, seal, post
+    [(render, rh)] = rig.relay.renders
+    assert render == {"kind": "buddy_alert",
+                      "text": "Your buddy Chris is in trouble. The alarm has been unacknowledged for ten minutes."}
+    assert rh["x-device-id"] == "irin-test" and rh["x-device-token"] == "dev-tok"
+    [env] = rig.relay.cards
+    assert rig.open_card(env)["alert"]["audio_url"] == AUDIO
+    assert rig.rung.alert["alert"]["audio_url"] == AUDIO
+    rig.drain()  # the notify the delivery spawned
+    [(body, nh)] = rig.relay.notifies
+    assert body == {"peer_id": "buddy-demo", "first_name": "Chris", "minutes": 10, "audio_url": AUDIO, "is_demo": True}
+    assert nh["x-source-key"] == "k"
+    text = json.dumps([render, body]).lower()
+    assert "61.7" not in text and "mg" not in text and "glucose" not in text  # invariant 15
+
+
+@pytest.mark.parametrize("failure", ["down", "hangs", "500"])
+def test_b4_cloud_down_or_slow_still_sends_the_alert_with_audio_url_null(rig, monkeypatch, failure):
+    monkeypatch.setattr(rung_mod, "AUDIO_TIMEOUT_S", 0.05)
+    base = rig.relay.transport()
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/audio/render":
+            if failure == "down":
+                raise httpx.ConnectError("refused", request=request)
+            if failure == "hangs":
+                await asyncio.Event().wait()  # never answers; the rung's timeout cancels it
+            return httpx.Response(500)
+        return await base.handle_async_request(request)
+
+    rig.rung.transport = httpx.MockTransport(handler)
+    rig.feed(61.7)
+    rig.advance(10.5, present=True)
+    t0 = time.monotonic()
+    rig.drain()
+    assert time.monotonic() - t0 < 1.0  # bounded by the timeout, never by the cloud
+    [env] = rig.relay.cards
+    assert rig.open_card(env)["alert"]["audio_url"] is None
+    rig.drain()
+    assert [b["audio_url"] for b, _ in rig.relay.notifies] == [None]
+
+
+def test_b4_no_cloud_url_skips_the_clip_and_the_alert_still_goes(rig):
+    rig.rung.cloud_url = ""
+    rig.feed(62)
+    rig.advance(10.5, present=True)
+    rig.drain()
+    assert rig.relay.renders == [] and len(rig.relay.cards) == 1
+
+
+def test_b4_voice_text_spells_minutes_and_carries_no_digits():
+    assert rung_mod.number_words(12) == "twelve" and rung_mod.number_words(21) == "twenty-one"
+    assert rung_mod.number_words(120) == "one hundred and twenty"
+    t = rung_mod.alert_voice_text("Chris", 11)
+    assert t == "Your buddy Chris is in trouble. The alarm has been unacknowledged for eleven minutes."
+    assert not any(ch.isdigit() for ch in t)
 
 
 def test_treating_without_an_alert_is_refused(rig):

@@ -159,10 +159,31 @@ unset.
 for family bearers), `DEVICE_TZ` (the Pi's zone for the stale flag; default
 America/New_York). Unset OWNER_BEARER or PIN fails closed (503).
 
-## Audio (B4+) — `POST /v1/audio/render` (relay key or owner bearer)
+## Audio (B4+) — `POST /v1/audio/render`, `GET /v1/audio/{hash}.mp3`
 
-`{kind, text, voice}` -> `{audio_url}`; rendered once per text hash into
-`cloud/audio_cache/` (gitignored), never re-rendered.
+`POST /v1/audio/render` (headers `X-Device-Id`, `X-Device-Token`: the same
+check as /v1/ingest) body `{"kind": "buddy_alert", "text": "Your buddy Chris is
+in trouble. The alarm has been unacknowledged for twelve minutes."}` ->
+`{"audio_url": "https://cloud.<DOMAIN>/v1/audio/<64 hex>.mp3"}`. Only
+`kind` and `text` (1-400 chars) are accepted (any other field, or another
+kind, is 422); the voice is always `ELEVENLABS_VOICE_ALERT`. The Pi's buddy
+rung sends minutes spelled out in words, never a digit.
+
+- Rendered with ElevenLabs only when `VOICE_BACKEND=elevenlabs` (and the key
+  and voice id are set); otherwise `{"audio_url": null}`.
+- Cached by sha256 of (kind, voice, text) in `cloud/audio_cache/` (gitignored;
+  the compose volume `audio_cache`): a cache hit makes no API call and the
+  same text is never rendered twice.
+- 422 when the text contains a digit followed by mg (`54 mg/dL`, `54mgdl`) or
+  the word glucose, mg, mgdl, or dL: no glucose value is ever spoken to a buddy.
+- 502 when ElevenLabs fails (nothing cached); 401 on a bad device token; 503
+  while DEVICE_ID / DEVICE_TOKEN are unset. The Pi treats every non-200, and
+  anything slower than 3 s, as no clip and sends the alert anyway.
+
+`GET /v1/audio/{hash}.mp3` (public, no credential: the hash is unguessable, and
+the watcher page and WhatsApp fetch it by link) -> `audio/mpeg`; 404 for an
+unknown or malformed name. With `DOMAIN` unset or `localhost` the URL base is
+`http://localhost:8200`.
 
 ## Migrations
 
