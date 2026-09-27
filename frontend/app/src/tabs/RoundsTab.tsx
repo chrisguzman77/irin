@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import SignalCard from "../components/SignalCard";
-import { listCards, type CardRecord } from "../lib/cards";
+import { compareCards, listCards, type CardPair, type CardRecord } from "../lib/cards";
 import type { SignalCard as Card } from "../lib/contracts";
 import { useDevice } from "../lib/device";
 import standing from "../fixtures/signal_card_standing.json";
@@ -15,8 +15,11 @@ import WatchToday from "./rounds/WatchToday";
 // my doctor sees": the cards the device actually sealed (GET /api/rounds/cards,
 // refreshed on card_sent), each with who received it. Until the first real
 // card exists it shows the two SAMPLE cards, labeled "Sample card" and DEMO.
-// Above them, My doctor: pairing status, Share with my doctor, Revoke.
-// Glucagon and the step timeline arrive next.
+// At the very top, My doctor: the blue Share with doctor button (QR front and
+// centre), pairing status, Revoke. Where the Pi serves
+// /api/rounds/cards/compare, each kind is drawn twice: with the bedside device
+// and phone only (brain-only), side by side on wide screens; an older Pi
+// (404) gets the single cards.
 const SAMPLES = [
   { key: "standing", label: "Basal Check", card: standing as unknown as Card },
   { key: "step", label: "Step check", card: step as unknown as Card },
@@ -74,20 +77,51 @@ function Samples() {
   );
 }
 
+function Compare({ pairs, names }: { pairs: CardPair[]; names: Map<string, string> }) {
+  const side = (label: string, card: Card) => (
+    <div className="flex flex-col gap-2 min-w-0">
+      <h4 className="text-sm font-semibold text-neutral-300">{label}</h4>
+      <SignalCard card={card} />
+    </div>
+  );
+  return (
+    <div className="flex flex-col gap-6 lg:w-[min(64rem,calc(100vw-2rem))] lg:relative lg:left-1/2 lg:-translate-x-1/2">
+      <p className="text-sm text-neutral-400">
+        Same nights, same numbers where they can be known; without the bedside device, alarm and presence rows are
+        reported or inferred instead of measured.
+      </p>
+      {pairs.map((p) => (
+        <section key={`${p.kind}-${p.bedside.card.card_id}`} className="flex flex-col gap-3" aria-label={KIND[p.kind] ?? p.kind}>
+          <h3 className="text-lg font-semibold">{KIND[p.kind] ?? p.kind}</h3>
+          <Delivery rec={p.bedside} names={names} />
+          <div className="grid gap-4 lg:grid-cols-2">
+            {side("With the bedside device", p.bedside.card)}
+            {side("Without the bedside device (phone only)", p.brain)}
+          </div>
+        </section>
+      ))}
+    </div>
+  );
+}
+
 export default function RoundsTab() {
   const { target, socket } = useDevice();
   const snap = socket.snapshot;
   const base = target.status === "ready" ? target.url : null;
   const [cards, setCards] = useState<CardRecord[] | null>(null);
+  const [pairs, setPairs] = useState<CardPair[] | null>(null);
   const [error, setError] = useState(false);
   const [open, setOpen] = useState<string | null>(null);
 
   useEffect(() => {
     if (!base) return;
     let alive = true;
-    listCards(base)
-      .then((c) => {
+    compareCards(base)
+      .catch(() => null)
+      .then(async (p) => {
+        const c = p ? p.map((x) => x.bedside) : await listCards(base);
         if (!alive) return;
+        setPairs(p);
         setCards(c);
         setError(false);
       })
@@ -103,14 +137,16 @@ export default function RoundsTab() {
 
   return (
     <section className="flex flex-col gap-4">
+      {base && <DoctorSharing />}
       {base && <RecallCards items={socket.recallDue} baseUrl={base} demo={snap?.mode === "replay"} />}
       {base && snap && <WatchToday snap={snap} baseUrl={base} planState={socket.planState} />}
       {base && snap && <StepTimeline snap={snap} baseUrl={base} planState={socket.planState} />}
-      {base && <DoctorSharing />}
       <h2 className="text-xl font-semibold">What my doctor sees</h2>
       {error && <p className="text-sm text-red-400">Could not load the cards from your Irin.</p>}
       {!base || cards === null || real.length === 0 ? (
         base && cards === null && !error ? <p className="text-neutral-400">Loading…</p> : <Samples />
+      ) : pairs ? (
+        <Compare pairs={pairs} names={names} />
       ) : (
         <>
           <Delivery rec={latest} names={names} />

@@ -84,7 +84,7 @@ export default function App() {
             style={{ width: `${100 / TABS.length}%`, transform: `translateX(${TABS.indexOf(tab) * 100}%)` }}
           />
         </nav>
-        <main key={tab} className="tab-enter p-4 max-w-2xl mx-auto">
+        <main key={tab} className={`tab-enter p-4 mx-auto ${tab === "Irin Rounds" ? "max-w-6xl" : "max-w-2xl"}`}>
           {tab === "Irin Device" && <DeviceTab />}
           {tab === "My Irin" && <MyIrinTab />}
           {tab === "Irin Buddy" && <BuddyTab />}
