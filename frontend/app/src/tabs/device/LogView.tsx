@@ -5,27 +5,33 @@ import {
   cancelVoice, confirmVoice, logTreatment, recentTreatments, sendVoice,
   type Treatment, type VoiceReply,
 } from "../../lib/log";
+import { numberWordsToDigits, permanentSpeechError, speechErrorText, speechUnavailable } from "../../lib/speech";
 
 // Step 6: logging + voice. The ECHO + CONFIRM screen is sacred: insulin is
 // only ever saved from its Confirm button, never automatically, and Cancel
 // or a timeout saves nothing.
 
-// Web Speech API (Chrome/Safari prefix it; Firefox has none -> typing only).
+// Web Speech API (Chrome/Safari prefix it; Firefox and every non-Safari
+// iPhone browser have none -> the keyboard's own dictation mic instead).
 interface Recognition {
   lang: string;
+  continuous: boolean;
   interimResults: boolean;
   maxAlternatives: number;
-  onresult: ((e: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void) | null;
+  onresult: ((e: { resultIndex: number; results: ArrayLike<ArrayLike<{ transcript: string }> & { isFinal: boolean }> }) => void) | null;
   onerror: ((e: { error: string }) => void) | null;
   onend: (() => void) | null;
   start(): void;
   stop(): void;
+  abort(): void;
 }
 type RecognitionCtor = new () => Recognition;
 const SpeechRecognition: RecognitionCtor | undefined =
   (window as unknown as { SpeechRecognition?: RecognitionCtor; webkitSpeechRecognition?: RecognitionCtor })
     .SpeechRecognition ??
   (window as unknown as { webkitSpeechRecognition?: RecognitionCtor }).webkitSpeechRecognition;
+const UA = navigator.userAgent;
+const NO_SPEECH = speechUnavailable({ hasApi: !!SpeechRecognition, secure: window.isSecureContext, ua: UA });
 
 /** What the echo screen is confirming: a pending voice entry on the Pi, or a
  * form entry that is sent only after Confirm. */
@@ -75,6 +81,10 @@ export default function LogView({ baseUrl, settings }: { baseUrl: string; settin
   const [units, setUnits] = useState("");
   const [note, setNote] = useState("");
   const rec = useRef<Recognition | null>(null);
+  const box = useRef<HTMLInputElement | null>(null);
+  // null: speech can be tried; otherwise why not (the browser, or an error that would repeat)
+  const [speechOff, setSpeechOff] = useState<string | null>(NO_SPEECH);
+  useEffect(() => () => rec.current?.abort(), []);
 
   const refresh = useCallback(async () => {
     try {
@@ -115,12 +125,15 @@ export default function LogView({ baseUrl, settings }: { baseUrl: string; settin
     }
   };
 
-  const submitText = async (spoken: string) => {
-    if (!spoken.trim() || busy) return;
+  // Typed and spoken text take the same road: number words to digits, then
+  // the Pi's parser and its echo-and-confirm.
+  const submitText = async (raw: string) => {
+    const spoken = numberWordsToDigits(raw.trim());
+    if (!spoken || busy) return;
     setBusy(true);
     setMsg(null);
     try {
-      await handleVoice(await sendVoice(baseUrl, spoken.trim()), spoken.trim());
+      await handleVoice(await sendVoice(baseUrl, spoken), spoken);
     } catch (e) {
       fail(e);
     } finally {
@@ -128,23 +141,52 @@ export default function LogView({ baseUrl, settings }: { baseUrl: string; settin
     }
   };
 
+  const typeInstead = () => {
+    box.current?.focus();
+    box.current?.select();
+  };
+
+  // Must run straight from the tap (iOS Safari refuses a start outside a user gesture).
   const listen = () => {
-    if (!SpeechRecognition || listening) return;
+    if (listening) {
+      rec.current?.stop(); // a second tap ends listening; onend sends what was heard
+      return;
+    }
+    if (!SpeechRecognition || speechOff) return;
     const r = new SpeechRecognition();
-    r.lang = "en-US";
-    r.interimResults = false;
+    r.lang = navigator.language?.startsWith("en") ? navigator.language : "en-US";
+    r.continuous = false;
+    // interim results: Safari may never mark a phrase final before it ends, so
+    // the last heard words are sent when listening stops
+    r.interimResults = true;
     r.maxAlternatives = 1;
+    let heard = "";
+    let errored = false;
     r.onresult = (e) => {
-      const said = e.results[0]?.[0]?.transcript ?? "";
-      setText(said);
-      submitText(said);
+      heard = Array.from(e.results, (res) => res[0]?.transcript ?? "").join(" ").trim();
+      setText(heard);
     };
-    r.onerror = (e) => setMsg({ tone: "err", text: `Microphone: ${e.error}` });
-    r.onend = () => setListening(false);
+    r.onerror = (e) => {
+      errored = true;
+      setMsg({ tone: "err", text: speechErrorText(e.error, UA) });
+      if (permanentSpeechError(e.error)) setSpeechOff(speechErrorText(e.error, UA));
+    };
+    r.onend = () => {
+      setListening(false);
+      rec.current = null;
+      if (heard && !errored) submitText(heard);
+      else if (!errored) setMsg({ tone: "ask", text: "Didn't catch that. Tap and speak again, or type it." });
+    };
     rec.current = r;
-    setListening(true);
     setMsg(null);
-    r.start();
+    try {
+      r.start();
+      setListening(true);
+    } catch (err) {
+      rec.current = null;
+      const code = err instanceof DOMException && err.name === "NotAllowedError" ? "not-allowed" : String((err as Error)?.message ?? err);
+      setMsg({ tone: "err", text: speechErrorText(code, UA) });
+    }
   };
 
   // --- the echo screen's two exits ---
@@ -284,20 +326,24 @@ export default function LogView({ baseUrl, settings }: { baseUrl: string; settin
             submitText(text);
           }}
         >
-          {SpeechRecognition && (
-            <button type="button" onClick={listen} disabled={busy || listening}
+          {speechOff ? (
+            <button type="button" onClick={typeInstead} disabled={busy} className={`${btn} text-lg bg-white text-black`}>
+              ⌨︎ Type or dictate
+            </button>
+          ) : (
+            <button type="button" onClick={listen} disabled={busy}
               className={`${btn} text-lg ${listening ? "bg-red-600 text-white" : "bg-white text-black"}`}>
-              {listening ? "Listening…" : "🎤︎ Tap and speak"}
+              {listening ? "Listening… tap to stop" : "🎤︎ Tap and speak"}
             </button>
           )}
           <div className="flex gap-2">
-            <input className={input} value={text} maxLength={200} onChange={(e) => setText(e.target.value)}
-              placeholder="log 45 carbs and 5 units" aria-label="What to log" />
+            <input ref={box} className={input} value={text} maxLength={200} onChange={(e) => setText(e.target.value)}
+              placeholder="took 4 units, ate 30 carbs" aria-label="What to log" enterKeyHint="send" />
             <button type="submit" className={`${btn} bg-neutral-800 text-white`} disabled={busy || !text.trim()}>
               Send
             </button>
           </div>
-          {!SpeechRecognition && <p className="text-xs text-neutral-500">This browser has no speech input; type it instead.</p>}
+          {speechOff && <p className="text-xs text-neutral-400">{speechOff}</p>}
         </form>
       </Card>
 
