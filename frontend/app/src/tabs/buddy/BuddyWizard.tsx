@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { PinRejected } from "../../lib/api";
-import { getProfile, saveBuddySettings, saveProfile, type MatchState, type Slot } from "../../lib/buddy";
+import { getProfile, saveBuddySettings, saveProfile, type MatchCard, type MatchState, type Slot } from "../../lib/buddy";
 import type { Settings } from "../../lib/contracts";
 import FindBuddy from "./FindBuddy";
 import GlobePicker from "./GlobePicker";
@@ -86,8 +86,9 @@ const primary = "flex-1 rounded-lg px-3 py-3 bg-sky-400 text-black font-semibold
 const TITLES = ["", "About you", "Where should your buddy be?", "When can you watch?", "Opt-ins", "Your emergency script", "Finding your buddy"];
 const badge = <span className="bg-amber-400 text-black text-xs font-bold px-2 py-0.5 rounded">DEMO</span>;
 
-export default function BuddyWizard({ base, demo, settings, matches }: {
-  base: string; demo: boolean; settings: Settings | undefined; matches: MatchState[];
+/** onAccepted (Buddy v3): accepting a match ends the wizard; the tab returns to the Buddy home. */
+export default function BuddyWizard({ base, demo, settings, matches, onAccepted }: {
+  base: string; demo: boolean; settings: Settings | undefined; matches: MatchState[]; onAccepted: (card: MatchCard) => void;
 }) {
   const [d, setD] = useState<Draft>(load);
   const [langInput, setLangInput] = useState("");
@@ -310,7 +311,11 @@ export default function BuddyWizard({ base, demo, settings, matches }: {
 
       {d.step === 6 && (
         <>
-          <FindBuddy base={base} matches={matches} demo={demo} autoFind />
+          <FindBuddy base={base} matches={matches} demo={demo} autoFind
+            onAccepted={(card) => {
+              setD(fresh());
+              onAccepted(card);
+            }} />
           {nav(null)}
         </>
       )}

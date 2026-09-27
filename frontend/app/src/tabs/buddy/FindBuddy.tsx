@@ -13,8 +13,34 @@ const btn = "flex-1 rounded-lg py-2 font-semibold disabled:opacity-40";
 
 const sampleBadge = "border border-neutral-500 text-neutral-300 text-xs px-2 py-0.5 rounded";
 
-/** autoFind: the wizard's step 6 searches once on mount. */
-export default function FindBuddy({ base, matches, demo, autoFind = false }: { base: string; matches: MatchState[]; demo: boolean; autoFind?: boolean }) {
+/** One match offer; `children` (Accept / Decline) is left out on the Buddy home's "Your Buddy". */
+export function MatchCardView({ card: c, demo, children }: { card: MatchCard; demo: boolean; children?: React.ReactNode }) {
+  return (
+    <article className="rounded-lg bg-neutral-900 p-3 flex flex-col gap-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="text-lg font-semibold">{c.first_name}</span>
+        <span className="text-xs rounded-full border border-sky-600 text-sky-200 px-2 py-0.5">
+          {c.mirror ? "mirror (opposite time zone)" : "twin"}
+        </span>
+        {(demo || c.is_demo) && <span className={badge}>DEMO</span>}
+        {c.sample && <span className={sampleBadge}>Sample profile</span>}
+      </div>
+      {c.intro && <p className="text-sm text-neutral-200">{c.intro}</p>}
+      {c.why && <p className="text-sm text-neutral-400 border-l-2 border-sky-500 pl-3">{c.why}</p>}
+      <p className="text-xs text-neutral-500">
+        Awake about {Math.round(c.hours_covered * 10) / 10} h of your night
+        {c.shared_languages.length > 0 ? ` · speaks ${c.shared_languages.join(", ")}` : ""}
+      </p>
+      {children}
+    </article>
+  );
+}
+
+/** autoFind: the wizard's step 6 searches once on mount. onAccepted: called with
+ * the suggestion's card once this phone's accept went through (Buddy v3). */
+export default function FindBuddy({ base, matches, demo, autoFind = false, onAccepted }: {
+  base: string; matches: MatchState[]; demo: boolean; autoFind?: boolean; onAccepted?: (card: MatchCard) => void;
+}) {
   const [cards, setCards] = useState<MatchCard[] | null>(null);
   // this phone's own answers, until the snapshot / hub_update says more
   const [answered, setAnswered] = useState<Record<string, { status: string; mine: "accept" | "decline"; first_name: string }>>({});
@@ -51,8 +77,10 @@ export default function FindBuddy({ base, matches, demo, autoFind = false }: { b
   const answer = (id: string, first_name: string, verb: "accept" | "decline") =>
     run(async () => {
       const r = await answerMatch(base, id, verb);
-      if (r.ok) setAnswered((a) => ({ ...a, [id]: { status: r.value.status, mine: verb, first_name } }));
-      else setMsg(r.reason);
+      if (!r.ok) return setMsg(r.reason);
+      setAnswered((a) => ({ ...a, [id]: { status: r.value.status, mine: verb, first_name } }));
+      const card = cards?.find((c) => c.match_id === id);
+      if (verb === "accept" && card && r.value.status === "accepted") onAccepted?.(card);
     });
 
   // snapshot rows win on status and pair_url; local answers fill the gap
@@ -83,21 +111,7 @@ export default function FindBuddy({ base, matches, demo, autoFind = false }: { b
       {busy && !cards && <p className="text-sm text-neutral-300 animate-pulse">Finding your buddy…</p>}
       {cards && suggestions.length === 0 && <p className="text-sm text-neutral-400">No new suggestions right now.</p>}
       {suggestions.map((c) => (
-        <article key={c.match_id} className="rounded-lg bg-neutral-900 p-3 flex flex-col gap-2">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-lg font-semibold">{c.first_name}</span>
-            <span className="text-xs rounded-full border border-sky-600 text-sky-200 px-2 py-0.5">
-              {c.mirror ? "mirror (opposite time zone)" : "twin"}
-            </span>
-            {(demo || c.is_demo) && <span className={badge}>DEMO</span>}
-            {c.sample && <span className={sampleBadge}>Sample profile</span>}
-          </div>
-          {c.intro && <p className="text-sm text-neutral-200">{c.intro}</p>}
-          {c.why && <p className="text-sm text-neutral-400 border-l-2 border-sky-500 pl-3">{c.why}</p>}
-          <p className="text-xs text-neutral-500">
-            Awake about {Math.round(c.hours_covered * 10) / 10} h of your night
-            {c.shared_languages.length > 0 ? ` · speaks ${c.shared_languages.join(", ")}` : ""}
-          </p>
+        <MatchCardView key={c.match_id} card={c} demo={demo}>
           <div className="flex gap-2">
             <button type="button" disabled={busy} className={`${btn} bg-neutral-800`} onClick={() => answer(c.match_id, c.first_name, "decline")}>
               Decline
@@ -106,7 +120,7 @@ export default function FindBuddy({ base, matches, demo, autoFind = false }: { b
               Accept
             </button>
           </div>
-        </article>
+        </MatchCardView>
       ))}
 
       {mine.length > 0 && <h4 className="text-xs uppercase tracking-wider text-neutral-400 pt-1">My matches</h4>}

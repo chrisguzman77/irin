@@ -1,12 +1,13 @@
 import { useEffect, useState } from "react";
 import { PinRejected } from "../lib/api";
-import { hhmm, readBuddyState } from "../lib/buddy";
+import { hhmm, readBuddyState, type MatchCard } from "../lib/buddy";
 import type { Settings } from "../lib/contracts";
 import { useDevice } from "../lib/device";
 import { revokePairing } from "../lib/pairing";
 import { applied, saveSettings } from "../lib/settings";
 import BuddyWizard from "./buddy/BuddyWizard";
-import FindBuddy from "./buddy/FindBuddy";
+import FindBuddy, { MatchCardView } from "./buddy/FindBuddy";
+import HubScreen, { HubEntry } from "./buddy/HubScreen";
 import ProfileForm from "./buddy/ProfileForm";
 import TreatingButton from "./buddy/TreatingButton";
 
@@ -18,7 +19,9 @@ import TreatingButton from "./buddy/TreatingButton";
 // directory profile, "Find a buddy", and my matches (buddy/ProfileForm,
 // buddy/FindBuddy). Onboarding v2: with no buddy linked the tab is only the
 // guided wizard (buddy/BuddyWizard), plus the treating button, which shows
-// only while an alert is open (invariant 17).
+// only while an alert is open (invariant 17). Buddy v3: once a match is
+// accepted (buddy_state.my_buddy, or a link) the tab is the Buddy home: "Your
+// Buddy" with that offer's match card, then the hub entry (buddy/HubScreen).
 type OptIns = NonNullable<Settings["night_buddy"]>;
 const OPT_INS: [keyof OptIns, string, string][] = [
   ["have_buddy", "I want a buddy", "One paired T1D adult is the last human rung of your alarm ladder."],
@@ -240,31 +243,90 @@ function BuddyCard({ state, base }: { state: ReturnType<typeof readBuddyState>; 
   );
 }
 
+const ACCEPTED_KEY = "irin.acceptedBuddy";
+interface StoredAccepted {
+  card: MatchCard;
+  /** this phone's demo/live mode when the accept went through */
+  demo: boolean;
+}
+/** The card this phone just accepted, until the snapshot's my_buddy carries it (session only). */
+function useAcceptedCard(demo: boolean) {
+  const [stored, setStored] = useState<StoredAccepted | null>(() => {
+    try {
+      return JSON.parse(sessionStorage.getItem(ACCEPTED_KEY) ?? "null") as StoredAccepted | null;
+    } catch {
+      return null;
+    }
+  });
+  const save = (c: MatchCard | null) => {
+    const next = c ? { card: c, demo } : null;
+    setStored(next);
+    try {
+      if (next) sessionStorage.setItem(ACCEPTED_KEY, JSON.stringify(next));
+      else sessionStorage.removeItem(ACCEPTED_KEY);
+    } catch {
+      /* storage blocked: state still holds it */
+    }
+  };
+  return [stored, save] as const;
+}
+
 export default function BuddyTab() {
   const { target, socket } = useDevice();
   const snap = socket.snapshot;
+  const state = readBuddyState(snap);
+  const demo = snap?.mode === "replay";
+  const [accepted, setAccepted] = useAcceptedCard(demo);
+  const [view, setView] = useState<"home" | "hub">("home");
+  const fromPi = state.myBuddy;
+  useEffect(() => {
+    if (!accepted) return;
+    if (fromPi) {
+      setAccepted(null);
+      return;
+    }
+    // once the snapshot's matches list is known, an accepted card that it
+    // no longer calls "accepted" (declined elsewhere, expired) is dropped;
+    // a match_id absent from the list is not yet known, so it is kept.
+    const known = state.matches.find((m) => m.match_id === accepted.card.match_id);
+    if ((known && known.status !== "accepted") || accepted.demo !== demo) setAccepted(null);
+  }, [fromPi, accepted, setAccepted, state.matches, demo]);
   if (target.status !== "ready") return <p className="text-neutral-400">Pair your Irin on the Device tab first.</p>;
   if (!snap) return <p className="text-neutral-400">Waiting for your Irin…</p>;
   const base = target.url;
-  const state = readBuddyState(snap);
-  const demo = snap.mode === "replay";
-  if (!state.link)
+  const myBuddy = state.myBuddy ?? accepted?.card ?? null;
+  if (!state.link && !myBuddy)
     return (
       <section className="flex flex-col gap-4">
         <h2 className="text-xl font-semibold">Irin Buddy</h2>
         <TreatingButton snap={snap} baseUrl={base} />
-        <BuddyWizard base={base} demo={demo} settings={snap.settings} matches={state.matches} />
+        <BuddyWizard base={base} demo={demo} settings={snap.settings} matches={state.matches} onAccepted={setAccepted} />
+      </section>
+    );
+  if (view === "hub")
+    return (
+      <section className="flex flex-col gap-4">
+        <h2 className="text-xl font-semibold">Irin Buddy</h2>
+        <TreatingButton snap={snap} baseUrl={base} />
+        <HubScreen base={base} demo={demo} onBack={() => setView("home")} />
       </section>
     );
   return (
     <section className="flex flex-col gap-4">
       <h2 className="text-xl font-semibold">Irin Buddy</h2>
       <TreatingButton snap={snap} baseUrl={base} />
-      <BuddyCard state={state} base={base} />
-      <ProfileForm base={base} settings={snap.settings} demo={demo} />
-      <FindBuddy base={base} matches={state.matches} demo={demo} />
-      {snap.settings && <OptInToggles current={snap.settings} base={base} />}
-      {snap.settings && <ScriptEditor current={snap.settings} base={base} />}
+      <h3 className="text-lg font-semibold">Your Buddy</h3>
+      {myBuddy && <MatchCardView card={myBuddy} demo={demo} />}
+      {state.link && <BuddyCard state={state} base={base} />}
+      <HubEntry base={base} settings={snap.settings} onOpen={() => setView("hub")} />
+      {state.link && (
+        <>
+          <ProfileForm base={base} settings={snap.settings} demo={demo} />
+          <FindBuddy base={base} matches={state.matches} demo={demo} />
+          {snap.settings && <OptInToggles current={snap.settings} base={base} />}
+          {snap.settings && <ScriptEditor current={snap.settings} base={base} />}
+        </>
+      )}
     </section>
   );
 }
