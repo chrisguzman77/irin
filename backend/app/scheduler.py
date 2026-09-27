@@ -83,6 +83,7 @@ class Scheduler:
     sync_check: SyncCheck | None = None  # None = bypass (mock / replay): clock_synced True
     clock_synced: bool = False
     held: bool = False  # R12: set while the seek's catch-up replays mornings; no job fires meanwhile
+    display_override: str = "auto"  # auto | detail | night: the owner's view override (kv display_override)
     jobs: list[Job] = field(default_factory=list)
     nudge: BasalNudge = field(default_factory=BasalNudge)
     basal_logged_today: Callable[[date], bool] = lambda d: False  # wired to the store in main.py
@@ -105,7 +106,10 @@ class Scheduler:
     # --- state the frontends read ---
 
     def display_mode(self, now: datetime | None = None) -> str:
-        """detail | night | morning, from backend state, never local time."""
+        """detail | night | morning, from backend state, never local time. A
+        detail or night override wins over the clock; auto follows it."""
+        if self.display_override != "auto":
+            return self.display_override
         now = now or clock.now()
         s = self.settings
         if in_window(now.time(), s.night_window_start, s.night_window_end):

@@ -39,7 +39,7 @@ from .contracts import (FRESH_PIN_ENDPOINTS, AlarmEvent, AlarmState, FamilyRecip
 from .datasource.base import DataSource
 from .datasource.nightscout import NightscoutDataSource
 from .datasource.replay import ReplayDataSource
-from .demo import bind as bind_demo, live_basal_time, restore_live_settings, router as demo_router, simulated_peers
+from .demo import bind as bind_demo, brain_twin, live_basal_time, restore_live_settings, router as demo_router, simulated_peers
 from .family_story import FamilyStoryService
 from .forecast import Forecaster
 from .forward import Forwarder, from_config as forwarder_from_config
@@ -544,6 +544,7 @@ async def lifespan(app: FastAPI):
     _loop = asyncio.get_running_loop()
     store.init_db()
     _load_settings()
+    runtime.scheduler.display_override = _stored_display_override()
     runtime.pairing = _make_pairing()  # after init_db: it loads the stored pairings
     runtime.owner = _make_owner()
     runtime.relay_client = _make_relay_client()
@@ -618,7 +619,8 @@ app.add_middleware(
 
 @app.get("/api/health")
 async def health() -> dict:
-    return {"ok": True, "datasource": runtime.mode, "hw": config.IRIN_HW, "clock": clock.now().isoformat()}
+    return {"ok": True, "datasource": runtime.mode, "hw": config.IRIN_HW, "clock": clock.now().isoformat(),
+            "display_mode": runtime.scheduler.display_mode(), "display_override": runtime.scheduler.display_override}
 
 
 @app.get("/api/latest", response_model=Reading)
@@ -805,6 +807,39 @@ async def scheduler_state() -> dict:
             "basal_nudge": {"level": sch.nudge.level, "since": sch.nudge.since.isoformat() if sch.nudge.since else None},
             "jobs": [{"name": j.name, "at": j.at_hhmm(), "last_fired": j.last_fired.isoformat() if j.last_fired else None}
                      for j in sch.jobs]}
+
+
+DISPLAY_OVERRIDE_KEY = "display_override"
+DisplayOverride = Literal["auto", "detail", "night"]
+
+
+def _stored_display_override() -> str:
+    raw = store.get_kv(DISPLAY_OVERRIDE_KEY)
+    return raw if raw in ("auto", "detail", "night") else "auto"
+
+
+class DisplayModeRequest(BaseModel):
+    mode: DisplayOverride
+
+
+def _display_mode_state() -> dict:
+    return {"mode": runtime.scheduler.display_mode(), "override": runtime.scheduler.display_override}
+
+
+@app.get("/api/display_mode")
+async def display_mode_state() -> dict:
+    """The kiosk view: the effective mode and the owner's override (auto = the clock's rule)."""
+    return _display_mode_state()
+
+
+@app.post("/api/display_mode", dependencies=[Depends(require_pin)])
+async def set_display_mode(req: DisplayModeRequest) -> dict:
+    """The owner's kiosk view override, persisted. It moves the screen and the
+    backlight only; a low alarm still takes the screen over and lights it full."""
+    store.set_kv(DISPLAY_OVERRIDE_KEY, req.mode)
+    runtime.scheduler.display_override = req.mode
+    runtime.backlight.update()
+    return _display_mode_state()
 
 
 @app.get("/api/alarm", response_model=AlarmState)
@@ -1011,6 +1046,26 @@ async def rounds_evaluations() -> dict:
 async def rounds_cards(limit: int = 50) -> list[dict]:
     """The device's own record of the cards it sealed (R7): card, delivery status, recipients."""
     return store.select_cards(max(1, min(limit, 500)))
+
+
+@app.get("/api/rounds/cards/compare")
+async def rounds_cards_compare() -> list[dict]:
+    """R14(c) Brain versus Bedside, read-only: the latest bedside card of each kind
+    in this world beside the same kind re-evaluated for the same window with
+    brain_only on. The brain card is never sent, sealed, or stored; only its
+    confidence labels differ, never a row."""
+    demo = runtime.mode == "replay"
+    latest: dict[str, dict] = {}
+    for row in store.select_cards(500):  # newest first
+        card = row["card"]
+        if card["source"] == "irin_bedside" and card["is_demo"] == demo:
+            latest.setdefault(card["kind"], row)
+    out = []
+    for kind, row in latest.items():
+        brain = brain_twin(row["card"])
+        if brain is not None:
+            out.append({"kind": kind, "bedside": row, "brain": brain.model_dump(mode="json")})
+    return out
 
 
 @app.get("/api/relay")
