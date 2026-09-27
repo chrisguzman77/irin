@@ -56,13 +56,19 @@ export function readBuddyState(snap: StateSnapshot | null): BuddyState {
 
 /** The buddy WS messages, folded into the snapshot's buddy_state:
  * buddy_alert (payload = open_alert), treating_set {since, expires_at}, and
- * hub_update {event: resolved | emergency | call, ...}. */
+ * hub_update {event: resolved | emergency | call, ...}; a resolved that
+ * carries `line` is the close-out, not a second resolve. The morning "all quiet"
+ * line has no message of its own: it arrives in the snapshot's morning_line. */
 export function applyBuddyMessage(snap: StateSnapshot, type: string, p: Record<string, unknown>): StateSnapshot {
   const b = { ...(snap.buddy_state ?? {}) };
   if (type === "buddy_alert") b.open_alert = p;
   else if (type === "treating_set") b.treating = p;
   else if (type === "hub_update") {
-    if (p.event === "resolved") {
+    if (p.event === "resolved" && typeof p.line === "string") {
+      // B5: the close-out follows the resolve (up to 20 s later) for the SAME
+      // listing: an update, never a second resolve. It is that night's line.
+      b.morning_line = p.line;
+    } else if (p.event === "resolved") {
       b.open_alert = null;
       b.treating = null;
       b.emergency = null;
