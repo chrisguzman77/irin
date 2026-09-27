@@ -277,7 +277,10 @@ function predictionText() {
   const r = state.latest;
   const fc = state.forecast;
   if (!fc || !r || r.is_stale || isDisconnected() || fc.predicted_mgdl == null) return null;
-  return `Could be as low as ${Math.round(fc.predicted_mgdl)} in ${fc.horizon_min ?? 30} min`;
+  const v = Math.round(fc.predicted_mgdl), mins = fc.horizon_min ?? 30;
+  // Above the current reading the same number is a FLOOR (80% chance of at least
+  // this), so rising reads "likely X or more", never "as high as".
+  return v > r.glucose_mgdl ? `Rising: likely ${v} or more in ${mins} min` : `Could be as low as ${v} in ${mins} min`;
 }
 
 function render() {
