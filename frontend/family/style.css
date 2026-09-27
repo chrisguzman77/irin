@@ -1,23 +1,56 @@
-:root { --bg: #fafaf7; --fg: #1f2328; --muted: #6b7280; --card: #fff; --line: #e5e7eb; }
+/* The family page: the warmest of the role pages, in the Irin brand palette
+   (docs/brand/README.txt: paper, charcoal, sage, mint). The DEMO bar and the
+   stale state keep their own colours: they must never look like brand decor. */
+@font-face { font-family: "Nunito Irin"; src: url("fonts/Nunito-Variable-latin.woff2") format("woff2");
+  font-weight: 200 1000; font-style: normal; font-display: swap; }
+:root {
+  --font: "Nunito Irin", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --bg: #F6F5F1;        /* brand Paper */
+  --fg: #2E2F29;        /* brand Charcoal */
+  --muted: #6E6F63;
+  --card: #FFFEFB;
+  --line: #E6E2D7;
+  --sand: #F0ECE2;
+  --sage: #7D9B6E;      /* brand Sage */
+  --sage-dk: #5B7650;
+  --mint: #B1D2BD;      /* brand Mint */
+  --mint-soft: #E4EFE6;
+  --shadow: 0 1px 2px rgba(46, 47, 41, 0.05), 0 8px 24px rgba(46, 47, 41, 0.07);
+}
 * { box-sizing: border-box; }
-body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; background: var(--bg); color: var(--fg); }
-main { max-width: 520px; margin: 0 auto; padding: 16px; display: flex; flex-direction: column; gap: 16px; }
-h1 { font-size: 20px; margin: 8px 0 0; }
-h2 { font-size: 16px; margin: 0 0 8px; }
+[hidden] { display: none !important; }
+body { margin: 0; font-family: var(--font); background: var(--bg); color: var(--fg); line-height: 1.45; min-height: 100vh;
+  background-image: radial-gradient(circle at 100% 0, rgba(177, 210, 189, 0.35), transparent 40%),
+                    radial-gradient(circle at 0 100%, rgba(125, 155, 110, 0.14), transparent 45%);
+  background-attachment: fixed; }
+main { max-width: 520px; margin: 0 auto; padding: 20px 16px; display: flex; flex-direction: column; gap: 18px; }
+h1 { font-size: 22px; font-weight: 800; margin: 8px 0 0; display: flex; align-items: center; gap: 8px; }
+h1::before { content: ""; width: 84px; height: 34px; flex: none; margin-left: -10px;
+  background: url("brand/irin-logo.svg") left center / contain no-repeat; }
+h2 { font-size: 17px; font-weight: 800; margin: 0 0 10px; }
 .muted { color: var(--muted); font-weight: 500; }
-.demo { position: sticky; top: 0; background: #ffb000; color: #000; font-weight: 800; text-align: center; padding: 8px; letter-spacing: 0.04em; }
-.now { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 20px; text-align: center; }
-.reading { font-size: 72px; font-weight: 800; line-height: 1; font-variant-numeric: tabular-nums; }
-.trend { font-size: 40px; margin-left: 10px; vertical-align: middle; }
-.unit { color: var(--muted); margin-top: 4px; }
-.since { margin-top: 10px; font-size: 15px; }
-.now.stale .reading { color: #9ca3af; }
-.now.stale .since { color: #b45309; font-weight: 600; }
-.night { background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 16px; }
+h1 .muted { font-weight: 600; }
+.demo { position: sticky; top: 0; z-index: 2; background: #ffb000; color: #000; font-weight: 900; text-align: center; padding: 8px; letter-spacing: 0.04em; }
+section > p { margin: 0; }
+#nolink { background: var(--card); border: 1px solid var(--line); border-radius: 20px; padding: 20px; box-shadow: var(--shadow); font-size: 16px; }
+#view { display: flex; flex-direction: column; gap: 18px; }
+.now { background: var(--card); border: 1px solid var(--line); border-radius: 24px; padding: 26px 20px 22px; text-align: center; box-shadow: var(--shadow);
+  background-image: linear-gradient(180deg, var(--mint-soft), var(--card) 70%); }
+.reading { font-size: 80px; font-weight: 900; line-height: 1; font-variant-numeric: tabular-nums; color: var(--fg); }
+.trend { font-size: 40px; margin-left: 10px; vertical-align: middle; color: var(--sage-dk); }
+.unit { color: var(--muted); margin-top: 6px; font-weight: 600; }
+.since { margin-top: 12px; font-size: 15px; display: inline-block; background: var(--sand); border-radius: 999px; padding: 4px 14px; }
+/* stale: grey and said out loud, never dressed as fresh */
+.now.stale { background-image: none; }
+.now.stale .reading, .now.stale .trend { color: #9ca3af; }
+.now.stale .since { color: #92400e; background: #fef3c7; font-weight: 700; }
+.night { background: var(--card); border: 1px solid var(--line); border-radius: 24px; padding: 18px; box-shadow: var(--shadow); }
 #strip { width: 100%; height: auto; display: block; }
-.stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 12px 0 4px; }
-.stats div { background: var(--bg); border-radius: 10px; padding: 8px; }
-.stats dt { font-size: 12px; color: var(--muted); }
-.stats dd { margin: 2px 0 0; font-weight: 700; font-size: 15px; }
-.msg { color: #b45309; font-weight: 600; }
-footer { text-align: center; color: var(--muted); font-size: 12px; padding: 16px; }
+.stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 14px 0 6px; }
+.stats div { background: var(--sand); border-radius: 14px; padding: 10px; text-align: center; }
+.stats dt { font-size: 12px; color: var(--muted); font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; }
+.stats dd { margin: 3px 0 0; font-weight: 800; font-size: 17px; }
+#coverage { font-size: 13px; }
+#status { font-size: 13px; text-align: center; }
+.msg { color: #b45309; font-weight: 700; }
+footer { text-align: center; color: var(--muted); font-size: 12px; padding: 20px 16px 28px; }

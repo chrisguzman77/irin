@@ -63,12 +63,12 @@ function draw(upto) {
   const root = svg("svg", { viewBox: `0 0 ${W} ${H}`, class: "film-svg", role: "img", "aria-label": "Night replay" });
   root.append(svg("rect", { x: L, y: y(70), width: W - L - R, height: Math.max(0, y(lo) - y(70)), fill: "#fee2e2" }));
   for (const g of [70, 100, 140].filter((v) => v > lo && v < hi)) {
-    root.append(svg("line", { x1: L, x2: W - R, y1: y(g), y2: y(g), stroke: g === 70 ? "#dc2626" : "#e5e7eb", "stroke-dasharray": g === 70 ? "4 3" : "" }));
+    root.append(svg("line", { x1: L, x2: W - R, y1: y(g), y2: y(g), stroke: g === 70 ? "#dc2626" : "#E3DFD4", "stroke-dasharray": g === 70 ? "4 3" : "" }));
     root.append(svg("text", { x: L - 6, y: y(g) + 4, "text-anchor": "end", class: "film-axis" }, String(g)));
   }
   root.append(svg("text", { x: 4, y: T + 4, class: "film-axis" }, "mg/dL"));
   // the playhead
-  root.append(svg("line", { x1: x(upto), x2: x(upto), y1: T, y2: H - B, stroke: "#111827", "stroke-width": 1.5, opacity: 0.35 }));
+  root.append(svg("line", { x1: x(upto), x2: x(upto), y1: T, y2: H - B, stroke: "#2E2F29", "stroke-width": 1.5, opacity: 0.35 }));
   let prev = null;
   nights.forEach((nt, i) => {
     const label = svg("text", { x: x(i), y: H - B + 16, "text-anchor": "middle", class: `film-axis${i === target ? " film-target" : ""}` }, day(nt.night_date));
@@ -82,12 +82,12 @@ function draw(upto) {
       return;
     }
     const cy = y(nt.low_point_mgdl);
-    if (prev) root.append(svg("line", { x1: prev[0], y1: prev[1], x2: x(i), y2: cy, stroke: "#9ca3af", "stroke-width": 1 }));
+    if (prev) root.append(svg("line", { x1: prev[0], y1: prev[1], x2: x(i), y2: cy, stroke: "#B8B4A8", "stroke-width": 1 }));
     prev = [x(i), cy];
     const low = fin(nt.coverage_pct) && nt.coverage_pct < 85;
     root.append(svg("circle", { cx: x(i), cy, r: i === upto ? 9 : 6, fill: low ? "#fff" : color, stroke: color, "stroke-width": 2,
       "stroke-dasharray": low ? "3 2" : "" }));
-    if (i === target) root.append(svg("circle", { cx: x(i), cy, r: 14, fill: "none", stroke: "#111827", "stroke-width": 1.5 }));
+    if (i === target) root.append(svg("circle", { cx: x(i), cy, r: 14, fill: "none", stroke: "#2E2F29", "stroke-width": 1.5 }));
   });
   $("filmchart").replaceChildren(root);
   $("filmcap").textContent = caption(nights[upto]);

@@ -63,11 +63,11 @@ function renderStrip(points) {
   const x = (iso) => { let t = mins(iso) - 22 * 60; if (t < 0) t += 1440; return x0 + (t / 540) * (x1 - x0); };
   const lo = 40, hi = Math.max(250, ...points.map((p) => p.mgdl));
   const y = (v) => bot - ((Math.min(v, hi) - lo) / (hi - lo)) * (bot - top);
-  svg.append(el("rect", { x: x0, y: y(180), width: x1 - x0, height: y(70) - y(180), fill: "#e8f5ec" }));
+  svg.append(el("rect", { x: x0, y: y(180), width: x1 - x0, height: y(70) - y(180), fill: "#E4EFE6" }));
   svg.append(el("line", { x1: x0, x2: x1, y1: y(70), y2: y(70), stroke: "#d33", "stroke-dasharray": "4 3" }));
   // break the line across gaps longer than 15 minutes: never draw through missing data
   let seg = [], prev = null;
-  const flush = () => { if (seg.length > 1) svg.append(el("polyline", { points: seg.join(" "), fill: "none", stroke: "#222", "stroke-width": "2" })); seg = []; };
+  const flush = () => { if (seg.length > 1) svg.append(el("polyline", { points: seg.join(" "), fill: "none", stroke: "#2E2F29", "stroke-width": "2" })); seg = []; };
   for (const p of points) {
     let t = mins(p.time); if (t < 22 * 60) t += 1440;
     if (prev !== null && t - prev > 15) flush();
@@ -76,7 +76,7 @@ function renderStrip(points) {
   }
   flush();
   for (const [label, at] of [["10 PM", "2000-01-01T22:00"], ["1 AM", "2000-01-02T01:00"], ["4 AM", "2000-01-02T04:00"], ["7 AM", "2000-01-02T07:00"]])
-    svg.append(el("text", { x: x(at), y: H - 4, "font-size": "10", fill: "#777", "text-anchor": label === "10 PM" ? "start" : label === "7 AM" ? "end" : "middle" }, label));
+    svg.append(el("text", { x: x(at), y: H - 4, "font-size": "10", fill: "#6E6F63", "text-anchor": label === "10 PM" ? "start" : label === "7 AM" ? "end" : "middle" }, label));
 }
 
 function renderNight(n) {
