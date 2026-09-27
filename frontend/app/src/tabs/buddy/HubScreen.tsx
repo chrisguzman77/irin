@@ -10,7 +10,6 @@ import type { Settings } from "../../lib/contracts";
 // languages, minutes, and a confidence badge, never a glucose value, place, or
 // contact (invariant 15). The script is shown only from the live claim's reply
 // (invariant 14); the Call button places no call in the demo.
-const OFF = { have_buddy: false, be_watcher: false, hub_watchable: false, hub_volunteer: false };
 const REFRESH_MS = 15_000;
 const demoBadge = <span className="bg-amber-400 text-black text-xs font-bold px-2 py-0.5 rounded">DEMO</span>;
 const sampleBadge = <span className="border border-neutral-500 text-neutral-300 text-xs px-2 py-0.5 rounded">Sample</span>;
@@ -33,11 +32,15 @@ export function HubEntry({ base, settings, onOpen }: { base: string; settings: S
         Go to Hub
       </button>
     );
+  // never post a night_buddy built from defaults: wait for the Pi's real
+  // settings to arrive before Join can be pressed at all.
+  const loaded = !!settings?.night_buddy;
   const join = async () => {
+    if (!settings?.night_buddy) return;
     setBusy(true);
     setMsg("");
     try {
-      const optins = { ...OFF, ...(settings?.night_buddy ?? {}), hub_volunteer: true };
+      const optins = { ...settings.night_buddy, hub_volunteer: true };
       const s = await saveBuddySettings(base, { night_buddy: optins });
       if (!s.ok) return setMsg(s.reason);
       const p = await getProfile(base);
@@ -55,7 +58,7 @@ export function HubEntry({ base, settings, onOpen }: { base: string; settings: S
   };
   return (
     <div className="flex flex-col gap-2">
-      <button type="button" disabled={busy} className="rounded-lg px-3 py-3 bg-sky-400 text-black font-semibold disabled:opacity-40" onClick={join}>
+      <button type="button" disabled={busy || !loaded} className="rounded-lg px-3 py-3 bg-sky-400 text-black font-semibold disabled:opacity-40" onClick={join}>
         {busy ? "Joining…" : "Join the Irin Buddy Hub"}
       </button>
       <p className="text-xs text-neutral-500">You may see people you have never met and help one by following their own script.</p>
@@ -107,6 +110,26 @@ export default function HubScreen({ base, demo, onBack }: { base: string; demo: 
       setBusy(false);
     }
   };
+
+  // the claim (and its script) disappears the moment it expires (invariant 14):
+  // never stored anywhere but this state, and the timer is cleared on
+  // unmount, on Back, and whenever a new claim replaces this one.
+  useEffect(() => {
+    if (!claim?.expires_at) return;
+    const ms = new Date(claim.expires_at).getTime() - Date.now();
+    const expire = () => {
+      setClaim(null);
+      setCalled(false);
+      setMsg("Your claim expired.");
+    };
+    if (ms <= 0) {
+      expire();
+      return;
+    }
+    const id = window.setTimeout(expire, ms);
+    return () => window.clearTimeout(id);
+  }, [claim]);
+
   const close = () => {
     setOpen(null);
     setClaim(null);

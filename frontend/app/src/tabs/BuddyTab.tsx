@@ -244,42 +244,57 @@ function BuddyCard({ state, base }: { state: ReturnType<typeof readBuddyState>; 
 }
 
 const ACCEPTED_KEY = "irin.acceptedBuddy";
+interface StoredAccepted {
+  card: MatchCard;
+  /** this phone's demo/live mode when the accept went through */
+  demo: boolean;
+}
 /** The card this phone just accepted, until the snapshot's my_buddy carries it (session only). */
-function useAcceptedCard() {
-  const [card, setCard] = useState<MatchCard | null>(() => {
+function useAcceptedCard(demo: boolean) {
+  const [stored, setStored] = useState<StoredAccepted | null>(() => {
     try {
-      return JSON.parse(sessionStorage.getItem(ACCEPTED_KEY) ?? "null") as MatchCard | null;
+      return JSON.parse(sessionStorage.getItem(ACCEPTED_KEY) ?? "null") as StoredAccepted | null;
     } catch {
       return null;
     }
   });
   const save = (c: MatchCard | null) => {
-    setCard(c);
+    const next = c ? { card: c, demo } : null;
+    setStored(next);
     try {
-      if (c) sessionStorage.setItem(ACCEPTED_KEY, JSON.stringify(c));
+      if (next) sessionStorage.setItem(ACCEPTED_KEY, JSON.stringify(next));
       else sessionStorage.removeItem(ACCEPTED_KEY);
     } catch {
       /* storage blocked: state still holds it */
     }
   };
-  return [card, save] as const;
+  return [stored, save] as const;
 }
 
 export default function BuddyTab() {
   const { target, socket } = useDevice();
   const snap = socket.snapshot;
-  const [accepted, setAccepted] = useAcceptedCard();
+  const state = readBuddyState(snap);
+  const demo = snap?.mode === "replay";
+  const [accepted, setAccepted] = useAcceptedCard(demo);
   const [view, setView] = useState<"home" | "hub">("home");
-  const fromPi = readBuddyState(snap).myBuddy;
+  const fromPi = state.myBuddy;
   useEffect(() => {
-    if (fromPi && accepted) setAccepted(null);
-  }, [fromPi, accepted, setAccepted]);
+    if (!accepted) return;
+    if (fromPi) {
+      setAccepted(null);
+      return;
+    }
+    // once the snapshot's matches list is known, an accepted card that it
+    // no longer calls "accepted" (declined elsewhere, expired) is dropped;
+    // a match_id absent from the list is not yet known, so it is kept.
+    const known = state.matches.find((m) => m.match_id === accepted.card.match_id);
+    if ((known && known.status !== "accepted") || accepted.demo !== demo) setAccepted(null);
+  }, [fromPi, accepted, setAccepted, state.matches, demo]);
   if (target.status !== "ready") return <p className="text-neutral-400">Pair your Irin on the Device tab first.</p>;
   if (!snap) return <p className="text-neutral-400">Waiting for your Irin…</p>;
   const base = target.url;
-  const state = readBuddyState(snap);
-  const demo = snap.mode === "replay";
-  const myBuddy = state.myBuddy ?? accepted;
+  const myBuddy = state.myBuddy ?? accepted?.card ?? null;
   if (!state.link && !myBuddy)
     return (
       <section className="flex flex-col gap-4">

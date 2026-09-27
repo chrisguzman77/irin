@@ -80,7 +80,7 @@ export default function FindBuddy({ base, matches, demo, autoFind = false, onAcc
       if (!r.ok) return setMsg(r.reason);
       setAnswered((a) => ({ ...a, [id]: { status: r.value.status, mine: verb, first_name } }));
       const card = cards?.find((c) => c.match_id === id);
-      if (verb === "accept" && card) onAccepted?.(card);
+      if (verb === "accept" && card && r.value.status === "accepted") onAccepted?.(card);
     });
 
   // snapshot rows win on status and pair_url; local answers fill the gap
