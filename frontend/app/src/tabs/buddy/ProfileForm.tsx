@@ -2,12 +2,12 @@ import { useEffect, useState } from "react";
 import { PinRejected } from "../../lib/api";
 import { getProfile, saveProfile, type BuddyProfile, type ProfileReply, type Slot } from "../../lib/buddy";
 import type { Settings } from "../../lib/contracts";
+import SlotEditor from "./SlotEditor";
 
 // B3+: the directory profile, POSTed to the Pi (which verifies the CGM feed
 // itself and forwards to the relay's /v0/users). Only these fields exist:
 // no glucose, location, phone, or email (invariant 15). The opt-ins are the
 // four toggles below this box (settings.night_buddy), sent as they stand.
-const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const OFF = { have_buddy: false, be_watcher: false, hub_watchable: false, hub_volunteer: false };
 const list = (s: string) => s.split(",").map((x) => x.trim()).filter(Boolean);
 const input = "bg-neutral-900 border border-neutral-700 rounded-lg px-3 py-2 text-white";
@@ -63,8 +63,6 @@ export default function ProfileForm({ base, settings, demo }: { base: string; se
     }
   };
 
-  const setSlot = (i: number, patch: Partial<Slot>) => setSlots(slots.map((s, j) => (j === i ? { ...s, ...patch } : s)));
-
   return (
     <section className="rounded-xl border border-neutral-800 px-4 py-3 flex flex-col gap-2">
       <h3 className="text-xs uppercase tracking-wider text-neutral-400 flex items-center gap-2">
@@ -96,28 +94,7 @@ export default function ProfileForm({ base, settings, demo }: { base: string; se
         Time zones (comma separated, e.g. America/New_York)
         <input className={input} value={timezones} onChange={(e) => setTimezones(e.target.value)} />
       </label>
-      <div className="flex flex-col gap-1 text-sm text-neutral-300">
-        Hours I'm awake to watch (my local time)
-        {slots.map((s, i) => (
-          <div key={i} className="flex flex-wrap gap-2 items-center">
-            <select aria-label="Day" className={input} value={s.weekday} onChange={(e) => setSlot(i, { weekday: Number(e.target.value) })}>
-              {DAYS.map((d, n) => (
-                <option key={d} value={n}>{d}</option>
-              ))}
-            </select>
-            <input aria-label="From" type="time" className={input} value={s.start} onChange={(e) => setSlot(i, { start: e.target.value })} />
-            <span>to</span>
-            <input aria-label="Until" type="time" className={input} value={s.end} onChange={(e) => setSlot(i, { end: e.target.value })} />
-            <button type="button" aria-label="Remove" className="px-2 text-red-300" onClick={() => setSlots(slots.filter((_, j) => j !== i))}>
-              ×
-            </button>
-          </div>
-        ))}
-        <button type="button" className="self-start rounded-lg px-3 py-2 bg-neutral-900 text-neutral-200"
-          onClick={() => setSlots([...slots, { weekday: 0, start: "22:00", end: "06:00" }])}>
-          Add hours
-        </button>
-      </div>
+      <SlotEditor slots={slots} onChange={setSlots} />
       <p className="text-xs text-neutral-500">
         No glucose values, places, phone numbers or emails are asked for or shared. A buddy sees your first name only.
       </p>
