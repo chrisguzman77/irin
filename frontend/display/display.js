@@ -358,12 +358,48 @@ function render() {
 // AWAY_AFTER_MIN; never at night, backend rule) AND nothing needs a person:
 // any alarm state other than idle (warning, low, acknowledged, re-armed,
 // stale, high) or a reading below the low threshold keeps the normal screen.
-// Waking because someone is back plays the 2 s leaves-up sequence; waking
-// because of an alarm or a low is instant (the alarm takeover is above it
-// anyway). It only reads state and sends nothing.
+// Waking because someone is back plays the 2 s flood-and-fall (below); waking
+// because of an alarm or a low is instant, flood and all (the alarm takeover
+// is above it anyway). It only reads state and sends nothing.
 const WAKE_MS = 2000;
 let idleShown = false;
 let wakeTimer = null;
+
+// The flood: leaves pop in on a jittered grid until they cover the screen,
+// then each falls off the bottom. The timings match style.css (#idle.waking
+// fades the dusk out at 0.35-0.7 s, under the covering leaves) and end inside
+// WAKE_MS: pops start 0-0.35 s (0.25 s each), falls start 0.65-1.0 s and last
+// 0.65-0.9 s, so the last leaf is gone by 1.9 s.
+const FLOOD_COLS = 12, FLOOD_ROWS = 8;
+const LEAF_IMAGES = ["leaf-mint.png", "leaf-sage.png"];
+for (const src of LEAF_IMAGES) new Image().src = src; // loaded before the first wake, so no leaf pops in late
+const rand = (lo, hi) => lo + Math.random() * (hi - lo);
+
+function floodLeaves() {
+  const leaves = [];
+  for (let i = 0; i < FLOOD_COLS * FLOOD_ROWS; i++) {
+    const col = i % FLOOD_COLS, row = Math.floor(i / FLOOD_COLS);
+    const leaf = document.createElement("div");
+    leaf.className = "flood-leaf";
+    leaf.style.left = `${((col + rand(0.1, 0.9)) / FLOOD_COLS) * 100}%`;
+    leaf.style.top = `${((row + rand(0.1, 0.9)) / FLOOD_ROWS) * 100}%`;
+    leaf.style.width = `${rand(9, 16)}vmin`;
+    leaf.style.setProperty("--pop-at", `${Math.round(rand(0, 350))}ms`);
+    leaf.style.setProperty("--fall-at", `${Math.round(rand(650, 1000))}ms`);
+    leaf.style.setProperty("--fall-ms", `${Math.round(rand(650, 900))}ms`);
+    leaf.style.setProperty("--turn", `${Math.round(rand(-180, 180))}deg`);
+    leaf.style.setProperty("--spin", `${Math.round(rand(-120, 120))}deg`);
+    const img = document.createElement("img");
+    img.src = LEAF_IMAGES[i % 2];
+    img.alt = "";
+    leaf.append(img);
+    leaves.push(leaf);
+  }
+  $("idle-flood").replaceChildren(...leaves);
+}
+function clearFlood() {
+  $("idle-flood").replaceChildren();
+}
 
 function needsPerson() {
   const a = state.alarm || {};
@@ -381,7 +417,7 @@ function isIdle() {
 function updateIdle() {
   const el = $("idle");
   if (isIdle()) {
-    if (wakeTimer) { clearTimeout(wakeTimer); wakeTimer = null; } // left again mid-wake
+    if (wakeTimer) { clearTimeout(wakeTimer); wakeTimer = null; clearFlood(); } // left again mid-wake
     el.classList.remove("waking", "instant");
     el.classList.add("on");
     idleShown = true;
@@ -389,18 +425,21 @@ function updateIdle() {
   }
   if (needsPerson() && (idleShown || wakeTimer)) { // alarm or low: gone now, no animation
     if (wakeTimer) { clearTimeout(wakeTimer); wakeTimer = null; }
+    clearFlood(); // an alarm never waits for leaves
     el.classList.add("instant");
     el.classList.remove("on", "waking");
     idleShown = false;
     return;
   }
   if (!idleShown) return;
-  idleShown = false; // someone is back: leaves sweep up, then the main screen
+  idleShown = false; // someone is back: the leaves flood the screen and fall away
   el.classList.remove("instant");
+  floodLeaves();
   el.classList.add("waking");
   wakeTimer = setTimeout(() => {
     wakeTimer = null;
     el.classList.remove("on", "waking");
+    clearFlood();
   }, WAKE_MS);
 }
 

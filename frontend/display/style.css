@@ -150,24 +150,38 @@ body.alarm-high::after { content: ""; position: fixed; inset: 0; pointer-events:
   background: rgba(255, 176, 0, 0.12); box-shadow: inset 0 0 0 0.8vh var(--amber); }
 
 /* Idle screen: below the alarm (20) and the flags (25), above everything else.
-   Slow 1.5 s fade in. Waking (someone detected) is a 2 s sequence: the leaves
-   sweep up and off (0-1.4 s) while the dusk background fades to the main
-   screen (0.8-2 s). .instant (alarm or low) skips it: gone at once. */
+   Slow 1.5 s fade in. Waking (someone detected) is a 2 s "flood and fall":
+   leaves pop in across the whole screen (0-0.6 s), the dusk background fades
+   out underneath them (0.35-0.7 s), then every leaf drops off the bottom
+   (0.65-1.9 s), revealing the main screen. .instant (alarm or low) skips it
+   all: gone at once, flood included (display.js). */
 #idle { position: fixed; inset: 0; z-index: 19; pointer-events: none; overflow: hidden;
   background: linear-gradient(#2E2F29, #3A4234);  /* charcoal to a sage-tinted dusk */
   opacity: 0; visibility: hidden; transition: opacity 0.2s ease-out, visibility 0s linear 0.2s; }
 #idle.on { opacity: 1; visibility: visible; transition: opacity 1.5s ease; }
 #idle.instant { transition: none; }
 #idle img { display: block; width: 100%; height: 100%; object-fit: cover; will-change: transform; }
-#idle.waking { animation: idle-bg-out 2s ease forwards; }
-#idle.waking img { animation: leaves-up 1.4s cubic-bezier(0.5, 0, 0.85, 0.35) forwards; }
-@keyframes leaves-up {
-  0%   { transform: translateY(0) scale(1); opacity: 1; }
-  100% { transform: translateY(-115vh) scale(1.08); opacity: 0.5; }
-}
+#idle.waking { animation: idle-bg-out 0.7s ease forwards; }
 @keyframes idle-bg-out {
-  0%, 40% { opacity: 1; }
+  0%, 50% { opacity: 1; }
   100%    { opacity: 0; }
+}
+
+/* The flood: one layer above #idle (same z, later in the page), filled by
+   display.js with ~100 leaves on a jittered grid. Each leaf is two boxes: the
+   outer falls (after its own delay, gravity-like ease-in, a little spin), the
+   inner pops in (after its own delay). Transform and opacity only: cheap on the Pi. */
+#idle-flood { position: fixed; inset: 0; z-index: 19; pointer-events: none; overflow: hidden; }
+.flood-leaf { position: absolute; will-change: transform;
+  animation: flood-fall var(--fall-ms) cubic-bezier(0.55, 0, 1, 0.45) var(--fall-at) forwards; }
+.flood-leaf img { display: block; width: 100%; height: auto; transform: translate(-50%, -50%) rotate(var(--turn));
+  animation: flood-pop 0.25s ease-out var(--pop-at) both; }
+@keyframes flood-pop {
+  from { opacity: 0; transform: translate(-50%, -50%) rotate(var(--turn)) scale(0.3); }
+  to   { opacity: 1; transform: translate(-50%, -50%) rotate(var(--turn)) scale(1); }
+}
+@keyframes flood-fall {
+  to { transform: translateY(calc(110vh + 100%)) rotate(var(--spin)); }
 }
 
 #alarm { position: fixed; inset: 0; z-index: 20; display: flex; flex-direction: column;
