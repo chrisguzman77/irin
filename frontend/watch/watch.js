@@ -59,11 +59,22 @@ function safeLine(text) {
   if (/\d|\bmg\b|mmol|glucose|\bbg\b|@|https?:|www\.|°|\blat\b|\blon\b|street|address|phone/i.test(rest)) return "";
   return line;
 }
+/** The device's morning line or close-out (buddy_line): a first name, counts and clock times only
+ * (relay/README.md). "" if anything but a clock time or a counted unit carries a digit. */
+function safeBuddyLine(text) {
+  if (typeof text !== "string") return "";
+  const line = text.split(/\r?\n/)[0].trim().slice(0, 300);
+  const rest = line.replace(/\b\d{1,2}:\d{2}(?:\s*[AaPp]\.?[Mm]\.?)?/g, "")
+    .replace(/\b\d{1,3}\s*(?:min|mins|minutes?|hours?|alerts?|calls?|times?|nights?)\b/gi, "");
+  if (/\d|\bmg\b|mmol|glucose|\bbg\b|@|https?:|www\.|°|\blat\b|\blon\b|street|address|phone/i.test(rest)) return "";
+  return line;
+}
 const possessive = (name) => (name === "Your buddy" ? "Your buddy's" : `${name}'s`);
 
 // ------------------------------------------------------------ state
 
 const s = load();
+const lines = new Map();    // night_date -> {line, receivedAt}: the device's buddy_line (morning line / close-out)
 const alerts = new Map();   // alert_id -> {alert, message, receivedAt}; receivedAt is the relay's time (the
                             // alert's own created_at is the device clock, which a replay sets years back)
 const byListing = new Map(); // listing_id -> alert_id (the newest alert for it)
@@ -81,6 +92,7 @@ let onWatch = false;
 let wakeLock = null;
 let tab = "buddy";
 let alertMsg = "";
+let pendingPop = null;
 
 function myLog() {
   try {
@@ -290,6 +302,18 @@ async function pollInbox() {
   let pop = null;
   for (const env of rows) {
     if (!since || env.created_at > since) since = env.created_at;
+    if (env.kind === "buddy_line") {
+      const plain = openFromDevice(s, env.nonce, env.ciphertext);
+      let p = null;
+      try { p = plain ? JSON.parse(plain) : null; } catch { p = null; }
+      if (!p || p.kind !== "buddy_line" || !!env.is_demo !== !!s.is_demo) {
+        unopened++;
+        continue;
+      }
+      const line = safeBuddyLine(p.line);
+      if (line) lines.set(String(p.night_date || ""), { line, receivedAt: ms(env.created_at) || Date.now() });
+      continue;
+    }
     if (env.kind !== "buddy_alert") continue;
     const plain = openFromDevice(s, env.nonce, env.ciphertext);
     let p = null;
@@ -316,7 +340,10 @@ async function pollInbox() {
   firstInbox = false;
   lastOk = new Date();
   status();
-  if (pop) showAlert(pop);
+  if (pop) {
+    if (!hubAt) pendingPop = pop; // page load: pop only once the hub has said whether it is still open
+    else showAlert(pop);
+  }
   render();
 }
 
@@ -523,8 +550,10 @@ function renderBuddy() {
   const card = $("buddycard");
   const ids = [...byListing.keys()];
   const last = ids.map(live).filter(Boolean).sort((x, y) => alerts.get(byListing.get(y.l.listing_id)).receivedAt - alerts.get(byListing.get(x.l.listing_id)).receivedAt)[0];
+  const dev = [...lines.values()].sort((x, y) => y.receivedAt - x.receivedAt)[0] || null;
+  const devLine = (who) => [el("p", "morning", dev.line), el("p", "caveat", `From ${possessive(who)} Irin, ${hhmm(dev.receivedAt)}.`)];
   if (!last) {
-    card.replaceChildren(el("h2", null, "Your buddy"),
+    card.replaceChildren(el("h2", null, "Your buddy"), ...(dev ? devLine("Your buddy") : []),
       el("p", "line", "No alerts from your buddy's Irin. If their alarm goes unanswered, this page sounds."));
     return;
   }
@@ -535,7 +564,9 @@ function renderBuddy() {
   if (l.is_demo) top.append(el("span", "badge-demo", "DEMO"));
   kids.push(top);
   if (l.status === "resolved") {
-    kids.push(el("p", "morning", morningLine(last, who)));
+    // the device's own line once it has spoken after this alert; until then, this page's count
+    if (dev && dev.receivedAt >= a.receivedAt) kids.push(...devLine(who));
+    else kids.push(el("p", "morning", morningLine(last, who)));
     kids.push(el("p", "line", `Last alert ${hhmm(a.receivedAt)}, resolved${last.resolvedAt ? ` at ${hhmm(last.resolvedAt)}` : ""}.`));
   } else if (l.status === "treating") {
     const ago = treatingAgo(l);
@@ -702,6 +733,11 @@ async function tick() {
     hubAt = Date.now();
     await pollHub();
     if (stopped) return;
+    if (pendingPop) {
+      const e = live(pendingPop);
+      if (e && e.l.status === "open") showAlert(pendingPop);
+      pendingPop = null;
+    }
     render();
   }
   schedule(onWatch || shown ? 1000 : 5000); // on watch: an alert sounds within about a second of reaching the relay
