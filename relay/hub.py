@@ -30,7 +30,7 @@ import secrets
 from datetime import datetime, timedelta
 from typing import Literal
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 from nacl.exceptions import CryptoError
 from nacl.secret import SecretBox
@@ -141,13 +141,32 @@ def _sweep() -> None:
         store.audit("hub.treating_expired", listing_id=li["listing_id"], urgency=top)
 
 
-def _volunteer(authorization: str | None = Header(default=None)) -> dict:
+def _volunteer(request: Request, authorization: str | None = Header(default=None)) -> dict:
     """A confirmed buddy pairing's bearer (the hub is for verified accounts in standing, invariant 16)."""
-    pairing = _bearer_pairing(authorization)
+    pairing = _bearer_pairing(authorization, request)
     if pairing.get("peer_kind") != "buddy":
         raise HTTPException(status_code=403, detail="the hub is for buddy pairings only")
     _sweep()
     return pairing
+
+
+def _watcher_can_see(volunteer: dict, rows: list[dict]) -> list[dict]:
+    """A watcher sees its own paired device's listings, and strangers' only when its pairing
+    maps to a directory user who is CGM-verified, has have_buddy and hub_volunteer on, and shares a
+    language with the listing's person (the rule of GET /v0/users/hub, directory.py). No linked
+    user: own buddy's listings only (invariants 15, 16)."""
+    own = volunteer.get("source_key_hash")
+    mine = [d for d in rows if d["source_key_hash"] == own]
+    user = store.db()["users"].find_one({"source_key_hash": own}) if own else None
+    optins = (user or {}).get("optins", {})
+    if not (user and user.get("cgm_verified") and optins.get("have_buddy") and optins.get("hub_volunteer")):
+        return mine
+    strangers = [d for d in rows if d["source_key_hash"] != own]
+    people = {u["source_key_hash"]: u.get("languages", []) for u in
+              store.db()["users"].find({"source_key_hash": {"$in": [d["source_key_hash"] for d in strangers]}})}
+    langs = {x.casefold() for x in user.get("languages", [])}
+    return mine + [d for d in strangers
+                   if d["source_key_hash"] in people and langs & {x.casefold() for x in people[d["source_key_hash"]]}]
 
 
 def _source(source_key: str = Depends(require_source_key)) -> str:
@@ -267,6 +286,7 @@ async def hub_list(volunteer: dict = Depends(_volunteer)) -> list[dict]:
     (seed_buddies.py, v3) are shown only in the app's hub, badged there."""
     rows = store.db()["hub_listings"].find({"status": {"$ne": "resolved"}, "is_demo": volunteer["is_demo"],
                                             "sample": {"$ne": True}})
+    rows = _watcher_can_see(volunteer, list(rows))
     rows = sorted(rows, key=lambda d: (-d["urgency"], d["confidence"] != "device_confirmed", d["created_at"]))
     return [_listing_out(d) for d in rows]
 
@@ -309,7 +329,7 @@ async def claim(req: ClaimIn, volunteer: dict = Depends(_volunteer)):
     409 with the holder's expiry. Sample listings (seed_buddies.py) are for the app's hub only."""
     d = store.db()["hub_listings"].find_one({"listing_id": req.listing_id, "is_demo": volunteer["is_demo"],
                                              "sample": {"$ne": True}})
-    if d is None:
+    if d is None or not _watcher_can_see(volunteer, [d]):
         raise HTTPException(status_code=404, detail="no such listing")
     doc = lease(d, volunteer["doctor_id"])
     return doc if isinstance(doc, JSONResponse) else _claim_out(doc)

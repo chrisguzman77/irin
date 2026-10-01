@@ -16,7 +16,7 @@ from collections import defaultdict, deque
 from datetime import datetime, timedelta
 from typing import Any, Literal
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 import store
@@ -32,7 +32,15 @@ router = APIRouter(prefix="/v0")
 _hits: dict[str, deque] = defaultdict(deque)
 
 
+def _client_ip(request: Request) -> str:
+    """X-Forwarded-For's first hop (Caddy), else the peer."""
+    fwd = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+    return fwd or (request.client.host if request.client else "unknown")
+
+
 def _rate_limit(key: str) -> None:
+    """One bucket per caller: an authenticated identity (src:, bearer:, user:) or ip:<addr>
+    before auth and on public routes, so one heavy client never 429s the Pi, the inbox, or buddy alerts."""
     q = _hits[key]
     t = time.monotonic()
     while q and q[0] < t - 60:
@@ -46,10 +54,10 @@ def _eq(a: str, b: str) -> bool:
     return hmac.compare_digest(a.encode("utf-8", "replace"), b.encode("utf-8", "replace"))
 
 
-def require_source_key(x_source_key: str | None = Header(default=None, alias="X-Source-Key")) -> str:
+def require_source_key(request: Request, x_source_key: str | None = Header(default=None, alias="X-Source-Key")) -> str:
     """One source key = one device (the hackathon has one Pi); a key may only
     touch the pairings it registered."""
-    _rate_limit("auth-attempts")  # guessing is throttled on its own bucket, never the Pi's or the inbox's
+    _rate_limit(f"ip:{_client_ip(request)}")  # guessing is throttled per client IP, never on the Pi's or the inbox's bucket
     keys = RELAY_SOURCE_KEYS or [k for k in os.environ.get("RELAY_SOURCE_KEYS", "").split(",") if k]
     if not x_source_key or not any(_eq(x_source_key, k) for k in keys):
         raise HTTPException(status_code=401, detail="bad source key")
@@ -64,8 +72,8 @@ def _owned(doc: dict | None, source_key: str) -> dict:
     return doc
 
 
-def _bearer_pairing(authorization: str | None) -> dict:
-    _rate_limit("auth-attempts")
+def _bearer_pairing(authorization: str | None, request: Request) -> dict:
+    _rate_limit(f"ip:{_client_ip(request)}")
     if not authorization or not authorization.lower().startswith("bearer "):
         raise HTTPException(status_code=401, detail="bearer required")
     token = authorization.split(" ", 1)[1].strip()
@@ -76,8 +84,8 @@ def _bearer_pairing(authorization: str | None) -> dict:
     return doc
 
 
-def require_bearer(authorization: str | None = Header(default=None)) -> dict:
-    return _bearer_pairing(authorization)
+def require_bearer(request: Request, authorization: str | None = Header(default=None)) -> dict:
+    return _bearer_pairing(authorization, request)
 
 
 # ---------------------------------------------------------------- pairing (R5/R6)
@@ -122,10 +130,10 @@ async def pair_start(req: PairStart, source_key: str = Depends(require_source_ke
 
 
 @router.get("/pair/{token}")
-async def pair_state(token: str) -> dict:
+async def pair_state(token: str, request: Request) -> dict:
     """Public, single-use token: what the browser and the Pi both poll. After
     confirm the bearer is handed to the browser exactly once."""
-    _rate_limit("public")
+    _rate_limit(f"ip:{_client_ip(request)}")
     doc = _pairing_by_token(token)
     out = {"status": doc["status"], "is_demo": doc["is_demo"], "peer_kind": doc["peer_kind"],
            "device_id": doc.get("device_id", ""), "device_pk": doc["device_pk"], "doctor_pk": doc.get("doctor_pk"),
@@ -142,9 +150,9 @@ async def pair_state(token: str) -> dict:
 
 
 @router.post("/pair/{token}/complete")
-async def pair_complete(token: str, req: PairComplete) -> dict:
+async def pair_complete(token: str, req: PairComplete, request: Request) -> dict:
     """The browser posts its public key: single use."""
-    _rate_limit("public")
+    _rate_limit(f"ip:{_client_ip(request)}")
     doc = _pairing_by_token(token)
     if doc["status"] != "pending":
         raise HTTPException(status_code=409, detail=f"token already {doc['status']}")
@@ -175,16 +183,16 @@ async def pair_confirm(token: str, source_key: str = Depends(require_source_key)
 
 
 @router.post("/pair/{pairing_id}/revoke")
-async def pair_revoke(pairing_id: str, x_source_key: str | None = Header(default=None, alias="X-Source-Key"),
+async def pair_revoke(pairing_id: str, request: Request, x_source_key: str | None = Header(default=None, alias="X-Source-Key"),
                       authorization: str | None = Header(default=None)) -> dict:
     """From either side: the device (source key) or the inbox (its own bearer).
     Keys and the bearer are deleted; the doctor_id stays as a tombstone."""
     coll = store.db()["pairings"]
     if x_source_key:
-        require_source_key(x_source_key)
+        require_source_key(request, x_source_key)
         doc = _owned(coll.find_one({"doctor_id": pairing_id}) or coll.find_one({"token": pairing_id}), x_source_key)
     else:
-        doc = _bearer_pairing(authorization)
+        doc = _bearer_pairing(authorization, request)
         if doc["doctor_id"] != pairing_id:
             raise HTTPException(status_code=403, detail="not your pairing")
     if doc is None:
@@ -386,8 +394,8 @@ async def resources(pairing: dict = Depends(require_bearer)) -> list[dict]:
 
 
 @router.get("/log")
-async def log(limit: int = 100) -> list[dict]:
+async def log(request: Request, limit: int = 100) -> list[dict]:
     """IDs, timestamps, sizes, kinds, ciphertext prefixes: never a plaintext field."""
-    _rate_limit("public")
+    _rate_limit(f"ip:{_client_ip(request)}")
     rows = store.db()["audit"].find().sort("at", -1).limit(max(1, min(limit, 200)))
     return [{**store.public(r), "at": r["at"].isoformat()} for r in rows]

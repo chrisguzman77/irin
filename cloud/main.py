@@ -20,11 +20,12 @@ import hmac
 import logging
 import os
 import secrets
+import time
 import uuid
 from typing import Literal
 
 import psycopg
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field
@@ -86,11 +87,35 @@ def require_owner(authorization: str | None = Header(default=None)) -> None:
         raise HTTPException(status_code=401, detail="bad owner bearer")
 
 
-def require_pin(x_pin: str | None = Header(default=None, alias="X-PIN")) -> None:
+PIN_MAX_WRONG = 5
+PIN_WINDOW_S = 600.0  # 5 wrong PINs within 10 minutes lock the client for 10 minutes
+_pin_wrong: dict[str, list[float]] = {}
+_pin_locked_until: dict[str, float] = {}
+
+
+def _client_ip(request: Request) -> str:
+    """X-Forwarded-For's first hop (Caddy), else the peer."""
+    fwd = request.headers.get("x-forwarded-for", "").split(",")[0].strip()
+    return fwd or (request.client.host if request.client else "unknown")
+
+
+def require_pin(request: Request, x_pin: str | None = Header(default=None, alias="X-PIN")) -> None:
     if not PIN:
         raise HTTPException(status_code=503, detail="PIN not configured")
-    if not _same(x_pin, PIN):
-        raise HTTPException(status_code=401, detail="bad PIN")
+    who, now = _client_ip(request), time.monotonic()
+    if _pin_locked_until.get(who, 0.0) > now:
+        raise HTTPException(status_code=429, detail="too many PIN attempts; wait 10 minutes")
+    _pin_locked_until.pop(who, None)
+    if _same(x_pin, PIN):
+        _pin_wrong.pop(who, None)
+        return
+    recent = [t for t in _pin_wrong.get(who, []) if t > now - PIN_WINDOW_S] + [now]
+    if len(recent) >= PIN_MAX_WRONG:
+        _pin_wrong.pop(who, None)
+        _pin_locked_until[who] = now + PIN_WINDOW_S
+    else:
+        _pin_wrong[who] = recent
+    raise HTTPException(status_code=401, detail="bad PIN")
 
 
 def _token_hash(token: str) -> str:
