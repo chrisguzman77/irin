@@ -124,7 +124,7 @@ async def redeem(req: OwnerRedeem, request: Request) -> dict:
 
 
 @router.delete("/pair")
-async def unpair(authorization: str | None = Header(default=None),
+async def unpair(request: Request, authorization: str | None = Header(default=None),
                   x_source_key: str | None = Header(default=None, alias="X-Source-Key")) -> dict:
     """From either side: the app's own owner bearer, or the Pi's source key
     (revokes that device's owner pairing). Idempotent."""
@@ -138,7 +138,7 @@ async def unpair(authorization: str | None = Header(default=None),
             raise HTTPException(status_code=401, detail="unknown owner token")
         by = "app"
     else:
-        source_key = require_source_key(x_source_key)
+        source_key = require_source_key(request, x_source_key)
         doc = coll.find_one({"source_key_hash": store.bearer_hash(source_key)})
         if doc is None:
             raise HTTPException(status_code=404, detail="no owner pairing for this device")

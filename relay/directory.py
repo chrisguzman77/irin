@@ -37,7 +37,7 @@ from datetime import datetime
 from typing import Literal
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pymongo import ReturnDocument
@@ -45,7 +45,7 @@ from pymongo.errors import DuplicateKeyError
 
 import hub
 import store
-from relay_api import _rate_limit, require_source_key
+from relay_api import _client_ip, _rate_limit, require_source_key
 
 FORBIDDEN_FIELDS = ("mgdl", "mg_dl", "glucose", "location", "lat", "lon", "phone", "email", "number")
 WEEK = 7 * 1440
@@ -134,8 +134,8 @@ def _user_bearer(source_key: str, user_id: str) -> str:
     return base64.urlsafe_b64encode(mac).decode().rstrip("=")
 
 
-def require_user(authorization: str | None = Header(default=None)) -> dict:
-    _rate_limit("auth-attempts")
+def require_user(request: Request, authorization: str | None = Header(default=None)) -> dict:
+    _rate_limit(f"ip:{_client_ip(request)}")
     if not authorization or not authorization.lower().startswith("bearer "):
         raise HTTPException(status_code=401, detail="bearer required")
     user = store.db()["users"].find_one({"bearer_hash": store.bearer_hash(authorization.split(" ", 1)[1].strip())})
