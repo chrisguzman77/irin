@@ -13,6 +13,8 @@ export interface MatchClient {
   find: () => Promise<Result<MatchCard[]>>;
   answer: (matchId: string, verb: "accept" | "decline") => Promise<Result<{ match_id: string; status: string }>>;
 }
+/** this phone's own answers, by match_id (`initialAnswered` seeds them, e.g. from a stored accept) */
+export type Answered = Record<string, { status: string; mine: "accept" | "decline"; first_name: string }>;
 const badge = "bg-amber-400 text-black text-xs font-bold px-2 py-0.5 rounded";
 const btn = "flex-1 rounded-lg py-2 font-semibold disabled:opacity-40";
 
@@ -43,13 +45,14 @@ export function MatchCardView({ card: c, demo, children }: { card: MatchCard; de
 
 /** autoFind: the wizard's step 6 searches once on mount. onAccepted: called with
  * the suggestion's card once this phone's accept went through (Buddy v3). */
-export default function FindBuddy({ base, matches, demo, autoFind = false, onAccepted, client }: {
+export default function FindBuddy({ base, matches, demo, autoFind = false, onAccepted, client, initialAnswered }: {
   base: string; matches: MatchState[]; demo: boolean; autoFind?: boolean; onAccepted?: (card: MatchCard) => void; client?: MatchClient;
+  initialAnswered?: Answered;
 }) {
   const api: MatchClient = client ?? { find: () => findMatches(base), answer: (id, verb) => answerMatch(base, id, verb) };
   const [cards, setCards] = useState<MatchCard[] | null>(null);
   // this phone's own answers, until the snapshot / hub_update says more
-  const [answered, setAnswered] = useState<Record<string, { status: string; mine: "accept" | "decline"; first_name: string }>>({});
+  const [answered, setAnswered] = useState<Answered>(() => initialAnswered ?? {});
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
 

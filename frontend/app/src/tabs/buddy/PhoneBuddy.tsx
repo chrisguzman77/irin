@@ -1,21 +1,24 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { clearAccount, signUpPhone, useAccount } from "../../lib/account";
-import type { BuddyProfile, MatchCard } from "../../lib/buddy";
+import type { BuddyProfile, MatchCard, MatchState } from "../../lib/buddy";
 import {
-  answerMatch, claimHub, findMatches, getHub, getMe, getPhoneMatch, profileOf, setPhoneMatch, updateMe, type Me,
+  acceptedIds, answerMatch, claimHub, findMatches, forgetAccepted, getHub, getMatches, getMe, profileOf, rememberAccepted, updateMe,
+  type Me, type PhoneMatch,
 } from "../../lib/phoneBuddy";
 import BuddyWizard from "./BuddyWizard";
 import ConnectCgm from "./ConnectCgm";
-import FindBuddy, { MatchCardView, type MatchClient } from "./FindBuddy";
+import FindBuddy, { MatchCardView, type Answered, type MatchClient } from "./FindBuddy";
 import HubScreen, { type HubClient } from "./HubScreen";
 
 // Phone-only accounts, Phase 1 (relay/README.md "Phone-only accounts"): the
 // Irin Buddy tab with NO device paired. No account -> the wizard signs up on
 // the relay; then "Connect your CGM" verifies the feed through Irin Cloud;
-// verified -> Find a buddy, the My buddy card, the opt-ins, and the hub, all
-// against the relay directly. Being WATCHED needs an Irin (a device seals
-// listings and alerts): the copy says so, and hub_watchable stays off. With a
-// device paired BuddyTab never renders this (the Pi path is unchanged).
+// verified -> Find a buddy, the My buddy card (the newest accepted row of
+// GET /v0/users/matches, re-read every 60 s so a real buddy's acceptance
+// shows up), the opt-ins, and the hub, all against the relay directly. Being
+// WATCHED needs an Irin (a device seals listings and alerts): the copy says
+// so, and hub_watchable stays off. With a device paired BuddyTab never
+// renders this (the Pi path is unchanged).
 type OptIns = BuddyProfile["optins"];
 const OPT_INS: [keyof OptIns, string, string][] = [
   ["have_buddy", "I want a buddy", "One paired T1D adult is the last human rung of your alarm ladder."],
@@ -24,7 +27,7 @@ const OPT_INS: [keyof OptIns, string, string][] = [
   ["hub_volunteer", "I volunteer on the hub", "You may see listings from people you have never met and claim one."],
 ];
 const NO_IRIN = "Without an Irin your buddy cannot be alerted yet.";
-const matchClient: MatchClient = { find: findMatches, answer: answerMatch };
+const MATCHES_REFRESH_MS = 60_000;
 const hubClient: HubClient = { list: getHub, claim: claimHub };
 
 function Box({ title, children }: { title: string; children: React.ReactNode }) {
@@ -97,12 +100,13 @@ function PhoneHubEntry({ me, onSaved, onOpen }: { me: Me; onSaved: (me: Me) => v
   );
 }
 
+function forgetAccount() {
+  forgetAccepted();
+  clearAccount();
+}
+
 function ForgetAccount({ username }: { username: string }) {
   const [ask, setAsk] = useState(false);
-  const forget = () => {
-    setPhoneMatch(null);
-    clearAccount();
-  };
   return (
     <Box title="This phone">
       <p className="text-sm text-neutral-300">Signed up as {username}. There is no password: a phone that forgets this account signs up again.</p>
@@ -112,7 +116,7 @@ function ForgetAccount({ username }: { username: string }) {
         </button>
       ) : (
         <div className="flex gap-2">
-          <button type="button" className="flex-1 rounded-lg px-3 py-2 bg-red-500 text-black font-semibold" onClick={forget}>
+          <button type="button" className="flex-1 rounded-lg px-3 py-2 bg-red-500 text-black font-semibold" onClick={forgetAccount}>
             Yes, forget it
           </button>
           <button type="button" className="rounded-lg px-3 py-2 border border-neutral-700 text-neutral-300" onClick={() => setAsk(false)}>
@@ -129,14 +133,14 @@ export default function PhoneBuddy() {
   const [me, setMe] = useState<Me | null>(null);
   const [meErr, setMeErr] = useState("");
   const [view, setView] = useState<"home" | "hub" | "edit">("home");
-  const [myBuddy, setMyBuddy] = useState<MatchCard | null>(getPhoneMatch);
+  const [matches, setMatches] = useState<PhoneMatch[] | null>(null);
+  const [matchErr, setMatchErr] = useState("");
 
   // GET /v0/users/me on load (and after sign-up / verify): refreshes verified
   // and the opt-ins; a 401 clears the account and this screen flips to sign-up.
   const userId = account?.user_id ?? null;
   const verified = account?.verified ?? false;
   useEffect(() => {
-    setMyBuddy(getPhoneMatch());
     if (!userId) {
       setMe(null);
       return;
@@ -153,6 +157,40 @@ export default function PhoneBuddy() {
       live = false;
     };
   }, [userId, verified]);
+
+  // GET /v0/users/matches now, after every answer, and every 60 s while the
+  // tab is open: a real buddy's acceptance arrives this way.
+  const refreshMatches = useCallback(async () => {
+    const r = await getMatches();
+    if (r.ok) {
+      setMatches(r.value);
+      setMatchErr("");
+    } else setMatchErr(r.reason);
+  }, []);
+  useEffect(() => {
+    if (!userId || !verified) {
+      setMatches(null);
+      return;
+    }
+    void refreshMatches();
+    const id = window.setInterval(() => void refreshMatches(), MATCHES_REFRESH_MS);
+    return () => window.clearInterval(id);
+  }, [userId, verified, refreshMatches]);
+
+  const matchClient = useMemo<MatchClient>(
+    () => ({
+      find: findMatches,
+      answer: async (id, verb) => {
+        const r = await answerMatch(id, verb);
+        if (r.ok) {
+          if (verb === "accept") rememberAccepted(id);
+          void refreshMatches();
+        }
+        return r;
+      },
+    }),
+    [refreshMatches],
+  );
 
   const signUp = useMemo(
     () => ({ initial: null, save: (p: BuddyProfile) => signUpPhone(p), onSaved: () => undefined }),
@@ -182,16 +220,7 @@ export default function PhoneBuddy() {
       </>
     );
 
-  if (!account.verified)
-    return (
-      <ConnectCgm
-        onVerified={() => undefined}
-        onStartOver={() => {
-          setPhoneMatch(null);
-          clearAccount();
-        }}
-      />
-    );
+  if (!account.verified) return <ConnectCgm onVerified={() => undefined} onStartOver={forgetAccount} />;
 
   if (view === "hub") return <HubScreen base="" demo={false} onBack={() => setView("home")} client={hubClient} />;
 
@@ -205,10 +234,16 @@ export default function PhoneBuddy() {
       </>
     );
 
-  const accept = (card: MatchCard) => {
-    setPhoneMatch(card);
-    setMyBuddy(card);
-  };
+  // the My buddy card is the newest accepted row (the relay lists newest last)
+  const myBuddy: MatchCard | null = matches ? ([...matches].reverse().find((m) => m.status === "accepted") ?? null) : null;
+  const rows: MatchState[] = (matches ?? []).map((m) => ({ match_id: m.match_id, first_name: m.first_name, status: m.status, pair_url: null, sample: m.sample }));
+  // an "offered" row this phone already accepted reads as "Waiting for X to accept"
+  const accepted = acceptedIds();
+  const initialAnswered: Answered = Object.fromEntries(
+    (matches ?? [])
+      .filter((m) => m.status === "offered" && accepted.has(m.match_id))
+      .map((m) => [m.match_id, { status: "offered", mine: "accept" as const, first_name: m.first_name }]),
+  );
 
   return (
     <>
@@ -219,9 +254,14 @@ export default function PhoneBuddy() {
           <MatchCardView card={myBuddy} demo={false} />
           <p className="text-sm text-amber-300">{NO_IRIN}</p>
         </>
+      ) : matches ? (
+        // mounted once the matches are known, so the seeded answers are there from the start
+        <FindBuddy base="" matches={rows} demo={false} autoFind={!!me?.optins.have_buddy} onAccepted={() => void refreshMatches()}
+          client={matchClient} initialAnswered={initialAnswered} />
       ) : (
-        <FindBuddy base="" matches={[]} demo={false} autoFind={!!me?.optins.have_buddy} onAccepted={accept} client={matchClient} />
+        !matchErr && <p className="text-sm text-neutral-400 animate-pulse">Loading your matches…</p>
       )}
+      {matchErr && <p role="status" className="text-sm text-red-400">{matchErr}</p>}
       {me && <PhoneHubEntry me={me} onSaved={setMe} onOpen={() => setView("hub")} />}
       {me && <PhoneOptIns me={me} onSaved={setMe} />}
       {me && (

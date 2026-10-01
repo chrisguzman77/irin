@@ -186,33 +186,57 @@ export function claimHub(listingId: string): Promise<AccountResult<HubClaim>> {
   );
 }
 
-// The accepted match, kept on this phone: the relay exposes no "my matches"
-// read for a bearer (the Pi learns it from its device poll), so the card the
-// user accepted here is the My buddy card until Phase 2. Keyed to the account
-// so a card never outlives the account that accepted it.
-const MATCH_KEY = "irin.phoneMatch";
+/** One row of GET /v0/users/matches: the POST /v0/match row shape with every
+ * status (offered, accepted, declined), no pair_url. */
+export interface PhoneMatch extends MatchCard {
+  status: string;
+}
 
-export function getPhoneMatch(): MatchCard | null {
+/** GET /v0/users/matches -> this user's matches, newest last, with the
+ * template lines; the My buddy card is the newest accepted row. */
+export function getMatches(): Promise<AccountResult<PhoneMatch[]>> {
+  return call(() => relayFetch("/v0/users/matches"), async (res) => {
+    const body = await res.json();
+    return {
+      ok: true,
+      value: (Array.isArray(body) ? body : []).flatMap((r) => {
+        const c = readMatchCard(r);
+        return c ? [{ ...c, ...templateLines(c), status: str(obj(r)?.status) ?? "offered" }] : [];
+      }),
+    };
+  });
+}
+
+// A match row says "offered" both before the user answers and after the user
+// accepted while the other side has not: only the match_ids this phone tapped
+// Accept on tell the two apart across a reload. Ids only, keyed to the account.
+const ACCEPTED_KEY = "irin.phoneAccepted";
+
+export function acceptedIds(): Set<string> {
   const account = getAccount();
-  if (!account) return null;
+  if (!account) return new Set();
   try {
-    const raw = localStorage.getItem(MATCH_KEY);
-    if (!raw) return null;
-    const p = JSON.parse(raw) as { user_id?: unknown; card?: unknown };
-    if (p.user_id !== account.user_id) return null;
-    const c = readMatchCard(p.card);
-    return c ? { ...c, ...templateLines(c) } : null;
+    const p = JSON.parse(localStorage.getItem(ACCEPTED_KEY) ?? "null") as { user_id?: unknown; ids?: unknown } | null;
+    return p?.user_id === account.user_id ? new Set(strings(p.ids)) : new Set();
   } catch {
-    return null;
+    return new Set();
   }
 }
 
-export function setPhoneMatch(card: MatchCard | null): void {
+export function rememberAccepted(matchId: string): void {
   const account = getAccount();
+  if (!account) return;
   try {
-    if (card && account) localStorage.setItem(MATCH_KEY, JSON.stringify({ user_id: account.user_id, card }));
-    else localStorage.removeItem(MATCH_KEY);
+    localStorage.setItem(ACCEPTED_KEY, JSON.stringify({ user_id: account.user_id, ids: [...acceptedIds(), matchId] }));
   } catch {
-    /* storage blocked: the screen's state still holds it */
+    /* storage blocked: FindBuddy's own state still holds this session's answers */
+  }
+}
+
+export function forgetAccepted(): void {
+  try {
+    localStorage.removeItem(ACCEPTED_KEY);
+  } catch {
+    /* nothing stored */
   }
 }
