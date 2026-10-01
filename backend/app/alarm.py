@@ -107,6 +107,7 @@ class AlarmEngine:
         """Idle, episode closed, outputs off. The mode switch calls this."""
         self.state = AlarmState()
         self.last_reading: Reading | None = None
+        self._last_fresh: Reading | None = None  # the re-arm decision reads this, so a sensor dropout cannot hide a low
         self._low_forecasts = 0
         self._high_forecasts = 0
         self._recovered = 0
@@ -192,6 +193,8 @@ class AlarmEngine:
     def process_reading(self, reading: Reading) -> None:
         self.last_reading = reading
         s = self.settings
+        if not reading.is_stale:
+            self._last_fresh = reading
         if reading.is_stale:
             # Stale never changes a running low (it keeps sounding; the reading's is_stale
             # is the banner). With nothing running, it is a one-shot indicator tier.
@@ -212,6 +215,10 @@ class AlarmEngine:
                 self._start_full(reading)
             return
 
+        if self._full_running() and self.trigger == "predicted_low":
+            # a timed-out warning (its condition is the FORECAST): readings above the low
+            # threshold never close it; only recovered forecasts do (process_forecast)
+            return
         if self._full_running():
             self._recovered += 1
             if self._recovered >= RECOVERY_READINGS:
@@ -229,7 +236,17 @@ class AlarmEngine:
             self._go("idle", None, reading)
 
     def process_forecast(self, forecast: Forecast) -> None:
-        if not self.settings.predictive_enabled or self._full_running():
+        if self._full_running():
+            if self.trigger == "predicted_low":  # a timed-out warning closes only on recovered forecasts
+                if forecast.predicted_mgdl >= self.predicted_low_threshold():
+                    self._high_forecasts += 1
+                    self._low_forecasts = 0
+                    if self._high_forecasts >= RECOVERY_FORECASTS:
+                        self._close_episode(self.last_reading)
+                else:
+                    self._high_forecasts = 0
+            return
+        if not self.settings.predictive_enabled:
             return
         if forecast.predicted_mgdl < self.predicted_low_threshold():
             self._low_forecasts += 1
@@ -290,8 +307,10 @@ class AlarmEngine:
             self.hal.set_leds("strobe")
             self.hal.play_sound("alarm_urgent", 1.0)
         elif st == "acknowledged" and self._deadline and now >= self._deadline:
-            still_below = self.last_reading is not None and not self.last_reading.is_stale \
-                and self.last_reading.glucose_mgdl < self.settings.low_threshold
+            # clock time decides, not a new reading: a stale last reading falls back to the
+            # last fresh one, so an acked low that lost its sensor still re-arms
+            r = self._last_fresh
+            still_below = r is not None and r.glucose_mgdl < self.settings.low_threshold
             if still_below:
                 self._escalated = False
                 self._deadline = now + timedelta(minutes=ESCALATION_MIN)

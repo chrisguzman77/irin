@@ -388,3 +388,85 @@ def test_predicted_low_threshold_is_the_one_vigilance_hook(engine):
     assert eng.state.state == "pending"
     eng.process_reading(reading(75))  # the actual-low path is untouched: 75 is not a low
     assert eng.state.state == "pending"
+
+
+# --- audit fixes ---
+
+
+def test_acked_low_rearms_on_clock_time_even_if_the_sensor_drops_out(engine):
+    eng, hal, log = engine
+    eng.process_reading(reading(60))
+    eng.acknowledge("app")
+    eng.process_reading(reading(60, stale=True))  # the sensor dropped out after the ack
+    clock.advance(REARM_MIN * 60)
+    eng.tick()  # no new fresh reading ever arrived
+    assert eng.state.state == "rearmed" and sounds(hal)[-1] == "alarm_urgent"
+    assert eng.last_reading.is_stale  # the stale state stays visible
+
+
+def test_acked_low_with_no_reading_at_all_after_ack_rearms(engine):
+    eng, hal, log = engine
+    eng.process_reading(reading(60))
+    eng.acknowledge("device")
+    clock.advance(REARM_MIN * 60)
+    eng.tick()
+    assert eng.state.state == "rearmed"
+
+
+def test_stale_reading_after_recovery_does_not_rearm(engine):
+    eng, hal, log = engine
+    eng.process_reading(reading(60))
+    eng.acknowledge("app")
+    eng.process_reading(reading(75))
+    eng.process_reading(reading(75, stale=True))
+    clock.advance(REARM_MIN * 60)
+    eng.tick()
+    assert eng.state.state == "acknowledged"
+
+
+def test_timed_out_warning_never_self_closes_on_readings_while_forecasts_stay_low(engine):
+    eng, hal, log = engine
+    warn(eng)
+    clock.advance(PENDING_TIMEOUT_MIN * 60)
+    eng.tick()
+    assert eng.state.state == "active" and eng.trigger == "predicted_low"
+    for _ in range(4):  # readings above 70 (the actual threshold) while the forecast is still low
+        eng.process_reading(reading(80))
+        eng.process_forecast(forecast(60))
+    assert eng.state.state == "active" and eng.trigger == "predicted_low"
+    clock.advance(10 * 60)
+    eng.tick()
+    escalations = [t for t in log if t.escalated]
+    assert eng.state.state == "active"
+    assert sum(1 for t in log if t.old_state == "idle" and t.new_state == "pending") == 1
+    assert len(escalations) == 2  # the timeout to full, then the one strobe step
+
+
+def test_timed_out_warning_closes_only_on_two_recovered_forecasts(engine):
+    eng, hal, log = engine
+    warn(eng)
+    clock.advance(PENDING_TIMEOUT_MIN * 60)
+    eng.tick()
+    eng.process_forecast(forecast(120))
+    assert eng.state.state == "active"
+    eng.process_forecast(forecast(120))
+    assert eng.state.state == "idle" and hal.calls[-1] == ("set_leds", "ambient")
+
+
+def test_timed_out_warning_recorder_writes_one_event(engine):
+    from app.rounds.alarm_events import AlarmEventRecorder
+    eng, hal, log = engine
+    rec = AlarmEventRecorder()
+    eng.on_transition(rec)
+    warn(eng)
+    clock.advance(PENDING_TIMEOUT_MIN * 60)
+    eng.tick()
+    for _ in range(3):
+        eng.process_reading(reading(80))
+        eng.process_forecast(forecast(60))
+        clock.advance(5 * 60)
+        eng.tick()
+    eng.process_forecast(forecast(120))
+    eng.process_forecast(forecast(120))
+    assert len(rec.events) == 1 and rec.events[0].tier == "predicted_low"
+    assert rec.events[0].escalated and not rec.events[0].crossed_actual
