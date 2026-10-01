@@ -47,12 +47,28 @@ def test_one_step_check_and_gate_per_step_and_one_program_per_day():
 
 
 def test_history_from_the_stored_cards():
-    docs = [{"status": "sent", "stored_at": T.isoformat(), "card": {"kind": "step_check", "program": "step_watch", "status": "amber",
+    docs = [{"status": "sent", "stored_at": T.isoformat(), "card": {"is_demo": False, "kind": "step_check", "program": "step_watch", "status": "amber",
                                                                      "plan_id": "p1", "step_index": 1}},
-            {"status": "unsent", "stored_at": T.isoformat(), "card": {"kind": "basal_check", "program": "standing", "status": "amber"}}]
-    hist = history_from_store(docs)
+            {"status": "unsent", "stored_at": T.isoformat(), "card": {"is_demo": False, "kind": "basal_check", "program": "standing", "status": "amber"}}]
+    hist = history_from_store(docs, False)
     assert len(hist) == 2 and hist[0].event_key == "p1:1" and hist[0].sent_at == T  # unsent still counts: it is on its way
     red = [{"status": "sent", "stored_at": T.isoformat(), "event_key": "ae-7",
             "card": {"kind": "hypo_response", "program": "standing", "status": "red"}}]
-    assert history_from_store(red)[0].event_key == "ae-7"  # the red's episode survives a restart
+    assert history_from_store(red, False)[0].event_key == "ae-7"  # the red's episode survives a restart
     assert allow("follow_up", "standing", "insufficient", T, []).allowed  # "not enough data yet" is a card
+
+
+def test_demo_and_live_never_consume_each_others_budget():
+    """Invariant 11/10: one live basal check never silences a demo seek, and the reverse."""
+    live = {"status": "sent", "stored_at": T.isoformat(), "event_key": "ae-1",
+            "card": {"is_demo": False, "kind": "hypo_response", "program": "standing", "status": "red"}}
+    demo = {"status": "sent", "stored_at": T.isoformat(),
+            "card": {"is_demo": True, "kind": "basal_check", "program": "standing", "status": "amber"}}
+    docs = [live, demo]
+    assert [s.kind for s in history_from_store(docs, False)] == ["hypo_response"]
+    assert [s.kind for s in history_from_store(docs, True)] == ["basal_check"]
+    soon = T + timedelta(hours=1)
+    assert allow("hypo_response", "standing", "red", soon, history_from_store(docs, True), event_key="ae-1").allowed
+    assert allow("hypo_response", "standing", "red", soon, history_from_store(docs, False), event_key="ae-1").reason == "red_duplicate"
+    assert allow("basal_check", "standing", "amber", soon, history_from_store(docs, False)).allowed
+    assert allow("basal_check", "standing", "amber", soon, history_from_store(docs, True)).reason == "interval"

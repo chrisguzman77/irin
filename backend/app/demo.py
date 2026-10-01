@@ -237,7 +237,7 @@ def _evaluated_card(brain: bool):
                     raise HTTPException(status_code=409, detail="the watch has not started yet")
                 due = ("step_check", step, (max(step.planned_start, night - timedelta(days=6)), night))
             kind, step, window = due
-            told = sw._told(noise.history_from_store(store.select_cards(limit=500)))
+            told = sw._told(noise.history_from_store(store.select_cards(limit=500), True))
             ev = sw.evaluate(plan, kind, step, window, told)
             extra = _step_extra(plan, ev)
         else:
@@ -256,6 +256,8 @@ def brain_twin(card: dict):
     due for that window (a Basal Check straddling a dose change)."""
     from .rounds import noise
 
+    if any(k.startswith("hypo_response_") for k in card.get("metrics", {})):
+        return None  # a Hypo Response absorbed into the watch's safety card: no step evaluation reproduces it
     start, end = date_type.fromisoformat(card["period_start"]), date_type.fromisoformat(card["period_end"])
     with _forced_brain_only(True):
         if card["program"] == "step_watch":
@@ -265,7 +267,7 @@ def brain_twin(card: dict):
             if step is None:
                 return None
             # a safety card is the red itself; a check keeps the reds already told as flags, as when it was sent
-            told = None if card["kind"] == "safety" else sw._told(noise.history_from_store(store.select_cards(limit=500)))
+            told = None if card["kind"] == "safety" else sw._told(noise.history_from_store(store.select_cards(limit=500), bool(card["is_demo"])))
             ev = sw.evaluate(plan, card["kind"], step, (start, end), told)
             extra = _step_extra(plan, ev)
         else:

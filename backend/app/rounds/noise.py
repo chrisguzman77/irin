@@ -77,10 +77,13 @@ def allow(kind: str, program: str, status: str, now: datetime, history: list[Sen
     return Verdict(True, "sent")
 
 
-def history_from_store(docs: list[dict[str, Any]]) -> list[Sent]:
-    """store.select_cards() rows -> what the budget needs (sent cards only)."""
+def history_from_store(docs: list[dict[str, Any]], is_demo: bool) -> list[Sent]:
+    """store.select_cards() rows -> what the budget needs (sent cards only), for ONE
+    world: demo cards and live cards never consume each other's budget (invariant 11)."""
     out = []
     for d in docs:
+        if bool(d.get("card", {}).get("is_demo", False)) != is_demo:
+            continue
         if d.get("status") not in ("sent", "unsent"):  # an unsent card is still on its way: it counts
             continue
         c = d["card"]

@@ -12,7 +12,7 @@ import asyncio
 import logging
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
-from typing import Any, Callable
+from typing import Any, Awaitable, Callable
 
 from .. import store
 from ..clock import clock
@@ -33,6 +33,7 @@ class StandingEngine:
     is_demo: Callable[[], bool] = lambda: False
     brain_only: Callable[[], bool] = lambda: False
     active_watch: Callable[[], bool] = lambda: False  # R10: a Step Watch suspends Standing Cards
+    absorb: Callable[[Any, str | None], Awaitable[Any]] | None = None  # main.py: StepWatch.absorb_hypo
     thresholds: Thresholds = field(default_factory=Thresholds)
     last: dict[str, Any] = field(default_factory=dict)  # the latest evaluations, for the panel
     _lock: asyncio.Lock = field(default_factory=asyncio.Lock, repr=False)
@@ -107,7 +108,7 @@ class StandingEngine:
         today = today or clock.now().date()
         since, until = self.window(today)
         inp = self._inputs(today)
-        history = noise.history_from_store(store.select_cards(limit=500))
+        history = noise.history_from_store(store.select_cards(limit=500), self.is_demo())
         out = []
         for ev in self.evaluations(today):
             if only and ev.kind != only:
@@ -119,6 +120,10 @@ class StandingEngine:
             entry = {"kind": ev.kind, "status": ev.status, "flags": ev.flags, "headline": ev.headline,
                      "budget": verdict.reason, "sent": None}
             self.last[ev.kind] = entry
+            if verdict.reason == "watch" and ev.kind == "hypo_response" and ev.status == "red" and self.absorb is not None:
+                # invariant 10: a red Hypo Response during a watch is absorbed into the watch's red safety card,
+                # never dropped (amber and green stay suppressed)
+                entry["absorbed"] = await self.absorb(ev, key)
             if verdict.allowed:
                 card = assemble(program="standing", kind=ev.kind, status=ev.status, flags=ev.flags, metrics=ev.metrics,
                                 confidence=ev.confidence, period_start=ev.period_start or since,
