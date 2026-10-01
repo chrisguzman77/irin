@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { PinRejected } from "../../lib/api";
+import { PinRejected, deviceFetch } from "../../lib/api";
 import {
   ANSWERS, CLOSED, SYMPTOM_ANSWERS, answerLabel, answerRecall, getRecalls, markAnswered, useAnswered, usePiClock,
   type RecallAnswer, type RecallItem,
@@ -60,7 +60,7 @@ function RecallCard({ item, baseUrl, piNow, demo }: { item: RecallItem; baseUrl:
     const minutes = Math.min(1440, Math.ceil((piNow - nadirAt) / 60000) + 60);
     if (minutes < 1) return;
     let alive = true;
-    fetch(`${baseUrl}/api/history?minutes=${minutes}`, { cache: "no-store" })
+    deviceFetch(baseUrl, `/api/history?minutes=${minutes}`, { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : []))
       .then((rows: { timestamp: string; glucose_mgdl: number }[]) => {
         if (!alive) return;
@@ -82,7 +82,7 @@ function RecallCard({ item, baseUrl, piNow, demo }: { item: RecallItem; baseUrl:
   useEffect(() => {
     if (!item.prefill_treated) return;
     let alive = true;
-    fetch(`${baseUrl}/api/treatments?hours=48`, { cache: "no-store" })
+    deviceFetch(baseUrl, `/api/treatments?hours=48`, { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : []))
       .then((rows: { timestamp: string; kind: string }[]) => {
         const c = rows.find((t) => t.kind === "carbs" && Math.abs(ms(t.timestamp) - nadirAt) <= 30 * 60000);

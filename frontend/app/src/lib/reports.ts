@@ -1,3 +1,4 @@
+import { deviceFetch } from "./api";
 import type { components } from "../types/pi";
 
 // Morning reports (justin.md step 7), stored by the Pi (backend step 11).
@@ -26,14 +27,20 @@ export const statsOf = (r: MorningReport): ReportStats => (r.stats ?? {}) as Rep
 /** Below this much sensor coverage the night is partly missing; say so. */
 export const PARTIAL_COVERAGE_PCT = 85;
 
-async function get<T>(url: string): Promise<T> {
-  const res = await fetch(url, { cache: "no-store" });
+async function get<T>(base: string, path: string): Promise<T> {
+  const res = await deviceFetch(base, path, { cache: "no-store" });
   if (!res.ok) throw new Error(`${res.status}`);
   return (await res.json()) as T;
 }
 
 export const listReports = (base: string, limit = 30) =>
-  get<MorningReport[]>(`${base}/api/reports?limit=${limit}`);
+  get<MorningReport[]>(base, `/api/reports?limit=${limit}`);
 
-export const graphUrl = (base: string, r: MorningReport) =>
-  r.graph_png_path ? `${base}/api/reports/${encodeURIComponent(r.night_date)}/graph.png` : null;
+/** The graph needs the owner bearer, which an <img src> cannot carry: fetch
+ * it and hand back an object URL (the caller revokes it). null = no graph. */
+export async function fetchGraph(base: string, r: MorningReport): Promise<string | null> {
+  if (!r.graph_png_path) return null;
+  const res = await deviceFetch(base, `/api/reports/${encodeURIComponent(r.night_date)}/graph.png`);
+  if (!res.ok) throw new Error(`${res.status}`);
+  return URL.createObjectURL(await res.blob());
+}

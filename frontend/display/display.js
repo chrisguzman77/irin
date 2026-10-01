@@ -247,6 +247,7 @@ async function pollDevice() {
     ]);
     const t = toMs(h.clock);
     if (!Number.isNaN(t)) state.piClock = t;
+    state.synthetic = h.synthetic === true;
     if (typeof h.clock === "string") state.piDate = h.clock.slice(0, 10);
     state.displayMode = MODES.includes(s.display_mode) ? s.display_mode : "detail";
     if (typeof s.clock_synced === "boolean") state.clockSynced = s.clock_synced;
@@ -297,6 +298,7 @@ function render() {
   const disconnected = isDisconnected();
 
   $("badge-demo").classList.toggle("hidden", state.mode !== "replay");
+  $("badge-synthetic").classList.toggle("hidden", !state.synthetic);
   document.body.classList.toggle("is-demo", state.mode === "replay"); // the idle screen shows the logo in demo mode
   $("badge-clock").classList.toggle("hidden", state.clockSynced);
   const a = state.alarm || {};

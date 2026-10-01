@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { PinRejected } from "../../lib/api";
+import PiAudio from "../../components/PiAudio";
 import type { StateSnapshot } from "../../lib/contracts";
-import { approveStory, pauseRecipient, skipStory, storyAudioUrl, type FamilyStory } from "../../lib/family";
+import { approveStory, pauseRecipient, skipStory, storyAudioPath, type FamilyStory } from "../../lib/family";
 
 // Family Story F2: the morning chip ("Sent to Mom") with one-tap Pause per
 // recipient, and the approval screen for a pending story (Send / Skip, PIN).
@@ -56,7 +57,7 @@ export default function FamilyStories({ snap, baseUrl }: { snap: StateSnapshot; 
         {stories.map((s) => {
           const r = who(s.recipient_id);
           const name = r?.name ?? "a recipient";
-          const audio = storyAudioUrl(baseUrl, s);
+          const audio = storyAudioPath(s);
           const status = s.status ?? "pending_approval";
           return (
             <li key={s.story_id} className="flex flex-col gap-2">
@@ -98,7 +99,7 @@ export default function FamilyStories({ snap, baseUrl }: { snap: StateSnapshot; 
               {status === "pending_approval" ? (
                 <div className="rounded-lg bg-neutral-900 p-3 flex flex-col gap-3">
                   <p className="whitespace-pre-line text-neutral-100 leading-relaxed">{s.text}</p>
-                  {audio && <audio controls src={audio} className="w-full" />}
+                  {audio && <PiAudio base={baseUrl} path={audio} className="w-full" />}
                   <p className="text-xs text-neutral-500">
                     {s.level === "story_only" ? "Story only: no glucose numbers." : "Story + view: includes the night's numbers."}
                   </p>
@@ -128,7 +129,7 @@ export default function FamilyStories({ snap, baseUrl }: { snap: StateSnapshot; 
                   <details className="text-sm text-neutral-400">
                     <summary className="cursor-pointer">What {name} {status === "sent" ? "received" : "would receive"}</summary>
                     <p className="whitespace-pre-line text-neutral-200 mt-2">{s.text}</p>
-                    {audio && <audio controls src={audio} className="w-full mt-2" />}
+                    {audio && <PiAudio base={baseUrl} path={audio} className="w-full mt-2" />}
                   </details>
                 )
               )}

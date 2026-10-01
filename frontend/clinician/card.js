@@ -32,6 +32,7 @@ export function renderCard(card, opts = {}) {
 
   const badges = el("div", "sc-badges");
   for (const b of m.badges) badges.append(el("span", `sc-badge ${b.cls}`.trim(), b.text));
+  if (card.synthetic === true) badges.append(el("span", "sc-badge sc-demo", "SYNTHETIC"));
   root.append(badges, el("div", "sc-meta", m.meta), el("p", "sc-headline", m.headline));
 
   if (m.flags.length) {

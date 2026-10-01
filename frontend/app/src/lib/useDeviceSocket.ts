@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { applyBuddyMessage } from "./buddy";
 import { addMessage, removeMessage } from "./doctorMessages";
+import { getOwnerPairing } from "./owner";
 import { recallItems, type RecallItem } from "./recall";
 import type { AlarmState, Forecast, Reading, Settings, StateSnapshot, WSMessage } from "./contracts";
 
@@ -96,7 +97,10 @@ export function useDeviceSocket(baseUrl: string | null): DeviceSocket {
     if (!baseUrl) return;
     window.clearTimeout(timer.current);
     wsRef.current?.close();
-    const ws = new WebSocket(baseUrl.replace(/^http/, "ws") + "/ws");
+    // the owner bearer rides the subprotocols, never the URL; no pairing (dev override) = none
+    const token = getOwnerPairing()?.token;
+    const url = baseUrl.replace(/^http/, "ws") + "/ws";
+    const ws = token ? new WebSocket(url, ["irin.owner", `irin.token.${token}`]) : new WebSocket(url);
     wsRef.current = ws;
     ws.onopen = () => {
       if (wsRef.current !== ws) return;

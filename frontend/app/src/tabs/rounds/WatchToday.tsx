@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { PinRejected } from "../../lib/api";
+import { PinRejected, deviceFetch } from "../../lib/api";
 import type { StateSnapshot } from "../../lib/contracts";
 import { GI_ANSWERS, dayLabel, getCheckin, logShot, postCheckin, readCheckin, usePlanState, type Gi } from "../../lib/stepWatch";
 
@@ -35,7 +35,7 @@ export default function WatchToday({ snap, baseUrl, planState }: { snap: StateSn
   useEffect(() => {
     if (!ps.active || !weekly) return;
     let alive = true;
-    fetch(`${baseUrl}/api/treatments?hours=336`, { cache: "no-store" })
+    deviceFetch(baseUrl, `/api/treatments?hours=336`, { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : []))
       .then((rows: { kind: string; timestamp: string; dose_label?: string | null }[]) => {
         const shots = rows.filter((t) => t.kind === "glp1_dose").sort((a, b) => b.timestamp.localeCompare(a.timestamp));

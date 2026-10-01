@@ -29,7 +29,7 @@ function asRecord(x: unknown): CardRecord | null {
 }
 
 export async function listCards(base: string): Promise<CardRecord[]> {
-  const res = await fetch(`${base}/api/rounds/cards?limit=50`, { cache: "no-store" });
+  const res = await deviceFetch(base, `/api/rounds/cards?limit=50`, { cache: "no-store" });
   if (!res.ok) throw new Error(`${res.status}`);
   const rows = (await res.json()) as unknown[];
   return rows.map(asRecord).filter((r): r is CardRecord => r !== null);
@@ -69,7 +69,7 @@ export interface CardPair {
 }
 
 export async function compareCards(base: string): Promise<CardPair[] | null> {
-  const res = await fetch(`${base}/api/rounds/cards/compare`, { cache: "no-store" });
+  const res = await deviceFetch(base, `/api/rounds/cards/compare`, { cache: "no-store" });
   if (res.status === 404) return null;
   if (!res.ok) throw new Error(`${res.status}`);
   const rows = (await res.json()) as unknown[];
