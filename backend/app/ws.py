@@ -76,7 +76,7 @@ class Hub:
         await ws.accept()
         self.clients.add(ws)
         snap = await self.snapshot()
-        await ws.send_text(WSMessage(type="state_snapshot", payload=snap.model_dump(mode="json")).model_dump_json())
+        await ws.send_text(WSMessage(type="state_snapshot", payload={**snap.model_dump(mode="json"), "synthetic": self.runtime.is_synthetic()}).model_dump_json())
 
     def disconnect(self, ws: WebSocket) -> None:
         self.clients.discard(ws)

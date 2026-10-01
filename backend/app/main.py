@@ -78,6 +78,16 @@ def make_datasource(mode: Mode) -> DataSource:
     return NightscoutDataSource(config.NIGHTSCOUT_URL, config.NIGHTSCOUT_TOKEN)
 
 
+def _scenario_synthetic(path: str) -> bool:
+    from .rounds.catchup import Companion
+
+    try:
+        c = Companion.load(path)
+    except Exception:
+        return False
+    return bool(c and c.synthetic)
+
+
 @dataclass
 class Runtime:
     """Everything the app holds at runtime; the mode switch swaps `datasource`."""
@@ -109,6 +119,14 @@ class Runtime:
     catchup: "CatchUp | None" = None
     buddy: "BuddyRung | None" = None
     directory: "BuddyDirectory | None" = None
+
+    def is_synthetic(self) -> bool:
+        """The active replay scenario's companion says `synthetic` (demo/scenarios/README.md).
+        Live data is never synthetic."""
+        path = getattr(self.datasource, "path", None)
+        if self.mode != "replay" or path is None:
+            return False
+        return _scenario_synthetic(str(path))
 
 
 runtime = Runtime(mode="nightscout" if config.DATASOURCE == "nightscout" else "replay",
@@ -555,7 +573,8 @@ async def lifespan(app: FastAPI):
     # a Rounds card goes to doctors only: a buddy pairing never receives clinical numbers (invariant 15)
     runtime.cards = CardSender(recipients=lambda demo: [p for p in runtime.pairing.recipients(demo) if p.peer_kind == "doctor"],
                                post=runtime.relay_client.post_card,
-                               device_id=config.DEVICE_ID or "irin-dev", on_sent=_broadcast_card_sent)
+                               device_id=config.DEVICE_ID or "irin-dev", on_sent=_broadcast_card_sent,
+                               synthetic=runtime.is_synthetic)
     runtime.standing = StandingEngine(settings=runtime.settings, sender=runtime.cards,
                                       device_id=config.DEVICE_ID or "irin-dev", is_demo=lambda: runtime.mode == "replay",
                                       brain_only=lambda: config.IRIN_BRAIN_ONLY)
@@ -576,6 +595,7 @@ async def lifespan(app: FastAPI):
         on_plan_state=lambda st: _schedule(hub.broadcast(WSMessage(type="plan_state", payload=st))))
     runtime.messages.on_plan_message = runtime.step_watch.on_plan_message
     runtime.standing.active_watch = lambda: runtime.step_watch.active_plan() is not None
+    runtime.standing.absorb = runtime.step_watch.absorb_hypo
     # R14(a): step-week vigilance raises ONLY the predicted-low threshold, for 7 days after a step-up,
     # from the active plan of the current world; the actual-low alarm is untouched
     install_vigilance(runtime.alarm, runtime.settings, runtime.step_watch.active_plan)
@@ -620,7 +640,8 @@ app.add_middleware(
 @app.get("/api/health")
 async def health() -> dict:
     return {"ok": True, "datasource": runtime.mode, "hw": config.IRIN_HW, "clock": clock.now().isoformat(),
-            "display_mode": runtime.scheduler.display_mode(), "display_override": runtime.scheduler.display_override}
+            "display_mode": runtime.scheduler.display_mode(), "display_override": runtime.scheduler.display_override,
+            "synthetic": runtime.is_synthetic()}
 
 
 @app.get("/api/latest", response_model=Reading)

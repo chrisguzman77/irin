@@ -15,6 +15,7 @@ retried on the relay client's next tick."""
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 from dataclasses import dataclass, field
 from datetime import date
@@ -146,8 +147,10 @@ async def with_narrative(card: SignalCard) -> SignalCard:
     return card.model_copy(update={"narrative": text}) if text else card
 
 
-def envelope(card: SignalCard, recipient_id: str, doctor_pk: str, device_id: str) -> dict[str, Any]:
-    sealed = crypto.seal(card.model_dump_json(), doctor_pk)
+def envelope(card: SignalCard, recipient_id: str, doctor_pk: str, device_id: str, synthetic: bool = False) -> dict[str, Any]:
+    """`synthetic` rides as an extra key in the sealed payload (not a contracts field) so the inbox can badge it."""
+    body = json.dumps({**card.model_dump(mode="json"), "synthetic": True}) if synthetic else card.model_dump_json()
+    sealed = crypto.seal(body, doctor_pk)
     return {"recipient_id": recipient_id, "sender_id": device_id, "nonce": sealed["nonce"],
             "ciphertext": sealed["ciphertext"], "source": card.source, "kind": card.kind, "program": card.program,
             "is_demo": card.is_demo, "card_id": card.card_id}
@@ -161,6 +164,8 @@ class CardSender:
     on_sent: Callable[[dict], None] | None = None  # card_sent broadcast
     pending: dict[str, SignalCard] = field(default_factory=dict)  # undelivered, retried on the relay tick
     event_keys: dict[str, str | None] = field(default_factory=dict)  # card_id -> the red's event, kept for retries
+    synthetic: Callable[[], bool] = lambda: False  # the active replay scenario is synthetic
+    synthetic_ids: set[str] = field(default_factory=set)  # cards built while it was: retries keep the flag
 
     def __post_init__(self) -> None:
         try:  # a restart keeps retrying what the relay never took
@@ -178,10 +183,13 @@ class CardSender:
         if event_key is not None:
             self.event_keys[card.card_id] = event_key
         event_key = self.event_keys.get(card.card_id)
+        if card.is_demo and self.synthetic():
+            self.synthetic_ids.add(card.card_id)
         peers = self.recipients(card.is_demo)
         delivered, failed = [], []
         for p in peers:
-            ok = await self.post(envelope(card, p.doctor_id, p.doctor_pk, self.device_id))
+            ok = await self.post(envelope(card, p.doctor_id, p.doctor_pk, self.device_id,
+                                         card.card_id in self.synthetic_ids))
             (delivered if ok else failed).append(p.doctor_id)
         status = "sent" if delivered and not failed else "unsent" if peers else "no_recipient"
         store.upsert_card(card, status=status, recipients=delivered, event_key=event_key)

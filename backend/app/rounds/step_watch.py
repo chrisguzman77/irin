@@ -481,7 +481,7 @@ class StepWatch:
         keyed to its events. A daytime re-arm belongs to no night and waits for
         Hypo Response's own window."""
         async with self._lock:
-            return await self._safety(night, _noise.history_from_store(_store.select_cards(limit=500)))
+            return await self._safety(night, _noise.history_from_store(_store.select_cards(limit=500), self.is_demo()))
 
     async def _safety(self, night: date, history: list) -> list[dict[str, Any]]:
         plan = self.active_plan()
@@ -492,6 +492,26 @@ class StepWatch:
         if ev.status != "red":
             return []
         return [await self._send(plan, ev, ev.red_event_key or f"{plan.plan_id}:{step.index}:red", history)]
+
+    async def absorb_hypo(self, hypo: Any, event_key: str | None) -> dict[str, Any] | None:
+        """Invariant 10: a RED Hypo Response during a watch is merged into the watch's red
+        safety card, its flags and metrics included (metrics prefixed hypo_response_, each
+        keeping its own confidence label), never silently dropped. Budgeted as a safety red
+        (deduplicated per event, one per 12 hours). None when no watch is active."""
+        async with self._lock:
+            plan = self.active_plan()
+            step = current_step(plan, _clock.now().date()) if plan is not None else None
+            if plan is None or step is None:
+                return None
+            metrics = {f"hypo_response_{k}": v for k, v in hypo.metrics.items()}
+            confidence = {f"hypo_response_{k}": v for k, v in hypo.confidence.items()}
+            ev = StepEvaluation(kind="safety", status="red", flags=list(hypo.flags),
+                                metrics=metrics, confidence=confidence, headline=hypo.headline, step_index=step.index,
+                                period_start=hypo.period_start or _clock.now().date(),
+                                period_end=hypo.period_end or _clock.now().date(), nights=list(hypo.nights),
+                                red_event_key=event_key)
+            history = _noise.history_from_store(_store.select_cards(limit=500), self.is_demo())
+            return await self._send(plan, ev, event_key or f"{plan.plan_id}:{step.index}:red", history)
 
     async def run(self, today: date | None = None) -> list[dict[str, Any]]:
         """The night that just closed (`today` is its evening date): the red rule
@@ -505,7 +525,7 @@ class StepWatch:
         if plan is None:
             return []
         today = today or _clock.now().date()
-        history = _noise.history_from_store(_store.select_cards(limit=500))
+        history = _noise.history_from_store(_store.select_cards(limit=500), self.is_demo())
         out = await self._safety(today, history)
         told = self._told(history)
         for kind, step, window in due_kinds(plan, today):
