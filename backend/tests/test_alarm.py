@@ -388,3 +388,38 @@ def test_predicted_low_threshold_is_the_one_vigilance_hook(engine):
     assert eng.state.state == "pending"
     eng.process_reading(reading(75))  # the actual-low path is untouched: 75 is not a low
     assert eng.state.state == "pending"
+
+
+# --- audit fixes ---
+
+
+def test_acked_low_rearms_on_clock_time_even_if_the_sensor_drops_out(engine):
+    eng, hal, log = engine
+    eng.process_reading(reading(60))
+    eng.acknowledge("app")
+    eng.process_reading(reading(60, stale=True))  # the sensor dropped out after the ack
+    clock.advance(REARM_MIN * 60)
+    eng.tick()  # no new fresh reading ever arrived
+    assert eng.state.state == "rearmed" and sounds(hal)[-1] == "alarm_urgent"
+    assert eng.last_reading.is_stale  # the stale state stays visible
+
+
+def test_acked_low_with_no_reading_at_all_after_ack_rearms(engine):
+    eng, hal, log = engine
+    eng.process_reading(reading(60))
+    eng.acknowledge("device")
+    clock.advance(REARM_MIN * 60)
+    eng.tick()
+    assert eng.state.state == "rearmed"
+
+
+def test_sensor_dies_before_the_low_is_confirmed_over_still_rearms(engine):
+    """Review: one recovered reading then a dead sensor is not a confirmed recovery."""
+    eng, hal, log = engine
+    eng.process_reading(reading(60))
+    eng.acknowledge("app")
+    eng.process_reading(reading(75))  # one recovered reading, fewer than RECOVERY_READINGS
+    eng.process_reading(reading(75, stale=True))
+    clock.advance(REARM_MIN * 60)
+    eng.tick()
+    assert eng.state.state == "rearmed" and sounds(hal)[-1] == "alarm_urgent"

@@ -107,6 +107,7 @@ class AlarmEngine:
         """Idle, episode closed, outputs off. The mode switch calls this."""
         self.state = AlarmState()
         self.last_reading: Reading | None = None
+        self._last_fresh: Reading | None = None  # the re-arm decision reads this, so a sensor dropout cannot hide a low
         self._low_forecasts = 0
         self._high_forecasts = 0
         self._recovered = 0
@@ -192,6 +193,8 @@ class AlarmEngine:
     def process_reading(self, reading: Reading) -> None:
         self.last_reading = reading
         s = self.settings
+        if not reading.is_stale:
+            self._last_fresh = reading
         if reading.is_stale:
             # Stale never changes a running low (it keeps sounding; the reading's is_stale
             # is the banner). With nothing running, it is a one-shot indicator tier.
@@ -290,8 +293,14 @@ class AlarmEngine:
             self.hal.set_leds("strobe")
             self.hal.play_sound("alarm_urgent", 1.0)
         elif st == "acknowledged" and self._deadline and now >= self._deadline:
-            still_below = self.last_reading is not None and not self.last_reading.is_stale \
-                and self.last_reading.glucose_mgdl < self.settings.low_threshold
+            # clock time decides, not a new reading: a stale last reading falls back to the
+            # last fresh one, so an acked low that lost its sensor still re-arms
+            r = self._last_fresh
+            # the sensor died before the low was confirmed over (fewer than RECOVERY_READINGS
+            # recovered readings): never assume it ended, re-arm
+            unconfirmed = self.last_reading is not None and self.last_reading.is_stale \
+                and self._recovered < RECOVERY_READINGS
+            still_below = (r is not None and r.glucose_mgdl < self.settings.low_threshold) or unconfirmed
             if still_below:
                 self._escalated = False
                 self._deadline = now + timedelta(minutes=ESCALATION_MIN)

@@ -207,3 +207,35 @@ def test_brightness_is_gated_and_replayed(gated):
     assert hal.brightness == 1.0
     m.sample(True)
     assert hal.brightness == 0.2
+
+
+def test_radar_away_before_the_night_window_reverts_home_at_window_start(pm):
+    m, _ = pm
+    clock.set(speed=60.0, start=datetime(2020, 1, 1, 20, 0))
+    absent_for(m, AWAY_AFTER_MIN + 5)
+    assert m.state.mode == "away" and m.state.source == "radar"
+    clock.set(speed=60.0, start=datetime(2020, 1, 1, 23, 30))  # inside the night window
+    m.sample(False)
+    assert m.state.mode == "home"
+    absent_for(m, 4 * 60, step=5)
+    assert m.state.mode == "home"  # and absence never re-sets it overnight
+
+
+def test_radar_away_reverts_home_at_night_even_on_no_evidence(pm):
+    m, _ = pm
+    absent_for(m, AWAY_AFTER_MIN + 5)
+    assert m.state.mode == "away"
+    clock.set(speed=60.0, start=NIGHT)
+    m.sample(None)
+    assert m.state.mode == "home"
+
+
+def test_toggle_away_survives_the_night_window_and_toggle_home_beats_radar(pm):
+    m, _ = pm
+    m.set_override("away")
+    clock.set(speed=60.0, start=NIGHT)
+    m.sample(True)
+    assert m.state.mode == "away" and m.state.source == "toggle"
+    m.set_override("home")
+    m.sample(False)
+    assert m.state.mode == "home" and m.state.source == "toggle"

@@ -85,12 +85,18 @@ class PresenceMachine:
         if self.state.source == "toggle":  # settings went back to auto without set_override
             self.set_override("auto")
         now = clock.now()
+        night = in_window(now.time(), self.settings.night_window_start, self.settings.night_window_end)
+        if night and self.state.mode == "away":
+            # radar absence alone never holds Away through the night window (invariant 6):
+            # a radar-driven Away from before the window reverts to Home at its start
+            self._set("home", "radar")
+            self._absent_since = None
+            self._absent_at_night = False
         if raw is True:
             self._absent_since = None
             self._absent_at_night = False
             self._set("home", "radar")
         elif raw is False:
-            night = in_window(now.time(), self.settings.night_window_start, self.settings.night_window_end)
             if night:
                 self._absent_since = now  # at night the timer never accumulates
                 self._absent_at_night = True
