@@ -72,8 +72,8 @@ class Hub:
         night = latest[0].night_date
         return [s.model_dump(mode="json") for s in latest if s.night_date == night]
 
-    async def connect(self, ws: WebSocket) -> None:
-        await ws.accept()
+    async def connect(self, ws: WebSocket, subprotocol: str | None = None) -> None:
+        await ws.accept(subprotocol=subprotocol)
         self.clients.add(ws)
         snap = await self.snapshot()
         await ws.send_text(WSMessage(type="state_snapshot", payload=snap.model_dump(mode="json")).model_dump_json())
@@ -92,9 +92,9 @@ class Hub:
         for ws in dead:
             self.disconnect(ws)
 
-    async def serve(self, ws: WebSocket) -> None:
+    async def serve(self, ws: WebSocket, subprotocol: str | None = None) -> None:
         """Echo stub: accept, snapshot, then echo any client message back."""
-        await self.connect(ws)
+        await self.connect(ws, subprotocol)
         try:
             while True:
                 text = await ws.receive_text()
