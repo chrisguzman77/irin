@@ -40,6 +40,7 @@ services:
       WHATSAPP_TOKEN: ${WHATSAPP_TOKEN:-}
       WHATSAPP_PHONE_NUMBER_ID: ${WHATSAPP_PHONE_NUMBER_ID:-}
       HUB_SCRIPT_KEY: ${HUB_SCRIPT_KEY:-}  # B3: seals emergency scripts at rest; unset = lost on restart
+      RELAY_CLOUD_KEY: ${RELAY_CLOUD_KEY:-}  # Phase 1: Irin Cloud marks phone accounts verified and checks owner tokens with it; unset = those routes 503
       CLOUD_URL: http://cloud:8200
       DOMAIN: ${DOMAIN:-localhost}
     depends_on:
@@ -60,6 +61,8 @@ services:
       ELEVENLABS_VOICE_ALERT: ${ELEVENLABS_VOICE_ALERT:-}
       OWNER_BEARER: ${OWNER_BEARER:-}  # C3: the owner's dashboard token; unset = dashboards 503
       PIN: ${PIN:-}  # C3: gates family bearer create/revoke; unset = 503
+      RELAY_URL: http://relay:8100  # Phase 1: the cloud calls the relay (verified, owner-token check)
+      RELAY_CLOUD_KEY: ${RELAY_CLOUD_KEY:-}  # Phase 1: the same string the relay gets above
       DEVICE_TZ: ${DEVICE_TZ:-America/New_York}
       DOMAIN: ${DOMAIN:-localhost}
     volumes:

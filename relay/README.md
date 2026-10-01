@@ -16,6 +16,9 @@ separate Irin Cloud service (`cloud/`). Storage is MongoDB Atlas
 - **Public** routes (pairing state/complete, owner-pairing redeem) need
   neither; they are single-use tokens or codes.
 - `RELAY_ADMIN_KEY` gates the demo-only Spark simulation.
+- **Phone accounts** send the bearer from `POST /v0/users/phone`; **Irin
+  Cloud** sends `X-Cloud-Key` (`RELAY_CLOUD_KEY`) to mark an account verified
+  and to check an owner token ("Phone-only accounts" below).
 
 ## Envelope (what the relay stores for a card, message, or alert)
 
@@ -75,6 +78,130 @@ separate Irin Cloud service (`cloud/`). Storage is MongoDB Atlas
   - Decided at build time (b4cc81c): candidates = CGM-verified, `be_watcher` on, same is_demo (no timezone or language pre-filter, so mirrors and a zero-overlap candidate still score); hours_covered = average covered hours per night over the week (0-10, one decimal), a user's FIRST timezone is home, offsets read now; an availability row whose end is not after its start runs past midnight; mirror uses the wrap-around offset difference; `user_bearer` is stable per source key (hash stored); usernames 3-30 chars starting with a letter, search = case-insensitive prefix, max 20, lists users with have_buddy or be_watcher on; `POST /v0/match` 403 when the requester is unverified or have_buddy is off, search 403 when unverified; accepting a declined match or declining an accepted one is 409; an accepted pair is never re-offered; `pair_link` before both accept is 409, from a device outside the match 404; in the poll, `pair_url` is the OTHER side's link.
 
 Pairing, cards, inbox, messages, the device poll, resolutions, and the log are live (R6); resources are live (R13); the hub is live (B3); the WhatsApp channel is live (B4+); the buddy directory is live (B3+, relay/directory.py); owner pairing is live (A2, pinned above; redeem capped 10/min per IP and 30/min overall); the Spark route is a 501 stub (the Pi simulates the Spark sender).
+
+## Phone-only accounts (Phase 1), PINNED 2026-10-01
+
+Three lanes build against this at once (relay, cloud, app); the Pi changes
+nothing in Phase 1 and needs no update. Phase 1 = a phone with no Irin can
+sign up, verify its CGM feed once, be matched, and volunteer on the hub, and
+a paired phone reads My Irin with no pasted token. Being WATCHED with no
+device (the cloud low watcher, a stand-in device keypair, the "I'm okay"
+button) is Phase 2.
+
+### Relay
+
+- `POST /v0/users/phone` (public; its own bucket of 5 per minute per IP on
+  top of the usual per-IP bucket) body = the `POST /v0/users` fields WITHOUT
+  `cgm_verified` and `is_demo` (both are server-set to false; sending either
+  is 422; `_sample` usernames stay reserved; the same forbidden-field rule)
+  -> `{user_id, user_bearer}`. The bearer is random (`secrets.token_urlsafe(32)`),
+  returned ONCE and stored only as `phone_bearer_hash`. The document carries
+  `phone: true`, `cgm_verified: false`, `created_at`, and a random
+  `source_key_hash` (exactly as the seeds do), so every existing query keyed
+  on `source_key_hash` keeps working unchanged. No password and no recovery
+  in Phase 1: a phone that loses its storage signs up again.
+- `require_user` accepts a bearer whose hash matches either `bearer_hash`
+  (the device-derived bearer) or `phone_bearer_hash`.
+- `GET /v0/users/me` (user bearer) -> `{user_id, username, first_name,
+  languages, timezones, availability, optins, cgm_verified, is_demo,
+  phone: bool, device_linked: bool}` (device_linked = the document's
+  source_key_hash is a device's, i.e. an owner_pairings row names it).
+- `PUT /v0/users/me` (user bearer) body = the sign-up fields, all of them
+  (same validation) -> the GET shape. It never touches `cgm_verified`,
+  `is_demo`, `user_id`, either bearer hash, or `source_key_hash`.
+- `POST /v0/users/{user_id}/verified` needs BOTH `X-Cloud-Key` (=
+  `RELAY_CLOUD_KEY`, compare_digest; 503 while unset, 401 when wrong) AND
+  `Authorization: Bearer <that user's own bearer>` (401/404 otherwise), body
+  `{}` -> `{user_id, cgm_verified: true, verified_at}`. The relay learns one
+  boolean; the feed URL, token, and every value stay in the cloud
+  (invariant 20). Audit `directory.verified` with the user_id only.
+- `POST /v0/device/pair/check` (`X-Cloud-Key`; per-IP bucket) `{device_id,
+  token}` -> `{ok: bool, username: str | null}`: ok when the device's ACTIVE
+  owner token (sha256) matches. Never logs or stores the token.
+- `POST /v0/users/link` (the bearer of a `phone: true` account) `{device_id,
+  owner_token}` -> `{user_id, device_linked: true}`. The owner token must be
+  that device's active one, else 404 "that phone is not paired with this
+  Irin". The device's identity is its `source_key_hash` from `owner_pairings`.
+  Cases: (a) the device has no user document -> the phone's document takes
+  the device's source_key_hash; (b) the device has one with NO rows in
+  `matches` -> that document is deleted and (a) applies; (c) the device's
+  document has matches and the phone's has none -> the phone ADOPTS the
+  device's document (`phone_bearer_hash` and `phone: true` set on it, the
+  phone's own document deleted; the response's `user_id` is the device
+  document's and the app stores it); (d) both have matches -> 409 "both
+  profiles already have buddies; disconnect one first". After linking, the
+  Pi's own `POST /v0/users` (same source_key_hash) upserts the SAME document:
+  profile fields and `cgm_verified` from the Pi, `bearer_hash` its derived
+  one, `phone_bearer_hash` untouched, so both the phone and the Pi keep
+  working. Audit `directory.link` with both user_ids and the case letter.
+- Phone accounts can request matches (`have_buddy` on), be offered
+  (`be_watcher`), search, and volunteer and claim on the app hub exactly as
+  device users do. They cannot post hub listings or buddy alerts (a device
+  seals those; Phase 2 adds the cloud stand-in), so `hub_watchable` is stored
+  but has no effect until a device is linked; the app says so.
+
+### Cloud (mirrored in cloud/README.md by the cloud lane)
+
+- New env: `RELAY_URL` (compose: `http://relay:8100`) and `RELAY_CLOUD_KEY`
+  (one random string, shared with the relay; the compose file passes both).
+  At-rest encryption uses `RELAY_KEY` (already passed to the cloud): key =
+  sha256(RELAY_KEY), nacl SecretBox (pynacl added to cloud/requirements.txt).
+  Verify is 503 while RELAY_KEY or RELAY_CLOUD_KEY is unset.
+- Table `phone_accounts` (cloud/sql/007_phone_accounts.sql; Chris stepping in
+  on cloud/sql for this file): `user_id text primary key, nightscout_url_enc
+  bytea, nightscout_token_enc bytea, verified_at timestamptz, dash_token_hash
+  text unique, created_at timestamptz default now()`. Plain table, no
+  hypertable; migrate.py applies it.
+- `POST /v1/accounts/verify` (public; 5 per minute per IP) `{user_id,
+  user_bearer, nightscout_url, nightscout_token}`; the URL is
+  `https?://host[:port][/path]`, max 200 chars, no query string; the token
+  1-200 chars. Steps: (1) `GET {nightscout_url}/api/v1/entries.json?count=1
+  &token=<token>` (10 s timeout; the same auth the Pi's datasource uses). The
+  feed is live when the reply is a 2xx JSON list whose first entry has an
+  `sgv` and a `date` (ms) within 15 minutes of now; otherwise 422 whose
+  detail is one of `feed unreachable`, `feed refused the token`, `no reading
+  in the last 15 minutes`, never a value. The value read is discarded, never
+  stored, logged, or returned. (2) relay `POST /v0/users/{user_id}/verified`
+  with `X-Cloud-Key` and the user's bearer: relay 401/404 -> 404 "no such
+  account", relay unreachable or 5xx -> 502. (3) upsert `phone_accounts`
+  (URL and token encrypted; a fresh dashboard token, its hash stored, so an
+  earlier token for that user stops working) -> `{user_id, verified: true,
+  dashboard_token}` (the token is returned once).
+- `GET /v1/dash/{name}` accepts three credentials, resolved to the device it
+  draws: `Authorization: Bearer <OWNER_BEARER>` -> DEVICE_ID (the admin
+  backup, unchanged); `Bearer <a phone dashboard_token>` -> device
+  `ns-<user_id>` (no rows until Phase 2 stores the feed; every chart answers
+  `empty: true` honestly); `Bearer <an owner pairing token>` plus header
+  `X-Device-Id: <device_id>` -> the cloud asks the relay's
+  `/v0/device/pair/check` (answer cached 5 minutes per token hash, both ways)
+  and draws that device_id, which must equal DEVICE_ID (404 otherwise).
+  Anything else is 401 as today. `demo=true` keeps its meaning.
+
+### App
+
+- `lib/account.ts`: localStorage `irin.account` = `{user_id, user_bearer,
+  username, verified: bool, dashboard_token: string | null}`, reactive like
+  `lib/owner.ts`; a 401 from the relay or the cloud with that bearer clears it.
+- Irin Buddy with NO device paired (today: "Pair your Irin on the Device tab
+  first"): no account -> the existing wizard (profile form, globe, slots,
+  opt-ins) posting to the relay `POST /v0/users/phone`; then a "Connect your
+  CGM" step (Nightscout URL + token -> cloud `/v1/accounts/verify`; success
+  stores `verified` and `dashboard_token`; the 422 details shown verbatim).
+  Verified -> Find a buddy (relay `POST /v0/match`; the card's intro and why
+  lines are a deterministic template from hours_covered, mirror and
+  shared_languages, no Muse on this path), accept/decline (relay), the My
+  buddy card for the accepted match, and the hub (relay `GET /v0/users/hub`
+  and claim) in the same HubScreen. Profile and opt-in edits -> `PUT
+  /v0/users/me`. Honest copy on this path: "Without an Irin your buddy
+  cannot be alerted yet"; the `hub_watchable` toggle is disabled with that
+  note. With a device paired the tab is unchanged (the Pi path).
+- Linking: when a pairing lands (pairOwnerDevice success) and an account
+  exists, the app calls `POST /v0/users/link` and stores the returned
+  user_id; a 409 shows its detail and leaves both as they are.
+- My Irin credential order: owner pairing -> `Bearer <owner token>` plus
+  `X-Device-Id`; else the account's dashboard_token; else the pasted token
+  (DashboardToken.tsx stays, relabeled as the admin backup). The empty state
+  names the missing step instead of "Needs the dashboard token".
 
 ## Hub (B3)
 
