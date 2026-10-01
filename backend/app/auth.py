@@ -33,7 +33,16 @@ def _client(request: Request) -> str:
     return request.headers.get("Cf-Connecting-Ip") or (request.client.host if request.client else "")
 
 
+def _prune(now: float) -> None:
+    """Forget expired locks and old failures, so the throttle's memory never grows without bound."""
+    for c in [c for c, t in _locked_until.items() if t <= now]:
+        del _locked_until[c]
+    for c in [c for c, ts in _fails.items() if all(now - t >= THROTTLE_WINDOW_S for t in ts)]:
+        del _fails[c]
+
+
 def _check(pin: str | None, request: Request) -> None:
+    pin = pin or None  # an empty X-PIN (the app before a PIN is typed) is missing, never a wrong guess
     client = _client(request)
     throttled = client not in _LOOPBACK
     now = time.monotonic()
@@ -43,6 +52,7 @@ def _check(pin: str | None, request: Request) -> None:
         raise HTTPException(status_code=503, detail="PIN not configured")
     if pin is None or not hmac.compare_digest(pin.encode(), config.PIN.encode()):
         if throttled and pin is not None:  # a missing header is not a guess
+            _prune(now)
             recent = [t for t in _fails.get(client, []) if now - t < THROTTLE_WINDOW_S] + [now]
             _fails[client] = recent
             if len(recent) >= THROTTLE_MAX:

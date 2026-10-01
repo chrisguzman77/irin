@@ -93,3 +93,21 @@ def test_localhost_never_locks(client):
     for _ in range(8):
         assert _bad(local).status_code == 401
     assert _good(local).status_code == 200
+
+
+def test_review_fixes_head_health_open_docs_gated_empty_pin_not_a_guess():
+    from fastapi.testclient import TestClient
+    from app import auth, main
+    with TestClient(main.app) as c:
+        tunnel = {"Cf-Connecting-Ip": "203.0.113.9"}
+        assert c.head("/api/health", headers=tunnel).status_code != 401
+        assert c.get("/openapi.json", headers=tunnel).status_code == 401
+        assert c.get("/openapi.json").status_code == 200  # the LAN and the kiosk keep the schema
+        auth._fails.clear(); auth._locked_until.clear()
+        req = type("R", (), {"headers": {"Cf-Connecting-Ip": "198.51.100.7"}, "client": None})()
+        for _ in range(8):
+            try:
+                auth._check("", req)
+            except Exception:
+                pass
+        assert "198.51.100.7" not in auth._locked_until  # empty PINs never lock the owner out

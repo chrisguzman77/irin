@@ -606,7 +606,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Irin device API", version="0.1.0", lifespan=lifespan)
 
-_TUNNEL_OPEN = {("GET", "/api/health"), ("GET", "/api/owner")}
+_TUNNEL_OPEN = {(m, p) for m in ("GET", "HEAD") for p in ("/api/health", "/api/owner")}
+_TUNNEL_GATED_DOCS = ("/openapi.json", "/docs", "/redoc")  # the API schema: not data, but not for strangers
 
 
 @app.middleware("http")
@@ -615,7 +616,8 @@ async def tunnel_gate(request, call_next):
     must carry the paired owner's bearer. Added before CORS so CORS stays outermost (the app can
     read the 401); OPTIONS and the static kiosk page pass untouched."""
     path = request.url.path
-    if (request.headers.get("Cf-Connecting-Ip") is not None and path.startswith("/api/")
+    gated = path.startswith("/api/") or path.startswith(_TUNNEL_GATED_DOCS)
+    if (request.headers.get("Cf-Connecting-Ip") is not None and gated
             and request.method != "OPTIONS" and (request.method, path) not in _TUNNEL_OPEN):
         auth = request.headers.get("Authorization") or ""
         token = auth[7:] if auth.lower().startswith("bearer ") else ""
