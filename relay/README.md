@@ -77,7 +77,7 @@ separate Irin Cloud service (`cloud/`). Storage is MongoDB Atlas
   - Every directory change is written to `/v0/log` with ids and kinds only.
   - Decided at build time (b4cc81c): candidates = CGM-verified, `be_watcher` on, same is_demo (no timezone or language pre-filter, so mirrors and a zero-overlap candidate still score); hours_covered = average covered hours per night over the week (0-10, one decimal), a user's FIRST timezone is home, offsets read now; an availability row whose end is not after its start runs past midnight; mirror uses the wrap-around offset difference; `user_bearer` is stable per source key (hash stored); usernames 3-30 chars starting with a letter, search = case-insensitive prefix, max 20, lists users with have_buddy or be_watcher on; `POST /v0/match` 403 when the requester is unverified or have_buddy is off, search 403 when unverified; accepting a declined match or declining an accepted one is 409; an accepted pair is never re-offered; `pair_link` before both accept is 409, from a device outside the match 404; in the poll, `pair_url` is the OTHER side's link.
 
-Pairing, cards, inbox, messages, the device poll, resolutions, and the log are live (R6); resources are live (R13); the hub is live (B3); the WhatsApp channel is live (B4+); the buddy directory is live (B3+, relay/directory.py); owner pairing is live (A2, pinned above; redeem capped 10/min per IP and 30/min overall); the Spark route is a 501 stub (the Pi simulates the Spark sender).
+Pairing, cards, inbox, messages, the device poll, resolutions, and the log are live (R6); resources are live (R13); the hub is live (B3); the WhatsApp channel is live (B4+); the buddy directory is live (B3+, relay/directory.py); owner pairing is live (A2, pinned above; redeem capped 10/min per IP and 30/min overall); phone accounts are live (Phase 1, pinned below: sign-up, /me, the cloud's verified mark, the owner-token check, linking); the Spark route is a 501 stub (the Pi simulates the Spark sender).
 
 ## Phone-only accounts (Phase 1), PINNED 2026-10-01
 
@@ -105,10 +105,15 @@ button) is Phase 2.
 - `GET /v0/users/me` (user bearer) -> `{user_id, username, first_name,
   languages, timezones, availability, optins, cgm_verified, is_demo,
   phone: bool, device_linked: bool}` (device_linked = the document's
-  source_key_hash is a device's, i.e. an owner_pairings row names it).
+  source_key_hash is a device's, i.e. an owner_pairings row names it (state paired)).
 - `PUT /v0/users/me` (user bearer) body = the sign-up fields, all of them
   (same validation) -> the GET shape. It never touches `cgm_verified`,
   `is_demo`, `user_id`, either bearer hash, or `source_key_hash`.
+- `GET /v0/users/matches` (user bearer) -> this user's matches, newest last,
+  each `{match_id, candidate_id, first_name, status, score, hours_covered,
+  mirror, shared_languages, sample?}` (the `POST /v0/match` row shape with
+  every status: offered, accepted, declined). No pair_url: a phone has no
+  device to pair in Phase 1. The app's My buddy card is the accepted row.
 - `POST /v0/users/{user_id}/verified` needs BOTH `X-Cloud-Key` (=
   `RELAY_CLOUD_KEY`, compare_digest; 503 while unset, 401 when wrong) AND
   `Authorization: Bearer <that user's own bearer>` (401/404 otherwise), body
@@ -123,13 +128,16 @@ button) is Phase 2.
   that device's active one, else 404 "that phone is not paired with this
   Irin". The device's identity is its `source_key_hash` from `owner_pairings`.
   Cases: (a) the device has no user document -> the phone's document takes
-  the device's source_key_hash; (b) the device has one with NO rows in
-  `matches` -> that document is deleted and (a) applies; (c) the device's
-  document has matches and the phone's has none -> the phone ADOPTS the
-  device's document (`phone_bearer_hash` and `phone: true` set on it, the
-  phone's own document deleted; the response's `user_id` is the device
-  document's and the app stores it); (d) both have matches -> 409 "both
-  profiles already have buddies; disconnect one first". After linking, the
+  the device's source_key_hash; (b) the device has one with NO accepted
+  match -> that document is deleted and (a) applies (the device's
+  bearer_hash, cgm_verified and is_demo move with it, so the Pi's cached
+  bearer keeps working); (c) the device's document has an accepted match
+  and the phone's has none -> the phone ADOPTS the device's document
+  (`phone_bearer_hash` and `phone: true` set on it, the phone's own
+  document deleted; the response's `user_id` is the device document's and
+  the app stores it); (d) both have accepted matches -> 409 "both profiles
+  already have buddies; disconnect one first". Offered and declined rows of
+  the document that is deleted are deleted with it. After linking, the
   Pi's own `POST /v0/users` (same source_key_hash) upserts the SAME document:
   profile fields and `cgm_verified` from the Pi, `bearer_hash` its derived
   one, `phone_bearer_hash` untouched, so both the phone and the Pi keep
