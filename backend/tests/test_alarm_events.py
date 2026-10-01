@@ -103,6 +103,9 @@ def test_timed_out_warning_counts_as_escalated(rig):
     eng.acknowledge("app")
     advance(eng, rec, 16, present=True)  # not below: no re-arm
     recover(eng)
+    assert rec.events == []  # readings alone never close a timed-out warning
+    eng.process_forecast(forecast(110))
+    eng.process_forecast(forecast(112))  # two recovered forecasts end the episode
     [e] = rec.events
     assert e.tier == "predicted_low" and e.escalated is True and e.crossed_actual is False
 
