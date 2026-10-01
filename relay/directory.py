@@ -61,6 +61,7 @@ WEEK = 7 * 1440
 NIGHT_START, NIGHT_LEN = 22 * 60, 10 * 60  # the requester's 22:00-08:00 local sleep window
 TOP_N = 3
 PHONE_SIGNUP_PER_MIN = 5  # on top of the usual per-IP bucket
+PHONE_SIGNUP_GLOBAL_PER_MIN = 30  # so rotating IPs buys nothing (as owner.py's redeem cap)
 NOT_PAIRED = "that phone is not paired with this Irin"
 BOTH_HAVE_BUDDIES = "both profiles already have buddies; disconnect one first"
 
@@ -303,6 +304,7 @@ async def users_phone(req: ProfileIn, request: Request) -> dict:
     ip = _client_ip(request)
     _rate_limit(f"ip:{ip}")
     _rate_limit(f"phone-signup:{ip}", cap=PHONE_SIGNUP_PER_MIN)
+    _rate_limit("phone-signup:all", cap=PHONE_SIGNUP_GLOBAL_PER_MIN)
     bearer, now = secrets.token_urlsafe(32), store.now()
     doc = {**req.model_dump(), "user_id": f"u-{secrets.token_hex(6)}", "phone": True, "cgm_verified": False,
            "is_demo": False, "phone_bearer_hash": store.bearer_hash(bearer),
@@ -313,8 +315,9 @@ async def users_phone(req: ProfileIn, request: Request) -> dict:
 
 
 def _me_out(user: dict) -> dict:
-    """The GET /v0/users/me shape; device_linked = an owner_pairings row names this document's source_key_hash."""
-    linked = store.db()["owner_pairings"].find_one({"source_key_hash": user["source_key_hash"]}, {"_id": 1}) is not None
+    """The GET /v0/users/me shape; device_linked = a PAIRED owner_pairings row names this document's source_key_hash."""
+    linked = store.db()["owner_pairings"].find_one({"source_key_hash": user["source_key_hash"], "state": "paired"},
+                                                   {"_id": 1}) is not None
     return {"user_id": user["user_id"], "username": user["username"], "first_name": user["first_name"],
             "languages": user.get("languages", []), "timezones": user["timezones"],
             "availability": user.get("availability", []), "optins": user["optins"],
@@ -336,6 +339,18 @@ async def users_me_put(req: ProfileIn, user: dict = Depends(require_user)) -> di
     return _me_out(doc)
 
 
+@router.get("/users/matches")
+async def users_matches(user: dict = Depends(require_user)) -> list[dict]:
+    """This user's matches with every status, newest last, in the POST /v0/match row shape (no pair_url:
+    a phone has no device to pair in Phase 1); the app's My buddy card is the accepted row."""
+    rows = list(store.db()["matches"].find({"users": user["user_id"]}).sort("created_at", 1).limit(50))
+    others = {u["user_id"]: u for u in
+              store.db()["users"].find({"user_id": {"$in": [_other(m, user["user_id"]) for m in rows]}})}
+    out = [_match_out(m, user, others[_other(m, user["user_id"])]) for m in rows if _other(m, user["user_id"]) in others]
+    store.audit("directory.matches", user_id=user["user_id"], count=len(out))
+    return out
+
+
 @router.post("/users/{user_id}/verified")
 async def users_verified(user_id: str, body: VerifiedIn | None = None, _: None = Depends(require_cloud_key),
                          user: dict = Depends(require_user)) -> dict:
@@ -352,7 +367,8 @@ async def users_verified(user_id: str, body: VerifiedIn | None = None, _: None =
 @router.post("/users/link")
 async def users_link(req: LinkIn, user: dict = Depends(require_user)) -> dict:
     """A phone account joins its paired Irin: the owner token must be that device's active one, and the
-    device's identity is its source_key_hash from owner_pairings. Cases (a)-(d) as pinned in the README."""
+    device's identity is its source_key_hash from owner_pairings. Cases (a)-(d) as pinned in the README:
+    "has buddies" means ACCEPTED matches; the losing document's offered and declined rows go with it."""
     if not user.get("phone"):
         raise HTTPException(status_code=403, detail="only a phone account links to an Irin")
     pairing = owner.active_owner(req.device_id, req.owner_token)
@@ -364,23 +380,31 @@ async def users_link(req: LinkIn, user: dict = Depends(require_user)) -> dict:
     if dev_id == user["user_id"]:  # already linked to this very Irin: nothing to move
         store.audit("directory.link", user_id=user["user_id"], device_user_id=dev_id, case="already")
         return {"user_id": user["user_id"], "device_linked": True}
-    has_matches = lambda uid: matches.count_documents({"users": uid}, limit=1) > 0  # noqa: E731
+    has_buddy = lambda uid: matches.count_documents({"users": uid, "status": "accepted"}, limit=1) > 0  # noqa: E731
     if dev is None:
         case = "a"
-    elif not has_matches(dev_id):
-        case = "b"  # the device's document had no buddies: it goes, and (a) applies
-        users.delete_one({"_id": dev["_id"]})
-    elif not has_matches(user["user_id"]):
-        case = "c"  # the phone adopts the device's document (its buddies live there)
+    elif not has_buddy(dev_id):
+        case = "b"  # the device's document has no buddy: it goes (its bearer and flags move), and (a) applies
+    elif not has_buddy(user["user_id"]):
+        case = "c"  # the phone adopts the device's document (its buddy lives there)
     else:
         raise HTTPException(status_code=409, detail=BOTH_HAVE_BUDDIES)
-    if case == "c":
-        users.update_one({"_id": dev["_id"]}, {"$set": {"phone": True, "phone_bearer_hash": user["phone_bearer_hash"]}})
-        users.delete_one({"_id": user["_id"]})
-        out_id = dev_id
-    else:
-        users.update_one({"_id": user["_id"]}, {"$set": {"source_key_hash": key_hash}})
-        out_id = user["user_id"]
+    try:
+        if case == "c":
+            users.update_one({"_id": dev["_id"]}, {"$set": {"phone": True, "phone_bearer_hash": user["phone_bearer_hash"]}})
+            users.delete_one({"_id": user["_id"]})
+            matches.delete_many({"users": user["user_id"], "status": {"$ne": "accepted"}})  # no row names a gone user
+            out_id = dev_id
+        else:
+            moved = {"source_key_hash": key_hash}
+            if case == "b":  # exactly what the Pi's next upsert would write, so its cached bearer keeps working
+                users.delete_one({"_id": dev["_id"]})
+                matches.delete_many({"users": dev_id, "status": {"$ne": "accepted"}})
+                moved.update({k: dev[k] for k in ("bearer_hash", "cgm_verified", "is_demo") if k in dev})
+            users.update_one({"_id": user["_id"]}, {"$set": moved})
+            out_id = user["user_id"]
+    except DuplicateKeyError:  # a concurrent link, or the Pi's upsert landing between the delete and the move
+        raise HTTPException(status_code=409, detail="try again")
     store.audit("directory.link", user_id=user["user_id"], device_user_id=dev_id, case=case)
     return {"user_id": out_id, "device_linked": True}
 

@@ -135,6 +135,12 @@ def test_phone_signup_is_capped_at_5_per_minute_per_ip(c):
     assert other.status_code == 200  # another IP has its own bucket
 
 
+def test_phone_signup_is_capped_at_30_per_minute_overall(c):
+    codes = [c.post("/v0/users/phone", json={**PROFILE, "username": f"user{i}"},
+                    headers={"X-Forwarded-For": f"10.0.{i // 250}.{i % 250}"}).status_code for i in range(31)]
+    assert codes == [200] * 30 + [429]  # rotating IPs buys nothing
+
+
 # ---------------------------------------------------------------- /v0/users/me
 
 
@@ -165,6 +171,8 @@ def test_me_for_a_device_user_reports_device_linked_once_an_owner_pairing_names_
                              "phone": False, "device_linked": False}
     pair_device(c, 0, "irin-me", "111111")
     assert me(c, bearer)["device_linked"] is True
+    assert c.delete("/v0/device/pair", headers={"X-Source-Key": KEYS[0]}).status_code == 200
+    assert me(c, bearer)["device_linked"] is False  # a revoked pairing is not a link
     assert c.put("/v0/users/me", json=PROFILE, headers=bearer).json()["cgm_verified"] is True  # still the Pi's word
 
 
@@ -278,7 +286,7 @@ def test_link_404_for_a_token_that_is_not_the_devices_active_one_and_403_for_a_d
     assert link_cases() == ["b"]  # the device's document had no matches: deleted, then (a)
 
 
-def test_link_case_b_deletes_a_device_document_without_matches(c):
+def test_link_case_b_deletes_a_device_document_without_a_buddy_and_keeps_the_pis_bearer_working(c):
     pi_uid, pi_bearer = device_user(c, 0)
     token = pair_device(c, 0, "irin-b", "555555")
     uid, bearer = phone(c)
@@ -287,18 +295,65 @@ def test_link_case_b_deletes_a_device_document_without_matches(c):
     assert store.db()["users"].find_one({"user_id": pi_uid}) is None
     assert store.db()["users"].count_documents({}) == 1
     assert me(c, bearer)["device_linked"] is True and me(c, bearer)["username"] == "chris_phone"
-    assert c.get("/v0/users/me", headers=pi_bearer).status_code == 401  # the old device bearer is gone with its document
+    # the Pi caches its bearer (HMAC of the OLD user_id) and re-POSTs only when a human re-saves: it must still work
+    doc = store.db()["users"].find_one({"user_id": uid})
+    assert doc["bearer_hash"] == store.bearer_hash(pi_bearer["Authorization"].split(" ", 1)[1])
+    assert doc["cgm_verified"] is True and doc["is_demo"] is False and doc["phone"] is True
+    assert me(c, pi_bearer) == me(c, bearer) and me(c, pi_bearer)["cgm_verified"] is True
+    assert c.post("/v0/match", json={}, headers=pi_bearer).status_code == 200
+    assert c.post("/v0/match", json={}, headers=bearer).status_code == 200
     row = store.db()["audit"].find_one({"route": "directory.link"})
     assert row["case"] == "b" and row["user_id"] == uid and row["device_user_id"] == pi_uid
 
 
-def test_link_case_c_the_phone_adopts_a_device_document_with_matches(c):
+def test_offered_only_rows_on_both_sides_link_fine_and_the_orphans_are_deleted(c):
+    seed_buddies.seed()
+    pi_uid, pi_bearer = device_user(c, 0)
+    token = pair_device(c, 0, "irin-o", "555556")
+    pi_offers = c.post("/v0/match", json={}, headers=pi_bearer).json()
+    uid, bearer = phone(c)
+    verify(c, uid, bearer)
+    mine = c.post("/v0/match", json={}, headers=bearer).json()
+    assert len(pi_offers) == len(mine) == 3
+    r = link(c, bearer, "irin-o", token)  # case (b): offered rows are not buddies
+    assert r.status_code == 200 and r.json() == {"user_id": uid, "device_linked": True}
+    assert link_cases() == ["b"]
+    assert store.db()["matches"].count_documents({"users": pi_uid}) == 0  # no row names the deleted document
+    assert sorted(m["match_id"] for m in store.db()["matches"].find({"users": uid})) == sorted(o["match_id"] for o in mine)
+    assert [m["match_id"] for m in c.get("/v0/users/matches", headers=bearer).json()] == [o["match_id"] for o in mine]
+    # case (a) with offered rows on the phone: nothing is deleted
+    token2 = pair_device(c, 1, "irin-o2", "555557")
+    assert link(c, bearer, "irin-o2", token2).status_code == 200 and link_cases() == ["b", "a"]
+    assert store.db()["matches"].count_documents({"users": uid}) == 3
+
+
+def test_link_409_try_again_when_the_key_move_collides(c, monkeypatch):
+    from pymongo.collection import Collection
+    from pymongo.errors import DuplicateKeyError
+    uid, bearer = phone(c)
+    token = pair_device(c, 0, "irin-dup", "555558")
+    real = Collection.update_one
+
+    def colliding(self, flt, update, *a, **kw):
+        if "source_key_hash" in update.get("$set", {}):  # the Pi's upsert landed first
+            raise DuplicateKeyError("E11000 duplicate key")
+        return real(self, flt, update, *a, **kw)
+    monkeypatch.setattr(Collection, "update_one", colliding)
+    r = link(c, bearer, "irin-dup", token)
+    assert r.status_code == 409 and r.json()["detail"] == "try again"
+    assert store.db()["audit"].count_documents({"route": "directory.link"}) == 0
+
+
+def test_link_case_c_the_phone_adopts_a_device_document_with_a_buddy(c):
     seed_buddies.seed()
     pi_uid, pi_bearer = device_user(c, 0)
     token = pair_device(c, 0, "irin-c", "666666")
     offers = c.post("/v0/match", json={}, headers=pi_bearer).json()
     assert len(offers) == 3
+    assert c.post(f"/v0/match/{offers[0]['match_id']}/accept", headers=pi_bearer).json()["status"] == "accepted"
     uid, bearer = phone(c)
+    verify(c, uid, bearer)
+    assert len(c.post("/v0/match", json={}, headers=bearer).json()) == 3  # offered only: not a buddy
     plain = bearer["Authorization"].split(" ", 1)[1]
     r = link(c, bearer, "irin-c", token)
     assert r.status_code == 200 and r.json() == {"user_id": pi_uid, "device_linked": True}
@@ -308,19 +363,26 @@ def test_link_case_c_the_phone_adopts_a_device_document_with_matches(c):
     assert doc["bearer_hash"] == store.bearer_hash(pi_bearer["Authorization"].split(" ", 1)[1])
     assert me(c, bearer)["user_id"] == pi_uid and me(c, pi_bearer)["user_id"] == pi_uid
     assert me(c, bearer)["username"] == "pi0" and me(c, bearer)["device_linked"] is True
-    assert [o["match_id"] for o in c.post("/v0/match", json={}, headers=bearer).json()] == [o["match_id"] for o in offers]
+    assert store.db()["matches"].count_documents({"users": uid}) == 0  # the phone's offered rows went with its document
+    rows = c.get("/v0/users/matches", headers=bearer).json()
+    assert [m["match_id"] for m in rows] == [o["match_id"] for o in offers]
+    assert [m["status"] for m in rows] == ["accepted", "offered", "offered"]
+    again = c.post("/v0/match", json={}, headers=bearer).json()
+    assert [o["match_id"] for o in again][:2] == [o["match_id"] for o in offers[1:]]  # the accepted one never re-offered
     row = store.db()["audit"].find_one({"route": "directory.link"})
     assert row["case"] == "c" and row["user_id"] == uid and row["device_user_id"] == pi_uid
 
 
-def test_link_case_d_409_when_both_have_matches(c):
+def test_link_case_d_409_when_both_have_a_buddy(c):
     seed_buddies.seed()
     pi_uid, pi_bearer = device_user(c, 0)
     token = pair_device(c, 0, "irin-d", "777777")
-    assert len(c.post("/v0/match", json={}, headers=pi_bearer).json()) == 3
+    pi_offers = c.post("/v0/match", json={}, headers=pi_bearer).json()
+    assert c.post(f"/v0/match/{pi_offers[0]['match_id']}/accept", headers=pi_bearer).json()["status"] == "accepted"
     uid, bearer = phone(c)
     verify(c, uid, bearer)
-    assert len(c.post("/v0/match", json={}, headers=bearer).json()) == 3
+    mine = c.post("/v0/match", json={}, headers=bearer).json()
+    assert c.post(f"/v0/match/{mine[0]['match_id']}/accept", headers=bearer).json()["status"] == "accepted"
     before = db_dump()
     r = link(c, bearer, "irin-d", token)
     assert r.status_code == 409 and r.json()["detail"] == BOTH_HAVE_BUDDIES
@@ -350,3 +412,35 @@ def test_a_verified_phone_user_matches_accepts_and_works_the_hub(c):
     assert r.status_code == 200 and r.json()["script"]["steps"]
     assert store.db()["hub_claims"].find_one({"claim_id": r.json()["claim_id"]})["volunteer_id"] == uid
     assert c.get("/v0/users/search?username=sam", headers=bearer).json()[0]["username"] == "sam_sample"
+
+
+# ---------------------------------------------------------------- GET /v0/users/matches
+
+
+def test_users_matches_lists_my_rows_with_every_status_and_never_anothers(c):
+    seed_buddies.seed()
+    uid, bearer = phone(c)
+    assert c.get("/v0/users/matches", headers=bearer).json() == []  # unverified: still readable, just empty
+    verify(c, uid, bearer)
+    offers = c.post("/v0/match", json={}, headers=bearer).json()
+    rows = c.get("/v0/users/matches", headers=bearer).json()
+    assert [r["match_id"] for r in rows] == [o["match_id"] for o in offers]  # newest last = the offer order
+    assert all(set(r) == {"match_id", "candidate_id", "first_name", "status", "score", "hours_covered", "mirror",
+                          "shared_languages", "sample"} and r["sample"] is True and r["status"] == "offered" for r in rows)
+    assert "pair_url" not in str(rows)
+    c.post(f"/v0/match/{offers[0]['match_id']}/accept", headers=bearer)
+    c.post(f"/v0/match/{offers[1]['match_id']}/decline", headers=bearer)
+    by_id = {r["match_id"]: r for r in c.get("/v0/users/matches", headers=bearer).json()}
+    assert by_id[offers[0]["match_id"]]["status"] == "accepted" and by_id[offers[1]["match_id"]]["status"] == "declined"
+    assert by_id[offers[2]["match_id"]]["status"] == "offered" and by_id[offers[0]["match_id"]]["first_name"] == "Sam"
+    other_id, other = phone(c, username="someone_else")
+    verify(c, other_id, other)
+    assert c.get("/v0/users/matches", headers=other).json() == []  # never another user's rows
+    theirs = c.post("/v0/match", json={}, headers=other).json()
+    assert {r["match_id"] for r in c.get("/v0/users/matches", headers=other).json()} == {o["match_id"] for o in theirs}
+    assert not {o["match_id"] for o in theirs} & set(by_id)
+    _, pi_bearer = device_user(c, 0)  # a device user reads the same route
+    assert c.get("/v0/users/matches", headers=pi_bearer).json() == []
+    assert c.get("/v0/users/matches", headers={"Authorization": "Bearer nope"}).status_code == 401
+    audit = [r for r in c.get("/v0/log").json() if r["route"] == "directory.matches"]
+    assert audit and set(audit[0]) == {"at", "route", "user_id", "count"}
