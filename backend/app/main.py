@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Literal
 
 from fastapi import Depends, FastAPI, HTTPException, WebSocket, Query
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -32,6 +32,7 @@ from .buddy.directory import (BuddyDirectory, BuddyProfile, DirectoryError, Dire
 from .buddy.rung import BuddyRung
 from .buddy.treating import TreatingError, handle_calls, set_treating
 from .auth import require_fresh_pin, require_pin
+from .owner import token_matches
 from .clock import clock
 from .config import REPO_ROOT, config
 from .contracts import (FRESH_PIN_ENDPOINTS, AlarmEvent, AlarmState, FamilyRecipient, FamilyStory, LowEvent,
@@ -624,6 +625,26 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Irin device API", version="0.1.0", lifespan=lifespan)
+
+_TUNNEL_OPEN = {(m, p) for m in ("GET", "HEAD") for p in ("/api/health", "/api/owner")}
+_TUNNEL_GATED_DOCS = ("/openapi.json", "/docs", "/redoc")  # the API schema: not data, but not for strangers
+
+
+@app.middleware("http")
+async def tunnel_gate(request, call_next):
+    """A request through the tunnel (Cf-Connecting-Ip, set by cloudflared) to any /api/* route
+    must carry the paired owner's bearer. Added before CORS so CORS stays outermost (the app can
+    read the 401); OPTIONS and the static kiosk page pass untouched."""
+    path = request.url.path
+    gated = path.startswith("/api/") or path.startswith(_TUNNEL_GATED_DOCS)
+    if (request.headers.get("Cf-Connecting-Ip") is not None and gated
+            and request.method != "OPTIONS" and (request.method, path) not in _TUNNEL_OPEN):
+        auth = request.headers.get("Authorization") or ""
+        token = auth[7:] if auth.lower().startswith("bearer ") else ""
+        if not token_matches(token):
+            return JSONResponse({"detail": "pair this phone with your Irin"}, status_code=401)
+    return await call_next(request)
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -1528,7 +1549,16 @@ async def buddy_hub_claim(listing_id: str) -> dict:
 
 @app.websocket("/ws")
 async def websocket(ws: WebSocket) -> None:
-    await hub.serve(ws)
+    sub = None
+    if ws.headers.get("Cf-Connecting-Ip") is not None:
+        # through the tunnel: the owner token rides the subprotocol, never the URL (invariant 22)
+        offered = [p.strip() for p in (ws.headers.get("sec-websocket-protocol") or "").split(",")]
+        token = next((p[len("irin.token."):] for p in offered if p.startswith("irin.token.")), "")
+        if "irin.owner" not in offered or not token_matches(token):
+            await ws.close(code=4401)
+            return
+        sub = "irin.owner"
+    await hub.serve(ws, sub)
 
 
 # The demo panel (step 12): PIN-gated, and every control 404s outside demo mode.

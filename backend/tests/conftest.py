@@ -46,3 +46,11 @@ def _no_network_no_real_db(monkeypatch, tmp_path):
         monkeypatch.setattr(main.runtime.forwarder, "device_token", "")
     except Exception:  # a test that never imports the app
         pass
+
+
+@pytest.fixture(autouse=True)
+def _reset_pin_throttle():
+    from app import auth
+
+    auth._fails.clear()
+    auth._locked_until.clear()
