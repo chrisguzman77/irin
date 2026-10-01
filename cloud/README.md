@@ -62,9 +62,11 @@ Cloud); it skips otherwise.
 
 ## Dashboard endpoints (C3) — `GET /v1/dash/{name}?days=&demo=` (owner bearer)
 
-Auth: `Authorization: Bearer <OWNER_BEARER>`; 401 without or wrong, 503 (fail
-closed) while OWNER_BEARER is unset. `days` 1..3650 (default 14). `demo=true`
-reads `<DEVICE_ID>-demo`, so replayed data is never drawn as the real device.
+Auth: one of the three credentials in "Phone accounts (Phase 1)" below, each
+resolved to the device it draws; `Authorization: Bearer <OWNER_BEARER>` (the
+admin backup) draws DEVICE_ID, 401 without or wrong, 503 (fail closed) while
+OWNER_BEARER is unset. `days` 1..3650 (default 14). `demo=true` reads
+`<device>-demo`, so replayed data is never drawn as the real device.
 The window ENDS at the device's newest reading (`as_of`), not the server clock,
 so replayed demo data and history draw the same way.
 
@@ -184,6 +186,67 @@ rung sends minutes spelled out in words, never a digit.
 the watcher page and WhatsApp fetch it by link) -> `audio/mpeg`; 404 for an
 unknown or malformed name. With `DOMAIN` unset or `localhost` the URL base is
 `http://localhost:8200`.
+
+## Phone accounts (Phase 1) â€” `POST /v1/accounts/verify` and the dashboard credentials
+
+The cloud half of relay/README.md "Phone-only accounts (Phase 1), PINNED
+2026-10-01" (that section is the contract; this mirrors it). A phone with no
+Irin signs up at the relay, then verifies its CGM feed ONCE here; the relay
+learns one boolean and never the feed URL, the token, or a value (invariant
+20). Code: `cloud/accounts.py`; tests: `cloud/tests/test_accounts.py` (fake
+Nightscout and fake relay over a MockTransport, never a live one).
+
+Environment: `RELAY_URL` (compose: `http://relay:8100`) and `RELAY_CLOUD_KEY`
+(one random string shared with the relay; the compose file passes both). The
+feed URL and token are stored encrypted under `RELAY_KEY` (already passed to
+the cloud): key = sha256(RELAY_KEY), nacl SecretBox (`pynacl`). Verify is 503
+while RELAY_KEY or RELAY_CLOUD_KEY is unset.
+
+Table `phone_accounts` (cloud/sql/007, a plain table; migrate.py applies it at
+boot): `user_id text primary key, nightscout_url_enc bytea,
+nightscout_token_enc bytea, verified_at timestamptz, dash_token_hash text
+unique, created_at timestamptz default now()`. No glucose value is ever
+stored in it.
+
+`POST /v1/accounts/verify` (public; its own bucket of 5 per minute per IP,
+429 past it) body `{user_id, user_bearer, nightscout_url, nightscout_token}`:
+the URL is `https?://host[:port][/path]`, max 200 chars, no query string; the
+token 1-200 chars; `user_id` is the relay's (`u-...`). Steps, in order:
+
+1. `GET {nightscout_url}/api/v1/entries.json?count=1&token=<token>` (10 s
+   timeout; the same auth the Pi's datasource uses). The feed is live when the
+   reply is a 2xx JSON list whose first entry has an `sgv` and a `date` (ms)
+   within 15 minutes of now; otherwise 422 whose detail is exactly one of
+   `feed unreachable` (connection or timeout, a non-2xx other than 401/403,
+   or a body that is not a JSON list), `feed refused the token` (401/403),
+   `no reading in the last 15 minutes` (an empty list, a first entry with no
+   `sgv` or `date`, or a `date` older than 15 minutes). The value read is
+   discarded: never stored, logged, or returned (the test asserts no log line
+   or response carries it). The relay is not told on a 422.
+2. Relay `POST {RELAY_URL}/v0/users/{user_id}/verified` with `X-Cloud-Key:
+   RELAY_CLOUD_KEY` and `Authorization: Bearer <user_bearer>`, body `{}`:
+   relay 401/404 -> 404 `no such account`; unreachable, 5xx, or anything else
+   -> 502.
+3. Upsert `phone_accounts` (URL and token encrypted; a fresh dashboard token,
+   `secrets.token_urlsafe(32)`, only its SHA-256 stored, replacing the old
+   hash so an earlier token for that user stops working; 503 when Tiger is
+   unreachable) -> `{user_id, verified: true, dashboard_token}`. The token is
+   returned once.
+
+`GET /v1/dash/{name}` accepts three credentials, each resolved to the device
+it draws (`resolve_dash_device` in main.py), checked in this order:
+
+| credential | draws | notes |
+|---|---|---|
+| `Authorization: Bearer <OWNER_BEARER>` | `DEVICE_ID` | the admin backup, unchanged; 503 while DEVICE_ID is unset |
+| `Bearer <owner pairing token>` + header `X-Device-Id: <device_id>` | that device_id | the cloud asks the relay's `POST /v0/device/pair/check` (`X-Cloud-Key`) `{device_id, token}`; the answer is cached 5 minutes per sha256(token), ok and not-ok alike (a cached ok counts only for the device it was given for); not ok -> 401; ok but device_id != DEVICE_ID -> 404; relay unreachable -> 502 |
+| `Bearer <a phone dashboard_token>` | `ns-<user_id>` | no rows until Phase 2 stores the feed, so every chart answers `empty: true` honestly |
+
+Anything else is 401 as today, except that with OWNER_BEARER unset an
+unrecognised bearer keeps today's fail-closed 503 (the phone-token and
+pairing-token paths work without OWNER_BEARER). `demo=true` keeps its
+meaning: `<device>-demo`. `/v1/family/last_night` and the other routes are
+unchanged.
 
 ## Migrations
 

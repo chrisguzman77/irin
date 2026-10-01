@@ -9,7 +9,10 @@ dashboard token, sent as "Authorization: Bearer ..."), PIN (the same PIN as the
 Pi's, for creating and revoking family bearers), DEVICE_TZ (the Pi's local time
 zone, for the family page's stale flag; default America/New_York), VOICE_BACKEND,
 ELEVENLABS_API_KEY, ELEVENLABS_VOICE_ALERT (the buddy clip the relay links
-to over WhatsApp), RELAY_KEY, DOMAIN. Audio render
+to over WhatsApp), RELAY_KEY (also the at-rest key for phone accounts' feed
+credentials), RELAY_URL and RELAY_CLOUD_KEY (the relay the cloud tells when a
+phone account's feed is verified and asks about owner pairing tokens;
+cloud/accounts.py), DOMAIN. Audio render
 (B4+) authenticates the device token, like ingest (cloud/audio.py).
 """
 
@@ -30,6 +33,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict, Field
 
+import accounts
 import audio
 import dash as dash_mod
 from ingest import IngestBatch, ingest as ingest_batch
@@ -79,12 +83,55 @@ def _bearer(authorization: str | None) -> str | None:
     return None
 
 
-def require_owner(authorization: str | None = Header(default=None)) -> None:
-    """The owner's dashboards: fail closed (503) until OWNER_BEARER is configured."""
+def resolve_dash_device(authorization: str | None = Header(default=None),
+                        x_device_id: str | None = Header(default=None, alias="X-Device-Id")) -> str:
+    """The device a dashboard read draws, from one of three credentials (relay/README.md
+    "Phone-only accounts"): Bearer OWNER_BEARER -> DEVICE_ID (the admin backup);
+    Bearer <owner pairing token> + X-Device-Id -> the relay's pair/check (cached 5
+    minutes per token hash, both ways) and that device_id, which must be DEVICE_ID
+    (404 otherwise); Bearer <phone dashboard token> -> ns-<user_id>. Anything else is
+    401; the OWNER_BEARER path alone keeps its fail-closed 503 while it is unset."""
+    token = _bearer(authorization)
+    if not token:
+        raise HTTPException(status_code=401, detail="bearer required")
+    if OWNER_BEARER and _same(token, OWNER_BEARER):
+        if not DEVICE_ID:
+            raise HTTPException(status_code=503, detail="DEVICE_ID not configured")
+        return DEVICE_ID
+    if x_device_id:
+        try:
+            ok = accounts.pair_check(x_device_id, token)
+        except accounts.RelayUnavailable:
+            raise HTTPException(status_code=502, detail="relay unavailable; retry")
+        if not ok:
+            raise HTTPException(status_code=401, detail="that phone is not paired with this Irin")
+        if x_device_id != DEVICE_ID:
+            raise HTTPException(status_code=404, detail="that device is not hosted here")
+        return DEVICE_ID
+    try:
+        user_id = accounts.user_for_dash_token(dash_mod.TIGER_URI, token)
+    except psycopg.Error as e:
+        log.warning("dash token lookup failed: %s", type(e).__name__)
+        raise HTTPException(status_code=503, detail="storage unavailable; retry")
+    if user_id:
+        return f"ns-{user_id}"
     if not OWNER_BEARER:
         raise HTTPException(status_code=503, detail="OWNER_BEARER not configured")
-    if not _same(_bearer(authorization), OWNER_BEARER):
-        raise HTTPException(status_code=401, detail="bad owner bearer")
+    raise HTTPException(status_code=401, detail="bad owner bearer")
+
+
+VERIFY_MAX_PER_MIN = 5
+_verify_hits: dict[str, list[float]] = {}
+
+
+def require_verify_bucket(request: Request) -> None:
+    """POST /v1/accounts/verify: its own bucket of 5 per minute per IP."""
+    who, now = _client_ip(request), time.monotonic()
+    recent = [t for t in _verify_hits.get(who, []) if t > now - 60.0]
+    if len(recent) >= VERIFY_MAX_PER_MIN:
+        _verify_hits[who] = recent
+        raise HTTPException(status_code=429, detail="too many verification attempts; wait a minute")
+    _verify_hits[who] = recent + [now]
 
 
 PIN_MAX_WRONG = 5
@@ -146,18 +193,52 @@ async def ingest(batch: IngestBatch, device_id: str = Depends(require_device_tok
 
 
 @app.get("/v1/dash/{name}")
-def dash(name: str, days: int = 14, demo: bool = False, _owner: None = Depends(require_owner)) -> dict:
-    """C3: one chart's JSON (cloud/dash.py; shapes in cloud/README.md). demo=true
-    reads <DEVICE_ID>-demo, so replayed data is never drawn as the real device."""
+def dash(name: str, days: int = 14, demo: bool = False, device: str = Depends(resolve_dash_device)) -> dict:
+    """C3: one chart's JSON (cloud/dash.py; shapes in cloud/README.md) for the device
+    the credential resolves to (resolve_dash_device). demo=true reads <device>-demo,
+    so replayed data is never drawn as the real device."""
     if name not in DASH_NAMES:
         raise HTTPException(status_code=404, detail=f"unknown dashboard; one of {DASH_NAMES}")
-    if not DEVICE_ID:
-        raise HTTPException(status_code=503, detail="DEVICE_ID not configured")
     try:
-        return dash_mod.query(name, days, f"{DEVICE_ID}-demo" if demo else DEVICE_ID, is_demo=demo)
+        return dash_mod.query(name, days, f"{device}-demo" if demo else device, is_demo=demo)
     except psycopg.Error as e:
         log.warning("dash %s failed: %s", name, type(e).__name__)
         raise HTTPException(status_code=503, detail="storage unavailable; retry")
+
+
+class VerifyRequest(BaseModel):
+    user_id: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_\-]+$")
+    user_bearer: str = Field(min_length=1, max_length=200)
+    nightscout_url: str = Field(max_length=200, pattern=r"^https?://[^/?#\s]+(/[^?#\s]*)?$")
+    nightscout_token: str = Field(min_length=1, max_length=200)
+
+
+@app.post("/v1/accounts/verify")
+def accounts_verify(req: VerifyRequest, _bucket: None = Depends(require_verify_bucket)) -> dict:
+    """Phone-only accounts, Phase 1 (cloud/accounts.py; relay/README.md): (1) the feed
+    must answer with a reading from the last 15 minutes (422 otherwise, one of three
+    pinned details, never a value); (2) the relay is told the account is verified
+    (its 401/404 -> 404, unreachable or 5xx -> 502); (3) the feed is stored encrypted
+    with a fresh dashboard token, returned once. 503 while RELAY_KEY or
+    RELAY_CLOUD_KEY is unset."""
+    if not accounts.configured():
+        raise HTTPException(status_code=503, detail="RELAY_KEY / RELAY_CLOUD_KEY not configured")
+    try:
+        accounts.check_feed(req.nightscout_url, req.nightscout_token)
+    except accounts.FeedError as e:
+        raise HTTPException(status_code=422, detail=e.detail)
+    try:
+        accounts.mark_verified(req.user_id, req.user_bearer)
+    except accounts.NoSuchAccount:
+        raise HTTPException(status_code=404, detail="no such account")
+    except accounts.RelayUnavailable:
+        raise HTTPException(status_code=502, detail="relay unavailable; retry")
+    try:
+        token = accounts.upsert_account(dash_mod.TIGER_URI, req.user_id, req.nightscout_url, req.nightscout_token)
+    except psycopg.Error as e:
+        log.warning("account upsert failed: %s", type(e).__name__)
+        raise HTTPException(status_code=503, detail="storage unavailable; retry")
+    return {"user_id": req.user_id, "verified": True, "dashboard_token": token}
 
 
 class BearerRequest(BaseModel):
