@@ -211,18 +211,29 @@ stored in it.
 `POST /v1/accounts/verify` (public; its own bucket of 5 per minute per IP,
 429 past it) body `{user_id, user_bearer, nightscout_url, nightscout_token}`:
 the URL is `https?://host[:port][/path]`, max 200 chars, no query string; the
-token 1-200 chars; `user_id` is the relay's (`u-...`). Steps, in order:
+token 1-200 chars; `user_id` is the relay's (`u-...`); the bearer has no
+whitespace. Steps, in order:
 
-1. `GET {nightscout_url}/api/v1/entries.json?count=1&token=<token>` (10 s
-   timeout; the same auth the Pi's datasource uses). The feed is live when the
+1. The URL must point outside (`accounts.guard_feed_url`; the fetch runs from
+   the cloud's own network before the relay has authenticated the caller): no
+   userinfo, no `localhost`, dotless, `.local` or `.internal` name, and a
+   literal IP or every address the name resolves to must be public (not
+   private, loopback, link-local, reserved, multicast, unspecified); anything
+   else is `feed unreachable` and nothing is fetched. The name is resolved
+   here and again by the fetch, so DNS rebinding between the two is not
+   caught (accepted for Phase 1). Then
+   `GET {nightscout_url}/api/v1/entries.json?count=1&token=<token>` (10 s
+   timeout, body read up to 64 KB, else `feed unreachable`; the same auth the
+   Pi's datasource uses; httpx's own request log line, which would carry the
+   token, is silenced). The feed is live when the
    reply is a 2xx JSON list whose first entry has an `sgv` and a `date` (ms)
    within 15 minutes of now; otherwise 422 whose detail is exactly one of
    `feed unreachable` (connection or timeout, a non-2xx other than 401/403,
    or a body that is not a JSON list), `feed refused the token` (401/403),
    `no reading in the last 15 minutes` (an empty list, a first entry with no
-   `sgv` or `date`, or a `date` older than 15 minutes). The value read is
-   discarded: never stored, logged, or returned (the test asserts no log line
-   or response carries it). The relay is not told on a 422.
+   `sgv` or a finite `date`, or a `date` older than 15 minutes). The value
+   read is discarded: never stored, logged, or returned (the test asserts no
+   log line or response carries it). The relay is not told on a 422.
 2. Relay `POST {RELAY_URL}/v0/users/{user_id}/verified` with `X-Cloud-Key:
    RELAY_CLOUD_KEY` and `Authorization: Bearer <user_bearer>`, body `{}`:
    relay 401/404 -> 404 `no such account`; unreachable, 5xx, or anything else
@@ -231,7 +242,11 @@ token 1-200 chars; `user_id` is the relay's (`u-...`). Steps, in order:
    `secrets.token_urlsafe(32)`, only its SHA-256 stored, replacing the old
    hash so an earlier token for that user stops working; 503 when Tiger is
    unreachable) -> `{user_id, verified: true, dashboard_token}`. The token is
-   returned once.
+   returned once. The relay is marked verified (step 2) before the row is
+   stored (step 3), so a storage outage between the two leaves a verified
+   account with no feed row: the phone simply verifies again. Rotating
+   RELAY_KEY orphans every stored feed (they no longer decrypt); re-keying
+   them is Phase 2 work.
 
 `GET /v1/dash/{name}` accepts three credentials, each resolved to the device
 it draws (`resolve_dash_device` in main.py), checked in this order:
@@ -239,7 +254,7 @@ it draws (`resolve_dash_device` in main.py), checked in this order:
 | credential | draws | notes |
 |---|---|---|
 | `Authorization: Bearer <OWNER_BEARER>` | `DEVICE_ID` | the admin backup, unchanged; 503 while DEVICE_ID is unset |
-| `Bearer <owner pairing token>` + header `X-Device-Id: <device_id>` | that device_id | the cloud asks the relay's `POST /v0/device/pair/check` (`X-Cloud-Key`) `{device_id, token}`; the answer is cached 5 minutes per sha256(token), ok and not-ok alike (a cached ok counts only for the device it was given for); not ok -> 401; ok but device_id != DEVICE_ID -> 404; relay unreachable -> 502 |
+| `Bearer <owner pairing token>` + header `X-Device-Id: <device_id>` | that device_id | the cloud asks the relay's `POST /v0/device/pair/check` (`X-Cloud-Key`) `{device_id, token}`; the answer is cached 5 minutes per (sha256(token), device_id), ok and not-ok alike, expired entries evicted on each write; cache misses have their own bucket of 30 per minute per IP (429 past it), so an anonymous caller cannot spend the relay's bucket from the cloud's one IP; not ok -> 401; ok but device_id != DEVICE_ID -> 404; relay unreachable -> 502 |
 | `Bearer <a phone dashboard_token>` | `ns-<user_id>` | no rows until Phase 2 stores the feed, so every chart answers `empty: true` honestly |
 
 Anything else is 401 as today, except that with OWNER_BEARER unset an

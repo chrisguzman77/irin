@@ -15,16 +15,25 @@ RELAY_CLOUD_KEY, RELAY_KEY.
 from __future__ import annotations
 
 import hashlib
+import ipaddress
+import json
 import logging
+import math
 import os
 import secrets
+import socket
 import time
+from urllib.parse import urlsplit
 
 import httpx
 import psycopg
 from nacl.secret import SecretBox
 
 log = logging.getLogger("irin.cloud.accounts")
+# httpx logs every request URL at INFO, query string included, so the feed
+# token would land in a log line (the Pi's datasource silences it the same way).
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 RELAY_URL = os.environ.get("RELAY_URL", "").rstrip("/")
 RELAY_CLOUD_KEY = os.environ.get("RELAY_CLOUD_KEY", "")
@@ -33,6 +42,7 @@ TRANSPORT: httpx.BaseTransport | None = None  # tests inject a MockTransport
 
 FEED_TIMEOUT_S = 10.0
 FEED_FRESH_MS = 15 * 60 * 1000
+FEED_MAX_BYTES = 64 * 1024
 RELAY_TIMEOUT_S = 10.0
 PAIR_CACHE_S = 300.0  # a pair/check answer is good for 5 minutes, both ways
 
@@ -77,25 +87,62 @@ def token_hash(token: str) -> str:
 
 # ---------------------------------------------------------------- step 1: the feed
 
+def _is_internal(addr: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
+    return (addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved
+            or addr.is_multicast or addr.is_unspecified)
+
+
+def guard_feed_url(nightscout_url: str) -> None:
+    """Refuse a feed URL that points inside (SSRF: the fetch runs from the cloud's
+    own network before the relay has authenticated the caller): no userinfo; no
+    `localhost`, dotless name, or .local / .internal name; a literal IP, or EVERY
+    address a name resolves to, must be public (not private, loopback, link-local,
+    reserved, multicast, or unspecified). Raises FeedError("feed unreachable").
+    Caveat, accepted for Phase 1: the name is resolved here and again by the
+    fetch, so a DNS answer that changes between the two (rebinding) is not caught."""
+    parts = urlsplit(nightscout_url)
+    host = parts.hostname or ""
+    if parts.username is not None or parts.password is not None or "@" in parts.netloc or not host:
+        raise FeedError("feed unreachable")
+    try:
+        addrs = [ipaddress.ip_address(host)]
+    except ValueError:
+        if host == "localhost" or "." not in host or host.endswith((".local", ".internal")):
+            raise FeedError("feed unreachable")
+        try:
+            infos = socket.getaddrinfo(host, parts.port or 443, proto=socket.IPPROTO_TCP)
+            addrs = [ipaddress.ip_address(info[4][0]) for info in infos]
+        except (OSError, ValueError, IndexError):
+            raise FeedError("feed unreachable")
+    if not addrs or any(_is_internal(a) for a in addrs):
+        raise FeedError("feed unreachable")
+
+
 def check_feed(nightscout_url: str, token: str) -> None:
     """GET {url}/api/v1/entries.json?count=1&token=... (the same auth the Pi's
     datasource uses). Live = 2xx JSON list whose first entry has an `sgv` and a
     `date` (ms) within 15 minutes of now. Raises FeedError otherwise. The value
-    read is discarded here."""
+    read is discarded here; the body is read up to FEED_MAX_BYTES."""
+    guard_feed_url(nightscout_url)
     url = f"{nightscout_url.rstrip('/')}/api/v1/entries.json"
+    body = bytearray()
     try:
         with httpx.Client(timeout=FEED_TIMEOUT_S, transport=TRANSPORT) as client:
-            r = client.get(url, params={"count": "1", "token": token})
+            with client.stream("GET", url, params={"count": "1", "token": token}) as r:
+                if r.status_code in (401, 403):
+                    raise FeedError("feed refused the token")
+                if not 200 <= r.status_code < 300:
+                    log.info("feed check: HTTP %s", r.status_code)
+                    raise FeedError("feed unreachable")
+                for chunk in r.iter_bytes():
+                    body += chunk
+                    if len(body) > FEED_MAX_BYTES:
+                        raise FeedError("feed unreachable")
     except httpx.HTTPError as e:
         log.info("feed check: unreachable (%s)", type(e).__name__)
         raise FeedError("feed unreachable")
-    if r.status_code in (401, 403):
-        raise FeedError("feed refused the token")
-    if not 200 <= r.status_code < 300:
-        log.info("feed check: HTTP %s", r.status_code)
-        raise FeedError("feed unreachable")
     try:
-        entries = r.json()
+        entries = json.loads(bytes(body))
     except ValueError:
         raise FeedError("feed unreachable")
     if not isinstance(entries, list):
@@ -104,7 +151,7 @@ def check_feed(nightscout_url: str, token: str) -> None:
         raise FeedError("no reading in the last 15 minutes")
     first = entries[0]
     date = first.get("date")
-    if "sgv" not in first or not isinstance(date, (int, float)):
+    if "sgv" not in first or not isinstance(date, (int, float)) or not math.isfinite(date):
         raise FeedError("no reading in the last 15 minutes")
     if abs(time.time() * 1000 - date) > FEED_FRESH_MS:
         raise FeedError("no reading in the last 15 minutes")
@@ -134,17 +181,22 @@ def mark_verified(user_id: str, user_bearer: str) -> None:
         raise RelayUnavailable()
 
 
-_pair_cache: dict[str, tuple[float, bool, str]] = {}  # sha256(token) -> (expires, ok, device_id asked)
+_pair_cache: dict[tuple[str, str], tuple[float, bool]] = {}  # (sha256(token), device_id) -> (expires, ok)
+
+
+def pair_cached(device_id: str, token: str) -> bool | None:
+    """The cached pair/check answer for this token AND device, or None (a miss)."""
+    hit = _pair_cache.get((token_hash(token), device_id))
+    if hit and hit[0] > time.monotonic():
+        return hit[1]
+    return None
 
 
 def pair_check(device_id: str, token: str) -> bool:
-    """POST /v0/device/pair/check {device_id, token} -> ok. The answer is cached
-    5 minutes per sha256(token), ok or not; a cached ok only counts for the
-    device it was given for. The token is never logged."""
-    key, now = token_hash(token), time.monotonic()
-    hit = _pair_cache.get(key)
-    if hit and hit[0] > now:
-        return hit[1] and hit[2] == device_id
+    """POST /v0/device/pair/check {device_id, token} -> ok, cached 5 minutes per
+    (sha256(token), device_id), ok or not; expired entries are evicted on each
+    write. The token is never logged. Callers try pair_cached() first and
+    throttle the misses (main.py)."""
     r = _relay_post("/v0/device/pair/check", {"device_id": device_id, "token": token}, {})
     if r.status_code != 200:
         log.warning("relay pair/check: HTTP %s", r.status_code)
@@ -153,7 +205,10 @@ def pair_check(device_id: str, token: str) -> bool:
         ok = bool(r.json().get("ok"))
     except (ValueError, AttributeError):
         raise RelayUnavailable()
-    _pair_cache[key] = (now + PAIR_CACHE_S, ok, device_id)
+    now = time.monotonic()
+    for key in [k for k, v in _pair_cache.items() if v[0] <= now]:
+        del _pair_cache[key]
+    _pair_cache[(token_hash(token), device_id)] = (now + PAIR_CACHE_S, ok)
     return ok
 
 

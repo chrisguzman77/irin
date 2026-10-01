@@ -43,10 +43,12 @@ class Fake:
         self.ns_status = 200
         self.ns_age_ms = 60_000           # the newest entry is a minute old
         self.ns_body = None               # overrides the entries list when set
+        self.ns_content = None            # raw bytes, overrides everything
         self.ns_down = False
         self.relay_status = 200
         self.relay_down = False
         self.pair_ok = True
+        self.pair_device = "irin-test-0001"  # the one device the pairing token is active for
         self.calls: list[httpx.Request] = []
 
     def handler(self, request: httpx.Request) -> httpx.Response:
@@ -59,6 +61,8 @@ class Fake:
             assert request.url.params["count"] == "1" and request.url.params["token"] == "ns-tok"
             if self.ns_status != 200:
                 return httpx.Response(self.ns_status, json={"status": self.ns_status})
+            if self.ns_content is not None:
+                return httpx.Response(200, content=self.ns_content)
             if self.ns_body is not None:
                 return httpx.Response(200, json=self.ns_body)
             return httpx.Response(200, json=[{"sgv": SGV, "date": int(time.time() * 1000) - self.ns_age_ms, "direction": "Flat"}])
@@ -69,7 +73,8 @@ class Fake:
             if request.url.path == "/v0/device/pair/check":
                 body = json.loads(request.content)
                 assert set(body) == {"device_id", "token"}
-                return httpx.Response(200, json={"ok": self.pair_ok, "username": "chris" if self.pair_ok else None})
+                ok = self.pair_ok and body["device_id"] == self.pair_device
+                return httpx.Response(200, json={"ok": ok, "username": "chris" if ok else None})
             assert request.url.path == f"/v0/users/{BODY['user_id']}/verified"
             assert request.headers["authorization"] == f"Bearer {BODY['user_bearer']}"
             assert json.loads(request.content) == {}
@@ -86,8 +91,12 @@ def fake(monkeypatch):
     monkeypatch.setattr(accounts, "RELAY_URL", RELAY)
     monkeypatch.setattr(accounts, "RELAY_CLOUD_KEY", "cloud-key")
     monkeypatch.setattr(accounts, "RELAY_KEY", "relay-key")
+    # DNS stays out of the tests: every name resolves to one public address.
+    monkeypatch.setattr(accounts.socket, "getaddrinfo",
+                        lambda host, port, **kw: [(2, 1, 6, "", ("93.184.216.34", port))])
     accounts._pair_cache.clear()
     main._verify_hits.clear()
+    main._pair_hits.clear()
     return f
 
 
@@ -143,7 +152,9 @@ def test_verify_happy_path_stores_encrypted_feed_and_returns_the_token_once(fake
     assert bytes(url_enc) != NS.encode() and b"ns-tok" not in bytes(tok_enc)
     assert accounts.decrypt(bytes(url_enc)) == NS and accounts.decrypt(bytes(tok_enc)) == "ns-tok"
     assert str(SGV) not in r.text
-    assert all(str(SGV) not in rec.getMessage() for rec in caplog.records)
+    for rec in caplog.records:  # neither the value, the feed token, nor the feed URL reaches a log line
+        msg = rec.getMessage()
+        assert str(SGV) not in msg and "ns-tok" not in msg and NS not in msg, (rec.name, msg)
 
 
 def test_reverify_replaces_the_dashboard_token_hash(fake, scratch):
@@ -163,6 +174,8 @@ def test_reverify_replaces_the_dashboard_token_hash(fake, scratch):
     ("ns_age_ms", 16 * 60_000, "no reading in the last 15 minutes"),
     ("ns_body", [], "no reading in the last 15 minutes"),
     ("ns_body", [{"date": 1}], "no reading in the last 15 minutes"),
+    ("ns_content", b'[{"sgv": 777, "date": NaN}]', "no reading in the last 15 minutes"),  # json.loads accepts NaN
+    ("ns_content", b"[" + b" " * (64 * 1024 + 1) + b"]", "feed unreachable"),  # over the 64 KB cap
 ])
 def test_feed_failures_are_422_with_the_pinned_detail(fake, knob, value, detail):
     setattr(fake, knob, value)
@@ -205,11 +218,57 @@ def test_verify_is_503_while_a_key_is_unset(fake, monkeypatch, name):
     {"nightscout_token": "t" * 201},
     {"user_id": "../x"},
     {"user_bearer": ""},
+    {"user_bearer": "a\r\nX-Injected: b"},
 ])
 def test_verify_body_validation(fake, over):
     with TestClient(app) as c:
         assert verify(c, **over).status_code == 422
     assert fake.calls == []
+
+
+@pytest.mark.parametrize("url", [
+    "http://relay:8100", "http://127.0.0.1:8200", "http://[::1]:8200", "http://timescaledb:5432",
+    "http://mongo:27017", "http://169.254.169.254", "http://localhost", "http://localhost:8200",
+    "http://0x7f000001", "http://10.0.0.5", "http://192.168.1.2:1337", "http://0.0.0.0",
+    "http://224.0.0.1", "http://240.0.0.1", "http://[fe80::1]", "http://[fd00::1]",
+    "https://user:pw@ns.example", "https://ns.example@evil.example", "http://pi.local", "http://cloud.internal",
+])
+def test_internal_feed_urls_are_refused_before_any_fetch(fake, url):
+    with TestClient(app) as c:
+        r = verify(c, nightscout_url=url)
+    assert r.status_code == 422 and r.json() == {"detail": "feed unreachable"}, url
+    assert fake.calls == []  # neither the feed nor the relay is ever called
+
+
+def test_a_name_resolving_to_an_internal_address_is_refused(fake, monkeypatch):
+    monkeypatch.setattr(accounts.socket, "getaddrinfo",
+                        lambda host, port, **kw: [(2, 1, 6, "", ("93.184.216.34", port)), (2, 1, 6, "", ("10.0.0.9", port))])
+    with TestClient(app) as c:
+        r = verify(c)
+    assert r.status_code == 422 and r.json() == {"detail": "feed unreachable"}
+    assert fake.calls == []
+
+
+def test_a_name_that_does_not_resolve_is_feed_unreachable(fake, monkeypatch):
+    def nxdomain(host, port, **kw):
+        raise OSError("nxdomain")
+    monkeypatch.setattr(accounts.socket, "getaddrinfo", nxdomain)
+    with TestClient(app) as c:
+        r = verify(c)
+    assert r.status_code == 422 and r.json() == {"detail": "feed unreachable"}
+    assert fake.calls == []
+
+
+def test_public_ipv6_literal_is_allowed(fake, monkeypatch):
+    seen = {}
+
+    def handler(request):
+        seen["host"] = request.url.host
+        return httpx.Response(401)
+    monkeypatch.setattr(accounts, "TRANSPORT", httpx.MockTransport(handler))
+    with TestClient(app) as c:
+        assert verify(c, nightscout_url="https://[2606:2800:220:1:248:1893:25c8:1946]").status_code == 422
+    assert seen["host"] == "2606:2800:220:1:248:1893:25c8:1946"
 
 
 def test_url_with_a_path_and_trailing_slash_is_used_as_given(fake, monkeypatch):
@@ -311,6 +370,7 @@ def test_owner_pairing_token_asks_the_relay_and_caches_both_answers(fake, drawn,
 
 
 def test_owner_pairing_token_for_another_device_is_404(fake, drawn):
+    fake.pair_device = "irin-other"  # a real pairing, but with a device this cloud does not host
     with TestClient(app) as c:
         r = c.get("/v1/dash/nights", headers={"Authorization": "Bearer pair-tok", "X-Device-Id": "irin-other"})
     assert r.status_code == 404
@@ -329,6 +389,49 @@ def test_no_credential_is_401(fake, drawn):
     with TestClient(app) as c:
         assert c.get("/v1/dash/nights").status_code == 401
         assert c.get("/v1/dash/nights", headers={"X-Device-Id": "irin-test-0001"}).status_code == 401
+
+
+def test_pair_cache_is_keyed_per_device_and_fails_closed_across_devices(fake, drawn):
+    a = {"Authorization": "Bearer pair-tok", "X-Device-Id": "irin-test-0001"}
+    b = {"Authorization": "Bearer pair-tok", "X-Device-Id": "irin-other"}
+    with TestClient(app) as c:
+        assert c.get("/v1/dash/nights", headers=b).status_code == 401   # wrong device first: the relay says no
+        assert c.get("/v1/dash/nights", headers=a).status_code == 200   # the right device is not poisoned by it
+        assert len(fake.calls) == 2
+        assert c.get("/v1/dash/nights", headers=b).status_code == 401   # a cached ok for A never answers for B
+        assert c.get("/v1/dash/nights", headers=a).status_code == 200
+        assert len(fake.calls) == 2                                      # both answers came from the cache
+    assert set(accounts._pair_cache) == {(sha("pair-tok"), "irin-test-0001"), (sha("pair-tok"), "irin-other")}
+
+
+def test_pair_check_misses_have_their_own_bucket_and_hits_do_not_count(fake, drawn, monkeypatch):
+    clock = {"t": 1000.0}
+    monkeypatch.setattr(main.time, "monotonic", lambda: clock["t"])
+    ip = {"X-Forwarded-For": "9.9.9.9, 10.0.0.1"}
+    with TestClient(app) as c:
+        for i in range(30):
+            assert c.get("/v1/dash/nights", headers={"Authorization": f"Bearer t{i}", "X-Device-Id": "irin-test-0001", **ip}).status_code == 200
+        r = c.get("/v1/dash/nights", headers={"Authorization": "Bearer t30", "X-Device-Id": "irin-test-0001", **ip})
+        assert r.status_code == 429 and r.json() == {"detail": "too many pairing checks; wait a minute"}
+        assert len(fake.calls) == 30                                     # the 31st never reached the relay
+        assert c.get("/v1/dash/nights", headers={"Authorization": "Bearer t0", "X-Device-Id": "irin-test-0001", **ip}).status_code == 200  # a hit
+        assert c.get("/v1/dash/nights", headers={"Authorization": "Bearer t30", "X-Device-Id": "irin-test-0001",
+                                                 "X-Forwarded-For": "8.8.8.8"}).status_code == 200  # another IP
+        clock["t"] += 61
+        assert c.get("/v1/dash/nights", headers={"Authorization": "Bearer t31", "X-Device-Id": "irin-test-0001", **ip}).status_code == 200
+    assert main._verify_hits == {}  # the verify bucket is untouched by dashboard reads
+
+
+def test_expired_pair_cache_entries_are_evicted_on_the_next_write(fake, drawn, monkeypatch):
+    clock = {"t": 5000.0}
+    monkeypatch.setattr(accounts.time, "monotonic", lambda: clock["t"])
+    h = lambda t: {"Authorization": f"Bearer {t}", "X-Device-Id": "irin-test-0001"}  # noqa: E731
+    with TestClient(app) as c:
+        assert c.get("/v1/dash/nights", headers=h("old")).status_code == 200
+        assert (sha("old"), "irin-test-0001") in accounts._pair_cache
+        clock["t"] += 301
+        assert c.get("/v1/dash/nights", headers=h("new")).status_code == 200
+    assert set(accounts._pair_cache) == {(sha("new"), "irin-test-0001")}
 
 
 # ---------------------------------------------------------------- crypto

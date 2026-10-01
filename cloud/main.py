@@ -83,14 +83,37 @@ def _bearer(authorization: str | None) -> str | None:
     return None
 
 
-def resolve_dash_device(authorization: str | None = Header(default=None),
+VERIFY_MAX_PER_MIN = 5
+PAIR_MAX_PER_MIN = 30
+_verify_hits: dict[str, list[float]] = {}
+_pair_hits: dict[str, list[float]] = {}
+
+
+def _take(hits: dict[str, list[float]], who: str, limit: int, detail: str) -> None:
+    """One sliding-minute bucket per IP: the (limit+1)th hit inside a minute is 429."""
+    now = time.monotonic()
+    recent = [t for t in hits.get(who, []) if t > now - 60.0]
+    if len(recent) >= limit:
+        hits[who] = recent
+        raise HTTPException(status_code=429, detail=detail)
+    hits[who] = recent + [now]
+
+
+def require_verify_bucket(request: Request) -> None:
+    """POST /v1/accounts/verify: its own bucket of 5 per minute per IP."""
+    _take(_verify_hits, _client_ip(request), VERIFY_MAX_PER_MIN, "too many verification attempts; wait a minute")
+
+
+def resolve_dash_device(request: Request, authorization: str | None = Header(default=None),
                         x_device_id: str | None = Header(default=None, alias="X-Device-Id")) -> str:
     """The device a dashboard read draws, from one of three credentials (relay/README.md
     "Phone-only accounts"): Bearer OWNER_BEARER -> DEVICE_ID (the admin backup);
     Bearer <owner pairing token> + X-Device-Id -> the relay's pair/check (cached 5
-    minutes per token hash, both ways) and that device_id, which must be DEVICE_ID
-    (404 otherwise); Bearer <phone dashboard token> -> ns-<user_id>. Anything else is
-    401; the OWNER_BEARER path alone keeps its fail-closed 503 while it is unset."""
+    minutes per token hash and device, both ways; the misses are throttled at 30 per
+    minute per IP so an anonymous caller cannot spend the relay's bucket from the
+    cloud's one IP) and that device_id, which must be DEVICE_ID (404 otherwise);
+    Bearer <phone dashboard token> -> ns-<user_id>. Anything else is 401; the
+    OWNER_BEARER path alone keeps its fail-closed 503 while it is unset."""
     token = _bearer(authorization)
     if not token:
         raise HTTPException(status_code=401, detail="bearer required")
@@ -99,10 +122,13 @@ def resolve_dash_device(authorization: str | None = Header(default=None),
             raise HTTPException(status_code=503, detail="DEVICE_ID not configured")
         return DEVICE_ID
     if x_device_id:
-        try:
-            ok = accounts.pair_check(x_device_id, token)
-        except accounts.RelayUnavailable:
-            raise HTTPException(status_code=502, detail="relay unavailable; retry")
+        ok = accounts.pair_cached(x_device_id, token)
+        if ok is None:
+            _take(_pair_hits, _client_ip(request), PAIR_MAX_PER_MIN, "too many pairing checks; wait a minute")
+            try:
+                ok = accounts.pair_check(x_device_id, token)
+            except accounts.RelayUnavailable:
+                raise HTTPException(status_code=502, detail="relay unavailable; retry")
         if not ok:
             raise HTTPException(status_code=401, detail="that phone is not paired with this Irin")
         if x_device_id != DEVICE_ID:
@@ -118,20 +144,6 @@ def resolve_dash_device(authorization: str | None = Header(default=None),
     if not OWNER_BEARER:
         raise HTTPException(status_code=503, detail="OWNER_BEARER not configured")
     raise HTTPException(status_code=401, detail="bad owner bearer")
-
-
-VERIFY_MAX_PER_MIN = 5
-_verify_hits: dict[str, list[float]] = {}
-
-
-def require_verify_bucket(request: Request) -> None:
-    """POST /v1/accounts/verify: its own bucket of 5 per minute per IP."""
-    who, now = _client_ip(request), time.monotonic()
-    recent = [t for t in _verify_hits.get(who, []) if t > now - 60.0]
-    if len(recent) >= VERIFY_MAX_PER_MIN:
-        _verify_hits[who] = recent
-        raise HTTPException(status_code=429, detail="too many verification attempts; wait a minute")
-    _verify_hits[who] = recent + [now]
 
 
 PIN_MAX_WRONG = 5
@@ -208,7 +220,7 @@ def dash(name: str, days: int = 14, demo: bool = False, device: str = Depends(re
 
 class VerifyRequest(BaseModel):
     user_id: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_\-]+$")
-    user_bearer: str = Field(min_length=1, max_length=200)
+    user_bearer: str = Field(min_length=1, max_length=200, pattern=r"^\S+$")
     nightscout_url: str = Field(max_length=200, pattern=r"^https?://[^/?#\s]+(/[^?#\s]*)?$")
     nightscout_token: str = Field(min_length=1, max_length=200)
 
