@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { PinRejected } from "../../lib/api";
-import { getProfile, saveBuddySettings, saveProfile, type MatchCard, type MatchState, type Slot } from "../../lib/buddy";
+import { getProfile, saveBuddySettings, saveProfile, type BuddyProfile, type MatchCard, type MatchState, type Result, type Slot } from "../../lib/buddy";
 import type { Settings } from "../../lib/contracts";
 import FindBuddy from "./FindBuddy";
 import GlobePicker from "./GlobePicker";
@@ -11,8 +11,17 @@ import SlotEditor from "./SlotEditor";
 // deduped by casefold and sent in Title Case; the opt-ins start off (invariant
 // 16). The draft lives in sessionStorage (never the URL) so a re-render or a
 // reload keeps it. Nothing here asks for a glucose value, place, phone, or
-// email (invariant 15).
+// email (invariant 15). Phone-only accounts (Phase 1): with `phone` set the
+// same steps 1-4 post the profile to the relay instead of the Pi (sign-up, or
+// an edit prefilled from `initial`); there is no script step, because a phone
+// cannot post listings or alerts until an Irin is linked.
 type OptIns = NonNullable<Settings["night_buddy"]>;
+export interface PhoneWizard {
+  /** the saved profile to edit, or null for a sign-up */
+  initial: BuddyProfile | null;
+  save: (p: BuddyProfile) => Promise<Result<unknown>>;
+  onSaved: () => void;
+}
 const OPT_INS: [keyof OptIns, string, string][] = [
   ["have_buddy", "Have a buddy", "One paired T1D adult is the last human rung of your alarm ladder."],
   ["be_watcher", "Be a watcher", "Your phone can be alerted when your buddy's low goes unanswered."],
@@ -71,15 +80,25 @@ const fresh = (): Draft => ({
   step: 0, username: "", first_name: "", languages: [], home: browserZone(), buddyZone: null, slots: [],
   optins: { ...OFF }, script: "", prefilled: false,
 });
-function load(): Draft {
+function load(key: string): Draft {
   try {
-    const raw = sessionStorage.getItem(KEY);
+    const raw = sessionStorage.getItem(key);
     if (raw) return { ...fresh(), ...(JSON.parse(raw) as Partial<Draft>) };
   } catch {
     /* storage blocked */
   }
   return fresh();
 }
+/** a saved profile over the draft, keeping whatever the user already typed */
+const withProfile = (x: Draft, p: BuddyProfile): Draft => ({
+  ...x,
+  username: x.username || p.username || "",
+  first_name: x.first_name || p.first_name || "",
+  languages: x.languages.length ? x.languages : addLanguages([], (p.languages ?? []).join(",")),
+  home: p.timezones?.[0] && ZONES.includes(p.timezones[0]) ? p.timezones[0] : x.home,
+  buddyZone: x.buddyZone ?? p.timezones?.[1] ?? null,
+  slots: x.slots.length ? x.slots : (p.availability ?? []),
+});
 
 const input = "bg-neutral-900 border border-neutral-700 rounded-lg px-3 py-2 text-white";
 const primary = "flex-1 rounded-lg px-3 py-3 bg-sky-400 text-black font-semibold disabled:opacity-40";
@@ -87,10 +106,15 @@ const TITLES = ["", "About you", "Where should your buddy be?", "When can you wa
 const badge = <span className="bg-amber-400 text-black text-xs font-bold px-2 py-0.5 rounded">DEMO</span>;
 
 /** onAccepted (Buddy v3): accepting a match ends the wizard; the tab returns to the Buddy home. */
-export default function BuddyWizard({ base, demo, settings, matches, onAccepted }: {
-  base: string; demo: boolean; settings: Settings | undefined; matches: MatchState[]; onAccepted: (card: MatchCard) => void;
+export default function BuddyWizard({ base, demo, settings, matches, onAccepted, phone }: {
+  base: string; demo: boolean; settings: Settings | undefined; matches: MatchState[]; onAccepted: (card: MatchCard) => void; phone?: PhoneWizard;
 }) {
-  const [d, setD] = useState<Draft>(load);
+  // the phone path keeps its own draft; an edit of a saved profile opens on step 1
+  const key = phone ? `${KEY}.phone` : KEY;
+  const [d, setD] = useState<Draft>(() => {
+    const x = load(key);
+    return phone?.initial && x.step === 0 ? { ...x, step: 1 } : x;
+  });
   const [langInput, setLangInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -102,52 +126,63 @@ export default function BuddyWizard({ base, demo, settings, matches, onAccepted 
 
   useEffect(() => {
     try {
-      sessionStorage.setItem(KEY, JSON.stringify(d));
+      sessionStorage.setItem(key, JSON.stringify(d));
     } catch {
       /* storage blocked: component state still holds the draft */
     }
-  }, [d]);
+  }, [d, key]);
 
   // once per draft: start from what this Irin already holds (a saved profile, the script)
   useEffect(() => {
     if (d.step === 0 || d.prefilled) return;
     set({ prefilled: true });
+    if (phone) {
+      const p = phone.initial;
+      if (p) setD((x) => ({ ...withProfile(x, p), optins: { ...OFF, ...p.optins } }));
+      return;
+    }
     const steps = settings?.emergency_script?.steps ?? [];
     if (steps.length) setD((x) => (x.script ? x : { ...x, script: steps.join("\n") }));
     getProfile(base)
       .then((r) => {
         const p = r.ok ? r.value.profile : null;
-        if (!p) return;
-        setD((x) => ({
-          ...x,
-          username: x.username || p.username || "",
-          first_name: x.first_name || p.first_name || "",
-          languages: x.languages.length ? x.languages : addLanguages([], (p.languages ?? []).join(",")),
-          home: p.timezones?.[0] && ZONES.includes(p.timezones[0]) ? p.timezones[0] : x.home,
-          buddyZone: x.buddyZone ?? p.timezones?.[1] ?? null,
-          slots: x.slots.length ? x.slots : (p.availability ?? []),
-        }));
+        if (p) setD((x) => withProfile(x, p));
       })
       .catch(() => {
         /* no profile yet, or unreachable: the user types it */
       });
-  }, [d.step, d.prefilled, base, settings]);
+  }, [d.step, d.prefilled, base, settings, phone]);
 
   const saveAll = async () => {
     setBusy(true);
     setErr("");
     try {
-      const steps = d.script.split("\n").map((s) => s.trim()).filter(Boolean);
-      const s = await saveBuddySettings(base, { night_buddy: d.optins, emergency_script: { steps } });
-      if (!s.ok) return setErr(s.reason);
-      const p = await saveProfile(base, {
+      const profile: BuddyProfile = {
         username: d.username.trim(),
         first_name: d.first_name.trim(),
         languages: d.languages,
         timezones: [d.home, d.buddyZone ?? d.home],
         availability: d.slots,
         optins: d.optins,
-      });
+      };
+      if (phone) {
+        const r = await phone.save(profile);
+        if (!r.ok) return setErr(r.reason);
+        // the account store (or onSaved) unmounts this wizard in the same
+        // batch, so the draft effect never runs again: drop the draft here
+        try {
+          sessionStorage.removeItem(key);
+        } catch {
+          /* storage blocked: nothing to drop */
+        }
+        setD(fresh());
+        phone.onSaved();
+        return;
+      }
+      const steps = d.script.split("\n").map((s) => s.trim()).filter(Boolean);
+      const s = await saveBuddySettings(base, { night_buddy: d.optins, emergency_script: { steps } });
+      if (!s.ok) return setErr(s.reason);
+      const p = await saveProfile(base, profile);
       if (!p.ok) return setErr(p.reason);
       go(6);
     } catch (e) {
@@ -169,6 +204,12 @@ export default function BuddyWizard({ base, demo, settings, matches, onAccepted 
 
   const step1ok = d.username.trim() && d.first_name.trim() && d.languages.length > 0 && d.home;
   const anyOptIn = Object.values(d.optins).some(Boolean);
+  const STEPS = phone ? [1, 2, 3, 4] : [1, 2, 3, 4, 5, 6];
+  const saveButton = (label: string, ok: unknown = true) => (
+    <button type="button" disabled={busy || !ok} className={primary} onClick={saveAll}>
+      {busy ? "Saving…" : label}
+    </button>
+  );
   const nav = (next: React.ReactNode) => (
     <div className="flex gap-2 pt-2">
       <button type="button" className="rounded-lg px-4 py-3 bg-neutral-800 text-neutral-200" onClick={() => go(d.step - 1)}>
@@ -185,8 +226,8 @@ export default function BuddyWizard({ base, demo, settings, matches, onAccepted 
 
   return (
     <div className="flex flex-col gap-3">
-      <div className="flex items-center gap-2" aria-label={`Step ${d.step} of 6`}>
-        {[1, 2, 3, 4, 5, 6].map((n) => (
+      <div className="flex items-center gap-2" aria-label={`Step ${d.step} of ${STEPS.length}`}>
+        {STEPS.map((n) => (
           <span key={n} className={`size-2.5 rounded-full ${n === d.step ? "bg-sky-400" : n < d.step ? "bg-sky-800" : "bg-neutral-700"}`} />
         ))}
         {demo && <span className="ml-auto">{badge}</span>}
@@ -281,10 +322,16 @@ export default function BuddyWizard({ base, demo, settings, matches, onAccepted 
                 <span className="text-xs text-neutral-500">{about}</span>
               </span>
               <input type="checkbox" className="size-6 shrink-0 accent-sky-400" checked={d.optins[k]}
+                disabled={!!phone && k === "hub_watchable"}
                 onChange={() => set({ optins: { ...d.optins, [k]: !d.optins[k] } })} />
             </label>
           ))}
-          {nav(next(anyOptIn))}
+          {phone && (
+            <p className="text-xs text-neutral-500">
+              Without an Irin your buddy cannot be alerted yet, so a hub listing stays off until one is paired.
+            </p>
+          )}
+          {nav(phone ? saveButton(phone.initial ? "Save profile" : "Save and connect my CGM", anyOptIn) : next(anyOptIn))}
           {!d.optins.have_buddy && (
             <p className="text-sm text-amber-300">
               Matching needs "Have a buddy" on. You can still continue and save; you will not be matched until you turn it on.
@@ -301,11 +348,7 @@ export default function BuddyWizard({ base, demo, settings, matches, onAccepted 
           </p>
           <textarea aria-label="Emergency script, one step per line" rows={6} className={input} value={d.script}
             onChange={(e) => set({ script: e.target.value })} />
-          {nav(
-            <button type="button" disabled={busy} className={primary} onClick={saveAll}>
-              {busy ? "Saving…" : "Save and find my buddy"}
-            </button>,
-          )}
+          {nav(saveButton("Save and find my buddy"))}
         </>
       )}
 

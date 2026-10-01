@@ -1,7 +1,8 @@
 import { useEffect, useState } from "react";
 import { useBasalNudge } from "../lib/useBasalNudge";
 import { useDevice } from "../lib/device";
-import { pairOwnerDevice, takePendingPairCode } from "../lib/owner";
+import { getAccount, linkAccount } from "../lib/account";
+import { getOwnerPairing, pairOwnerDevice, takePendingPairCode } from "../lib/owner";
 import TreatingButton from "./buddy/TreatingButton";
 import AckBar from "./device/AckBar";
 import DemoPanel from "./device/DemoPanel";
@@ -33,6 +34,9 @@ export default function DeviceTab() {
   const [name, setName] = useState("My phone");
   const [pairing, setPairing] = useState(false);
   const [pairMsg, setPairMsg] = useState("");
+  // Phone-only accounts (Phase 1): what linking the buddy account to this
+  // pairing said, shown once on the paired screen (the form is gone by then).
+  const [linkNote, setLinkNote] = useState("");
 
   // App.tsx already read a QR's #pair=NNNNNN (it can land on any remembered
   // tab) and switched here; take the code the one time this mounts after.
@@ -75,8 +79,18 @@ export default function DeviceTab() {
             setPairing(true);
             setPairMsg("");
             const res = await pairOwnerDevice(code, name.trim());
+            if (!res.ok) {
+              setPairing(false);
+              return setPairMsg(res.reason);
+            }
+            // a buddy account signed up on this phone joins the Irin's directory
+            // document (relay POST /v0/users/link); a 409 is shown and both stay as they are
+            const owner = getOwnerPairing();
+            if (getAccount() && owner) {
+              const link = await linkAccount(owner.device_id, owner.token);
+              setLinkNote(link.ok ? "Your buddy account is now linked to this Irin." : link.reason);
+            }
             setPairing(false);
-            if (!res.ok) setPairMsg(res.reason);
           }}
         >
           <label className="flex flex-col gap-1">
@@ -126,6 +140,12 @@ export default function DeviceTab() {
       {/* keyed per alarm episode/state so a previous tap's message never carries over */}
       <AckBar key={`${a?.trigger_type}-${a?.state}-${a?.started_at}`} alarm={a} baseUrl={target.url} />
       <TreatingButton snap={snap} baseUrl={target.url} />
+      {linkNote && (
+        <p role="status" className="mb-4 text-sm text-amber-300 flex items-start gap-2">
+          <span className="flex-1">{linkNote}</span>
+          <button type="button" aria-label="Dismiss" className="text-neutral-400" onClick={() => setLinkNote("")}>×</button>
+        </p>
+      )}
       <div className="flex gap-2 mb-4">
         {VIEWS.map((v) => (
           <button
