@@ -8,6 +8,7 @@ import { applied, saveSettings } from "../lib/settings";
 import BuddyWizard from "./buddy/BuddyWizard";
 import FindBuddy, { MatchCardView } from "./buddy/FindBuddy";
 import HubScreen, { HubEntry } from "./buddy/HubScreen";
+import PhoneBuddy from "./buddy/PhoneBuddy";
 import ProfileForm from "./buddy/ProfileForm";
 import TreatingButton from "./buddy/TreatingButton";
 
@@ -22,6 +23,8 @@ import TreatingButton from "./buddy/TreatingButton";
 // only while an alert is open (invariant 17). Buddy v3: once a match is
 // accepted (buddy_state.my_buddy, or a link) the tab is the Buddy home: "Your
 // Buddy" with that offer's match card, then the hub entry (buddy/HubScreen).
+// Phone-only accounts (Phase 1): with no device paired the tab is
+// buddy/PhoneBuddy, the same screens against the relay directly.
 type OptIns = NonNullable<Settings["night_buddy"]>;
 const OPT_INS: [keyof OptIns, string, string][] = [
   ["have_buddy", "I want a buddy", "One paired T1D adult is the last human rung of your alarm ladder."],
@@ -291,7 +294,14 @@ export default function BuddyTab() {
     const known = state.matches.find((m) => m.match_id === accepted.card.match_id);
     if ((known && known.status !== "accepted") || accepted.demo !== demo) setAccepted(null);
   }, [fromPi, accepted, setAccepted, state.matches, demo]);
-  if (target.status !== "ready") return <p className="text-neutral-400">Pair your Irin on the Device tab first.</p>;
+  if (target.status === "resolving") return <p className="text-neutral-400">Looking for your Irin…</p>;
+  if (target.status === "unpaired")
+    return (
+      <section className="flex flex-col gap-4">
+        <h2 className="text-xl font-semibold">Irin Buddy</h2>
+        <PhoneBuddy />
+      </section>
+    );
   if (!snap) return <p className="text-neutral-400">Waiting for your Irin…</p>;
   const base = target.url;
   const myBuddy = state.myBuddy ?? accepted?.card ?? null;

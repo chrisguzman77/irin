@@ -69,11 +69,17 @@ export type DashResult =
   | { state: "no_access" } // 401/403, or 503 while the cloud has no owner token set
   | { state: "error"; detail: string };
 
-export async function fetchDash(name: DashName, days: number, demo: boolean, bearer: string | null): Promise<DashResult> {
+/** Phone-only accounts, Phase 1 (relay/README.md): the credential is one of
+ * three the cloud resolves to a device: an owner pairing token WITH
+ * `X-Device-Id` (deviceId), a phone account's dashboard_token, or the pasted
+ * admin token (the last two without the header). */
+export async function fetchDash(name: DashName, days: number, demo: boolean, bearer: string | null, deviceId: string | null = null): Promise<DashResult> {
   let res: Response;
   try {
+    const headers: Record<string, string> = bearer ? { Authorization: `Bearer ${bearer}` } : {};
+    if (bearer && deviceId) headers["X-Device-Id"] = deviceId;
     res = await fetch(`${CLOUD_URL}/v1/dash/${name}?days=${days}${demo ? "&demo=true" : ""}`, {
-      headers: bearer ? { Authorization: `Bearer ${bearer}` } : {},
+      headers,
       cache: "no-store",
     });
   } catch {

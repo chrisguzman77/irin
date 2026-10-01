@@ -173,7 +173,7 @@ export interface MatchCard {
   is_demo: boolean;
   sample: boolean;
 }
-type Result<T> = { ok: true; value: T } | { ok: false; reason: string };
+export type Result<T> = { ok: true; value: T } | { ok: false; reason: string };
 
 export async function reason(res: Response): Promise<string> {
   try {

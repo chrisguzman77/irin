@@ -1,13 +1,18 @@
 import { useEffect, useRef, useState } from "react";
 import { PinRejected } from "../../lib/api";
-import { answerMatch, findMatches, type MatchCard, type MatchState } from "../../lib/buddy";
+import { answerMatch, findMatches, type MatchCard, type MatchState, type Result } from "../../lib/buddy";
 
 // B3+: "Find a buddy" (up to three suggestions from the relay's deterministic
 // score; the intro and why lines are relay text, shown as given) and my
 // matches (buddy_state.matches + hub_update "match"). Once both sides accept
 // and the other side's Irin has handed over its pair_url, "Watch <name> from
 // this phone" opens that watcher /pair link. Nothing here carries a glucose
-// value, a place, or a contact detail (invariant 15).
+// value, a place, or a contact detail (invariant 15). Phone-only accounts
+// (Phase 1): `client` swaps the Pi calls for the relay's (lib/phoneBuddy.ts).
+export interface MatchClient {
+  find: () => Promise<Result<MatchCard[]>>;
+  answer: (matchId: string, verb: "accept" | "decline") => Promise<Result<{ match_id: string; status: string }>>;
+}
 const badge = "bg-amber-400 text-black text-xs font-bold px-2 py-0.5 rounded";
 const btn = "flex-1 rounded-lg py-2 font-semibold disabled:opacity-40";
 
@@ -38,9 +43,10 @@ export function MatchCardView({ card: c, demo, children }: { card: MatchCard; de
 
 /** autoFind: the wizard's step 6 searches once on mount. onAccepted: called with
  * the suggestion's card once this phone's accept went through (Buddy v3). */
-export default function FindBuddy({ base, matches, demo, autoFind = false, onAccepted }: {
-  base: string; matches: MatchState[]; demo: boolean; autoFind?: boolean; onAccepted?: (card: MatchCard) => void;
+export default function FindBuddy({ base, matches, demo, autoFind = false, onAccepted, client }: {
+  base: string; matches: MatchState[]; demo: boolean; autoFind?: boolean; onAccepted?: (card: MatchCard) => void; client?: MatchClient;
 }) {
+  const api: MatchClient = client ?? { find: () => findMatches(base), answer: (id, verb) => answerMatch(base, id, verb) };
   const [cards, setCards] = useState<MatchCard[] | null>(null);
   // this phone's own answers, until the snapshot / hub_update says more
   const [answered, setAnswered] = useState<Record<string, { status: string; mine: "accept" | "decline"; first_name: string }>>({});
@@ -61,7 +67,7 @@ export default function FindBuddy({ base, matches, demo, autoFind = false, onAcc
 
   const find = () =>
     run(async () => {
-      const r = await findMatches(base);
+      const r = await api.find();
       if (r.ok) setCards(r.value);
       else setMsg(r.reason);
     });
@@ -76,7 +82,7 @@ export default function FindBuddy({ base, matches, demo, autoFind = false, onAcc
 
   const answer = (id: string, first_name: string, verb: "accept" | "decline") =>
     run(async () => {
-      const r = await answerMatch(base, id, verb);
+      const r = await api.answer(id, verb);
       if (!r.ok) return setMsg(r.reason);
       setAnswered((a) => ({ ...a, [id]: { status: r.value.status, mine: verb, first_name } }));
       const card = cards?.find((c) => c.match_id === id);

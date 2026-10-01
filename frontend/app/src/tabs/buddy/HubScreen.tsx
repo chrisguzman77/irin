@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { PinRejected } from "../../lib/api";
-import { claimHub, getHub, getProfile, saveBuddySettings, saveProfile, type HubClaim, type HubRow } from "../../lib/buddy";
+import { claimHub, getHub, getProfile, saveBuddySettings, saveProfile, type HubClaim, type HubRow, type Result } from "../../lib/buddy";
 import type { Settings } from "../../lib/contracts";
 
 // Buddy v3 (relay/README.md, PINNED): the Irin Buddy Hub for app users. The
@@ -9,7 +9,13 @@ import type { Settings } from "../../lib/contracts";
 // people in the user's pool who share a language; a row carries a first name,
 // languages, minutes, and a confidence badge, never a glucose value, place, or
 // contact (invariant 15). The script is shown only from the live claim's reply
-// (invariant 14); the Call button places no call in the demo.
+// (invariant 14); the Call button places no call in the demo. Phone-only
+// accounts (Phase 1): `client` swaps the Pi proxy for the relay's own
+// GET /v0/users/hub and claim (lib/phoneBuddy.ts); the screen is the same.
+export interface HubClient {
+  list: () => Promise<Result<HubRow[]>>;
+  claim: (listingId: string) => Promise<Result<HubClaim>>;
+}
 const REFRESH_MS = 15_000;
 const demoBadge = <span className="bg-amber-400 text-black text-xs font-bold px-2 py-0.5 rounded">DEMO</span>;
 const sampleBadge = <span className="border border-neutral-500 text-neutral-300 text-xs px-2 py-0.5 rounded">Sample</span>;
@@ -67,7 +73,8 @@ export function HubEntry({ base, settings, onOpen }: { base: string; settings: S
   );
 }
 
-export default function HubScreen({ base, demo, onBack }: { base: string; demo: boolean; onBack: () => void }) {
+export default function HubScreen({ base, demo, onBack, client }: { base: string; demo: boolean; onBack: () => void; client?: HubClient }) {
+  const api = useMemo<HubClient>(() => client ?? { list: () => getHub(base), claim: (id) => claimHub(base, id) }, [client, base]);
   const [rows, setRows] = useState<HubRow[] | null>(null);
   const [open, setOpen] = useState<HubRow | null>(null);
   const [claim, setClaim] = useState<HubClaim | null>(null);
@@ -80,7 +87,7 @@ export default function HubScreen({ base, demo, onBack }: { base: string; demo: 
     if (open) return;
     let live = true;
     const load = () =>
-      getHub(base)
+      api.list()
         .then((r) => {
           if (!live) return;
           if (r.ok) {
@@ -95,13 +102,13 @@ export default function HubScreen({ base, demo, onBack }: { base: string; demo: 
       live = false;
       window.clearInterval(id);
     };
-  }, [base, open]);
+  }, [api, open]);
 
   const help = async (row: HubRow) => {
     setBusy(true);
     setMsg("");
     try {
-      const r = await claimHub(base, row.listing_id);
+      const r = await api.claim(row.listing_id);
       if (r.ok) setClaim(r.value);
       else setMsg(r.reason);
     } catch (e) {

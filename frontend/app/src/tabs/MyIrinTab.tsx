@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
+import { useAccount } from "../lib/account";
 import { useDevice } from "../lib/device";
+import { useOwnerPairing } from "../lib/owner";
 import {
   DASHBOARDS, fetchDash, ownerBearer,
   type AlarmRow, type BasalRow, type BuddyRow, type StepNightRow, type StepWatchBody, type DashName, type DashResult, type HeatRow, type NearMissRow, type NightRow,
@@ -12,19 +14,33 @@ import {
 // My Irin (justin.md A4 / C4): eleven dashboards over Irin Cloud, one fetch
 // and one drawing each, from the fields cloud/README.md pins. While the paired
 // Irin plays a demo, the panels read the demo device (demo=true) and say DEMO;
-// real and replayed data are never drawn as each other.
+// real and replayed data are never drawn as each other. Phone-only accounts
+// (Phase 1): the credential is the owner pairing (its token plus X-Device-Id),
+// else the account's dashboard token, else the pasted admin token.
 const RANGES = [14, 30, 90] as const;
+type Credential = { kind: "owner" | "account" | "pasted"; bearer: string; deviceId: string | null } | null;
 
-function Body({ name, result }: { name: DashName; result: DashResult | undefined }) {
+function Body({ name, result, cred }: { name: DashName; result: DashResult | undefined; cred: Credential }) {
   if (!result) return <p className="text-sm text-neutral-400">Loading…</p>;
   if (result.state === "not_yet") return <p className="text-sm text-neutral-400">Not served yet ({result.detail}).</p>;
   if (result.state === "no_access")
-    return <p className="text-sm text-neutral-400">Needs the dashboard token: type it once under Device → Settings.</p>;
+    return (
+      <p className="text-sm text-neutral-400">
+        {cred ? "Irin Cloud did not accept this phone's credential. " : ""}
+        Pair your Irin on the Device tab, or sign up in Irin Buddy and connect your CGM.
+      </p>
+    );
   if (result.state === "error") return <p className="text-sm text-amber-300">{result.detail}.</p>;
   const b = result.body;
   if (!b.available) return <p className="text-sm text-neutral-400">Not available yet{b.reason ? `: ${b.reason}` : "."}</p>;
   if (b.empty)
-    return <p className="text-sm text-neutral-400">{name === "step_watch" ? "No Step Watch in this range." : "No data in this range."}</p>;
+    return (
+      <p className="text-sm text-neutral-400">
+        {cred?.kind === "account"
+          ? "Nothing to draw yet: without an Irin, Irin Cloud holds no readings for this account."
+          : name === "step_watch" ? "No Step Watch in this range." : "No data in this range."}
+      </p>
+    );
   const rows = (b.rows ?? []) as never[];
   if (name !== "under_the_hood" && rows.length === 0) return <p className="text-sm text-neutral-400">No data in this range.</p>;
   switch (name) {
@@ -45,19 +61,31 @@ function Body({ name, result }: { name: DashName; result: DashResult | undefined
 
 export default function MyIrinTab() {
   const { socket } = useDevice();
+  const owner = useOwnerPairing();
+  const account = useAccount();
   const demo = socket.snapshot?.mode === "replay";
   const [days, setDays] = useState<(typeof RANGES)[number]>(14);
   const [results, setResults] = useState<Partial<Record<DashName, DashResult>>>({});
+  const pasted = ownerBearer();
+  const cred: Credential = owner
+    ? { kind: "owner", bearer: owner.token, deviceId: owner.device_id }
+    : account?.dashboard_token
+      ? { kind: "account", bearer: account.dashboard_token, deviceId: null }
+      : pasted
+        ? { kind: "pasted", bearer: pasted, deviceId: null }
+        : null;
+  const bearer = cred?.bearer ?? null;
+  const deviceId = cred?.deviceId ?? null;
 
   useEffect(() => {
     let alive = true;
     setResults({});
     for (const d of DASHBOARDS)
-      fetchDash(d.name, days, demo, ownerBearer()).then((r) => alive && setResults((prev) => ({ ...prev, [d.name]: r })));
+      fetchDash(d.name, days, demo, bearer, deviceId).then((r) => alive && setResults((prev) => ({ ...prev, [d.name]: r })));
     return () => {
       alive = false;
     };
-  }, [days, demo]);
+  }, [days, demo, bearer, deviceId]);
 
   return (
     <section className="flex flex-col gap-4">
@@ -90,7 +118,7 @@ export default function MyIrinTab() {
                 {d.about}
                 {body?.as_of ? ` · up to ${md(body.as_of)} ${body.as_of.slice(11, 16)}` : ""}
               </p>
-              <Body name={d.name} result={r} />
+              <Body name={d.name} result={r} cred={cred} />
             </li>
           );
         })}
