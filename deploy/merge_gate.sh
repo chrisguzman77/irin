@@ -14,7 +14,7 @@ BRANCH="${1:?usage: merge_gate.sh <branch>}"
 REPO="$(git rev-parse --path-format=absolute --git-common-dir)/.."
 REPO="$(cd "$REPO" && pwd)"
 PY="$REPO/.venv/bin/python"
-SHARED='^(backend/app/contracts\.py|deploy/|\.env\.example|docs/|demo/|relay/README\.md|cloud/README\.md|cloud/ingest\.py|CLAUDE\.md|AGENTS\.md|\.cursor/|\.claude/)'
+SHARED='^(backend/app/contracts\.py|deploy/|\.env\.example|docs/|demo/|relay/README\.md|cloud/README\.md|cloud/ingest\.py|CLAUDE\.md|\.claude/)'
 
 for attempt in 1 2 3; do
   git -C "$REPO" fetch -q origin

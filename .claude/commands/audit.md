@@ -257,12 +257,10 @@ relay/directory.py, relay/notify.py, frontend/app/):
   Model API key, the WhatsApp token, and any private key material
   (backend/keys/, doctor keys). Confirm
   .env, backend/keys/, and every .db are gitignored and .env.example
-  contains placeholders only. The working repo stays private and the Meta
-  submission is a fresh public mirror: read deploy/public_mirror.sh and
-  confirm it squashes history, excludes journal/ and AUDIT.md, trims
-  ml/models/metrics.md to its headline block, and that a dry run into a
-  temp directory contains no .env, keys, ml/data, raw timestamps, or an
-  unqualified "built from real nights" claim.
+  contains placeholders only. The repo is PUBLIC (no mirror): confirm no
+  .env, keys, ml/data, or raw timestamps are tracked or anywhere in the git
+  history, AUDIT.md is gitignored, and no doc makes an unqualified "built
+  from real nights" claim.
 - Nothing under ml/data/ is tracked by git; no real CGM timestamps in
   demo/scenarios/ (they must be date-shifted); synthetic scenarios are
   labeled SYNTHETIC in the CSV name, the companion JSON, and the README.

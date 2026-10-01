@@ -175,7 +175,7 @@ Three tiers: `main` ← `dev` ← feature branches.
   fake timestamps.
 - The working repo is PUBLIC (Chris's decision, 2026-09-27: no mirror; this
   repo is the submission, with the journals, metrics.md, and the date-shifted
-  demo scenarios on view). deploy/public_mirror.sh stays an unused stub.
+  demo scenarios on view).
   Write every commit as if a stranger reads it, because one does: a secret
   cannot be un-pushed, and AUDIT.md is not committed (it lists weak spots).
 
@@ -355,10 +355,9 @@ device's spoken echoes (the buddy alert voice stays; when the Night
 Buddy tier is cut it survives only in the video). Never cut the hosting
 and Atlas swaps: they replace work already planned.
 
-Submission day (Chris): build the public mirror with deploy/public_mirror.sh
-(squash, exclude journal/ and AUDIT.md, trim metrics.md to the stage
-numbers), dry-run it, grep the result for secrets, keys, ml/data, and raw
-timestamps, then push it to the fresh public repo named in the Meta form.
+Submission (Chris, 2026-09-27): no mirror; this public repo was submitted
+as is. Before any push, grep the diff for secrets, keys, ml/data, and raw
+timestamps.
 
 ## Dev loop
 
@@ -503,10 +502,8 @@ history costs nothing.
 
 ## One constitution for every agent
 
-Claude Code reads this file automatically. Cursor does not, so
-`.cursor/rules/irin.mdc` and `AGENTS.md` are generated copies of it
-(`deploy/sync_rules.sh` regenerates both; never edit the copies). Any
-agent that opens this repo, whichever tool or model, obeys the same
+Claude Code reads this file automatically. Any agent that opens this
+repo, whichever tool or model, obeys the same
 lanes, invariants, journal, speed rules, and main-is-human-only rule.
 One agent per lane at a time; two agents on one lane means two humans
 have not talked. Model selection inside Claude Code or Cursor is the
