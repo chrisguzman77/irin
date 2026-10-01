@@ -44,10 +44,10 @@ export const skipStory = (base: string, id: string) => call<FamilyStory>(base, `
 
 export async function listStories(base: string, nightDate?: string): Promise<FamilyStory[]> {
   const q = nightDate ? `?night_date=${encodeURIComponent(nightDate)}` : "";
-  const res = await fetch(`${base}/api/family/stories${q}`, { cache: "no-store" });
+  const res = await deviceFetch(base, `/api/family/stories${q}`, { cache: "no-store" });
   if (!res.ok) throw new Error(`${res.status}`);
   return (await res.json()) as FamilyStory[];
 }
 
-export const storyAudioUrl = (base: string, s: FamilyStory) =>
-  s.audio_url ? `${base}${story(s.story_id)}/audio.mp3` : null;
+export const storyAudioPath = (s: FamilyStory) =>
+  s.audio_url ? `${story(s.story_id)}/audio.mp3` : null;

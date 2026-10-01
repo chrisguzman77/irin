@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { graphUrl, listReports, PARTIAL_COVERAGE_PCT, statsOf, type MorningReport } from "../../lib/reports";
+import { fetchGraph, listReports, PARTIAL_COVERAGE_PCT, statsOf, type MorningReport } from "../../lib/reports";
 
 // Step 7: stored morning reports by date, newest first. A replayed night is
 // badged DEMO wherever it appears (invariant 1).
@@ -30,8 +30,22 @@ function Stat({ label, value, sub }: { label: string; value: string; sub?: strin
 
 function ReportDetail({ report, baseUrl, onBack }: { report: MorningReport; baseUrl: string; onBack: () => void }) {
   const s = statsOf(report);
-  const img = graphUrl(baseUrl, report);
-  const [imgFailed, setImgFailed] = useState(false);
+  const [img, setImg] = useState<string | null>(null);
+  useEffect(() => {
+    let url: string | null = null;
+    let alive = true;
+    fetchGraph(baseUrl, report)
+      .then((u) => {
+        url = u;
+        if (alive) setImg(u);
+        else if (u) URL.revokeObjectURL(u);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+      if (url) URL.revokeObjectURL(url);
+    };
+  }, [baseUrl, report]);
   return (
     <section className="flex flex-col gap-3">
       <button type="button" onClick={onBack} className="self-start text-neutral-400 text-sm">
@@ -54,12 +68,11 @@ function ReportDetail({ report, baseUrl, onBack }: { report: MorningReport; base
         <Stat label="Above 180" value={pct(s.tar_pct)} />
         <Stat label="Sensor coverage" value={pct(s.coverage_pct)} />
       </div>
-      {img && !imgFailed && (
+      {img && (
         <img
           src={img}
           alt={`Glucose overnight, ${report.night_date}`}
           className="w-full rounded-lg bg-white"
-          onError={() => setImgFailed(true)}
         />
       )}
       <div className="whitespace-pre-line text-neutral-200 leading-relaxed">{report.narrative}</div>

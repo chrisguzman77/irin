@@ -68,5 +68,5 @@ export async function logTreatment(base: string, t: Omit<Treatment, "timestamp">
 }
 
 export async function recentTreatments(base: string, hours = 24): Promise<Treatment[]> {
-  return (await json(await fetch(`${base}/api/treatments?hours=${hours}`))) as Treatment[];
+  return (await json(await deviceFetch(base, `/api/treatments?hours=${hours}`))) as Treatment[];
 }

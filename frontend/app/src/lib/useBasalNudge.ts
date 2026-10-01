@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { deviceFetch } from "./api";
 
 // The basal nudge (backend scheduler, chris.md step 10): "visual" at 60 min
 // past the usual basal time with no basal logged, "email" at 90. It is not in
@@ -18,7 +19,7 @@ export function useBasalNudge(baseUrl: string | null): NudgeLevel {
     const poll = async () => {
       if (document.visibilityState === "hidden") return;
       try {
-        const res = await fetch(`${baseUrl}/api/scheduler`, { cache: "no-store" });
+        const res = await deviceFetch(baseUrl, `/api/scheduler`, { cache: "no-store" });
         if (!res.ok) return;
         const b = (await res.json()) as { basal_nudge?: { level?: unknown } };
         const l = b.basal_nudge?.level;

@@ -26,7 +26,7 @@ export interface ScenarioList {
 }
 
 export async function listScenarios(base: string): Promise<ScenarioList> {
-  const res = await fetch(`${base}/api/demo/scenarios`, { cache: "no-store" });
+  const res = await deviceFetch(base, `/api/demo/scenarios`, { cache: "no-store" });
   if (!res.ok) throw new Error(`${res.status}`);
   const b = (await res.json()) as Partial<ScenarioList>;
   return {
@@ -105,7 +105,7 @@ export const sendEvaluatedCard = (base: string, mode: Exclude<SendMode, "bedside
  * the panel is where the presenter shows it). */
 export interface Evaluation { kind: string; status: string; headline: string; budget: string | null; sent: unknown }
 export async function latestEvaluations(base: string): Promise<Evaluation[]> {
-  const res = await fetch(`${base}/api/rounds/evaluations`, { cache: "no-store" });
+  const res = await deviceFetch(base, `/api/rounds/evaluations`, { cache: "no-store" });
   if (!res.ok) throw new Error(`${res.status}`);
   const b = (await res.json()) as Record<string, Partial<Evaluation> | null>;
   return Object.entries(b ?? {})
