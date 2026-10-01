@@ -5,7 +5,8 @@ authoritative) is present as a 501 stub naming the step that fills it in.
 
 Environment: RELAY_SOURCE_KEYS (comma-separated device keys, checked as the
 X-Source-Key header), RELAY_ADMIN_KEY (the demo-only Spark simulation),
-RELAY_KEY (encrypts emergency numbers at rest), ATLAS_URI, NARRATIVE_BACKEND,
+RELAY_KEY (encrypts emergency numbers at rest), RELAY_CLOUD_KEY (Irin Cloud's
+X-Cloud-Key: the verified mark and the owner-token check), ATLAS_URI, NARRATIVE_BACKEND,
 HUB_SCRIPT_KEY, HUB_LEASE_S, HUB_TREATING_S (hub.py), NARRATIVE_ROUTING, BACKBOARD_API_KEY, META_MODEL_API_KEY, ANTHROPIC_API_KEY
 (the same four-link narrative chain as the Pi, for the buddy line, the match
 explanation, and the emergency script), WHATSAPP_TOKEN, WHATSAPP_PHONE_NUMBER_ID.

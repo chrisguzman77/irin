@@ -13,7 +13,10 @@ until the new code is actually redeemed: register only touches the top-level
 device's earlier unused code"); redeem always overwrites the owner fields
 ("a new redeem revokes the device's earlier paired token" -- the old token's
 sha256 is simply gone, so it stops matching on DELETE or the Pi's poll
-check). Audit rows carry device_id and outcome only, never code/token/username."""
+check). Audit rows carry device_id and outcome only, never code/token/username.
+Phone accounts (Phase 1): `POST /v0/device/pair/check` lets Irin Cloud ask
+whether a token is the device's ACTIVE owner token (X-Cloud-Key); `active_owner`
+is the same question for the directory's link route."""
 
 from __future__ import annotations
 
@@ -26,7 +29,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
 
 import store
-from relay_api import ID, require_source_key
+from relay_api import ID, _eq, require_cloud_key, require_source_key
 
 router = APIRouter(prefix="/v0/device")
 
@@ -45,6 +48,11 @@ class OwnerRegister(BaseModel):
     @classmethod
     def _tz_aware(cls, v: datetime) -> datetime:
         return v.replace(tzinfo=timezone.utc) if v.tzinfo is None else v  # a naive stamp is UTC
+
+
+class OwnerCheck(BaseModel):
+    device_id: str = Field(pattern=ID)
+    token: str = Field(min_length=1, max_length=256)
 
 
 class OwnerRedeem(BaseModel):
@@ -147,6 +155,24 @@ async def unpair(request: Request, authorization: str | None = Header(default=No
                                           "$unset": {"code": "", "token": "", "expires_at": ""}})  # a shown code dies too
     store.audit("owner.revoke", device_id=doc["device_id"], by=by)
     return {"status": "revoked"}
+
+
+def active_owner(device_id: str, token: str) -> dict | None:
+    """The device's owner pairing when `token` is its ACTIVE owner token: state paired and
+    sha256 match. A pending (unredeemed) code's token and a revoked token never count."""
+    doc = store.db()["owner_pairings"].find_one({"device_id": device_id})
+    if doc is None or doc.get("state") != "paired" or not doc.get("token_sha256"):
+        return None
+    return doc if _eq(doc["token_sha256"], store.bearer_hash(token)) else None
+
+
+@router.post("/pair/check")
+async def check(req: OwnerCheck, _: None = Depends(require_cloud_key)) -> dict:
+    """Irin Cloud's question (X-Cloud-Key): is this the device's active owner token?
+    The token is compared by hash and never logged or stored."""
+    doc = active_owner(req.device_id, req.token)
+    store.audit("owner.check", device_id=req.device_id, ok=doc is not None)
+    return {"ok": doc is not None, "username": doc.get("username") if doc is not None else None}
 
 
 def poll(device_id: str, key_hash: str) -> dict:

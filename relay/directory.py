@@ -18,6 +18,14 @@ never post a pair link, and every row naming one carries sample: true.
 The introduction and why-this-match lines are narrative text (Muse) beside
 the match; the scorer never reads them and an LLM never picks the buddy.
 
+Phone-only accounts (Phase 1, pinned in relay/README.md): POST /v0/users/phone
+signs a phone up with no Irin (a random bearer, stored only as
+phone_bearer_hash; cgm_verified false until Irin Cloud marks it with
+X-Cloud-Key AND the user's own bearer; a random source_key_hash exactly like a
+seed's, so every query keyed on it keeps working); GET/PUT /v0/users/me; and
+POST /v0/users/link joins the phone's document to a paired Irin's (owner.py
+decides the device's active owner token). require_user accepts either hash.
+
 Conventions the contract leaves open: a user's FIRST timezone is their home
 zone (availability is local to it; offsets are read at store.now(), so DST
 counts as of today); an availability row whose end is not after its start
@@ -44,13 +52,17 @@ from pymongo import ReturnDocument
 from pymongo.errors import DuplicateKeyError
 
 import hub
+import owner
 import store
-from relay_api import _client_ip, _rate_limit, require_source_key
+from relay_api import ID, _client_ip, _rate_limit, require_cloud_key, require_source_key
 
 FORBIDDEN_FIELDS = ("mgdl", "mg_dl", "glucose", "location", "lat", "lon", "phone", "email", "number")
 WEEK = 7 * 1440
 NIGHT_START, NIGHT_LEN = 22 * 60, 10 * 60  # the requester's 22:00-08:00 local sleep window
 TOP_N = 3
+PHONE_SIGNUP_PER_MIN = 5  # on top of the usual per-IP bucket
+NOT_PAIRED = "that phone is not paired with this Irin"
+BOTH_HAVE_BUDDIES = "both profiles already have buddies; disconnect one first"
 
 router = APIRouter(prefix="/v0")
 
@@ -82,15 +94,15 @@ class Optins(_Strict):
     hub_volunteer: bool = False
 
 
-class UserIn(_Strict):
+class ProfileIn(_Strict):
+    """The profile fields a phone sends (sign-up and PUT /v0/users/me): cgm_verified and is_demo are
+    server-set on that path, so sending either is 422."""
     username: str = Field(pattern=r"^[A-Za-z][A-Za-z0-9_.\-]{2,29}$")  # starts with a letter: never a phone number or an email
     first_name: str = Field(min_length=1, max_length=40, pattern=r"^[^\d@]{1,40}$")
     languages: list[str] = Field(default_factory=list, max_length=10)
     timezones: list[str] = Field(min_length=1, max_length=5)
     availability: list[Slot] = Field(default_factory=list, max_length=100)
     optins: Optins = Field(default_factory=Optins)
-    cgm_verified: bool = False
-    is_demo: bool = False
 
     @field_validator("username")
     @classmethod
@@ -117,8 +129,23 @@ class UserIn(_Strict):
         return v
 
 
+class UserIn(ProfileIn):
+    """What the Pi sends (POST /v0/users): the profile plus its own word on cgm_verified and is_demo."""
+    cgm_verified: bool = False
+    is_demo: bool = False
+
+
 class MatchIn(_Strict):
     """`{}`: the requester is the bearer."""
+
+
+class VerifiedIn(_Strict):
+    """`{}`: the cloud's verified mark names the user in the path and the bearer."""
+
+
+class LinkIn(_Strict):
+    device_id: str = Field(pattern=ID)
+    owner_token: str = Field(min_length=1, max_length=256)
 
 
 class PairLinkIn(_Strict):
@@ -138,7 +165,8 @@ def require_user(request: Request, authorization: str | None = Header(default=No
     _rate_limit(f"ip:{_client_ip(request)}")
     if not authorization or not authorization.lower().startswith("bearer "):
         raise HTTPException(status_code=401, detail="bearer required")
-    user = store.db()["users"].find_one({"bearer_hash": store.bearer_hash(authorization.split(" ", 1)[1].strip())})
+    h = store.bearer_hash(authorization.split(" ", 1)[1].strip())
+    user = store.db()["users"].find_one({"$or": [{"bearer_hash": h}, {"phone_bearer_hash": h}]})  # device-derived or phone
     if user is None:
         raise HTTPException(status_code=401, detail="bad user bearer")
     _rate_limit(f"user:{user['user_id']}")
@@ -265,6 +293,96 @@ async def users_upsert(req: UserIn, source_key: str = Depends(require_source_key
         store.db()["users"].update_one({"_id": doc["_id"]}, {"$set": {"bearer_hash": store.bearer_hash(bearer)}})
     store.audit("directory.user", user_id=doc["user_id"], is_demo=req.is_demo, cgm_verified=req.cgm_verified)
     return {"user_id": doc["user_id"], "user_bearer": bearer}
+
+
+@router.post("/users/phone")
+async def users_phone(req: ProfileIn, request: Request) -> dict:
+    """A phone with no Irin signs up (public, 5/min/IP on top of the usual bucket): a random bearer,
+    returned once and stored only as phone_bearer_hash; cgm_verified false until the cloud's mark;
+    a random source_key_hash like a seed's. No password and no recovery in Phase 1."""
+    ip = _client_ip(request)
+    _rate_limit(f"ip:{ip}")
+    _rate_limit(f"phone-signup:{ip}", cap=PHONE_SIGNUP_PER_MIN)
+    bearer, now = secrets.token_urlsafe(32), store.now()
+    doc = {**req.model_dump(), "user_id": f"u-{secrets.token_hex(6)}", "phone": True, "cgm_verified": False,
+           "is_demo": False, "phone_bearer_hash": store.bearer_hash(bearer),
+           "source_key_hash": store.bearer_hash(secrets.token_hex(32)), "created_at": now, "updated_at": now}
+    store.db()["users"].insert_one(doc)
+    store.audit("directory.phone", user_id=doc["user_id"])
+    return {"user_id": doc["user_id"], "user_bearer": bearer}
+
+
+def _me_out(user: dict) -> dict:
+    """The GET /v0/users/me shape; device_linked = an owner_pairings row names this document's source_key_hash."""
+    linked = store.db()["owner_pairings"].find_one({"source_key_hash": user["source_key_hash"]}, {"_id": 1}) is not None
+    return {"user_id": user["user_id"], "username": user["username"], "first_name": user["first_name"],
+            "languages": user.get("languages", []), "timezones": user["timezones"],
+            "availability": user.get("availability", []), "optins": user["optins"],
+            "cgm_verified": bool(user.get("cgm_verified")), "is_demo": bool(user.get("is_demo")),
+            "phone": bool(user.get("phone")), "device_linked": linked}
+
+
+@router.get("/users/me")
+async def users_me(user: dict = Depends(require_user)) -> dict:
+    return _me_out(user)
+
+
+@router.put("/users/me")
+async def users_me_put(req: ProfileIn, user: dict = Depends(require_user)) -> dict:
+    """The profile fields only: never cgm_verified, is_demo, user_id, either bearer hash, or source_key_hash."""
+    doc = store.db()["users"].find_one_and_update({"_id": user["_id"]}, {"$set": {**req.model_dump(), "updated_at": store.now()}},
+                                                  return_document=ReturnDocument.AFTER)
+    store.audit("directory.me", user_id=user["user_id"])
+    return _me_out(doc)
+
+
+@router.post("/users/{user_id}/verified")
+async def users_verified(user_id: str, body: VerifiedIn | None = None, _: None = Depends(require_cloud_key),
+                         user: dict = Depends(require_user)) -> dict:
+    """Irin Cloud verified the feed: BOTH X-Cloud-Key and the user's own bearer. The relay learns one
+    boolean; the feed URL, token and every value stay in the cloud (invariant 20)."""
+    if user["user_id"] != user_id:
+        raise HTTPException(status_code=404, detail="no such account")
+    now = store.now()
+    store.db()["users"].update_one({"_id": user["_id"]}, {"$set": {"cgm_verified": True, "verified_at": now}})
+    store.audit("directory.verified", user_id=user_id)
+    return {"user_id": user_id, "cgm_verified": True, "verified_at": now.isoformat()}
+
+
+@router.post("/users/link")
+async def users_link(req: LinkIn, user: dict = Depends(require_user)) -> dict:
+    """A phone account joins its paired Irin: the owner token must be that device's active one, and the
+    device's identity is its source_key_hash from owner_pairings. Cases (a)-(d) as pinned in the README."""
+    if not user.get("phone"):
+        raise HTTPException(status_code=403, detail="only a phone account links to an Irin")
+    pairing = owner.active_owner(req.device_id, req.owner_token)
+    if pairing is None:
+        raise HTTPException(status_code=404, detail=NOT_PAIRED)
+    key_hash, users, matches = pairing["source_key_hash"], store.db()["users"], store.db()["matches"]
+    dev = users.find_one({"source_key_hash": key_hash})
+    dev_id = dev["user_id"] if dev is not None else None
+    if dev_id == user["user_id"]:  # already linked to this very Irin: nothing to move
+        store.audit("directory.link", user_id=user["user_id"], device_user_id=dev_id, case="already")
+        return {"user_id": user["user_id"], "device_linked": True}
+    has_matches = lambda uid: matches.count_documents({"users": uid}, limit=1) > 0  # noqa: E731
+    if dev is None:
+        case = "a"
+    elif not has_matches(dev_id):
+        case = "b"  # the device's document had no buddies: it goes, and (a) applies
+        users.delete_one({"_id": dev["_id"]})
+    elif not has_matches(user["user_id"]):
+        case = "c"  # the phone adopts the device's document (its buddies live there)
+    else:
+        raise HTTPException(status_code=409, detail=BOTH_HAVE_BUDDIES)
+    if case == "c":
+        users.update_one({"_id": dev["_id"]}, {"$set": {"phone": True, "phone_bearer_hash": user["phone_bearer_hash"]}})
+        users.delete_one({"_id": user["_id"]})
+        out_id = dev_id
+    else:
+        users.update_one({"_id": user["_id"]}, {"$set": {"source_key_hash": key_hash}})
+        out_id = user["user_id"]
+    store.audit("directory.link", user_id=user["user_id"], device_user_id=dev_id, case=case)
+    return {"user_id": out_id, "device_linked": True}
 
 
 @router.get("/users/search")

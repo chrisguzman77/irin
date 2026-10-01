@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field
 import store
 
 RELAY_SOURCE_KEYS = [k for k in os.environ.get("RELAY_SOURCE_KEYS", "").split(",") if k]
+RELAY_CLOUD_KEY = os.environ.get("RELAY_CLOUD_KEY", "")  # Irin Cloud's shared key (phone accounts, Phase 1)
 PAIR_TTL = timedelta(minutes=10)
 BEARER_PICKUP_TTL = timedelta(minutes=10)  # the plaintext bearer waits this long for the browser, then is gone
 RATE_LIMIT_PER_MIN = int(os.environ.get("RELAY_RATE_LIMIT_PER_MIN", "600"))
@@ -38,14 +39,15 @@ def _client_ip(request: Request) -> str:
     return fwd or (request.client.host if request.client else "unknown")
 
 
-def _rate_limit(key: str) -> None:
+def _rate_limit(key: str, cap: int | None = None) -> None:
     """One bucket per caller: an authenticated identity (src:, bearer:, user:) or ip:<addr>
-    before auth and on public routes, so one heavy client never 429s the Pi, the inbox, or buddy alerts."""
+    before auth and on public routes, so one heavy client never 429s the Pi, the inbox, or buddy alerts.
+    `cap` gives a route its own smaller bucket (phone sign-up: 5/min/IP) on top of the usual one."""
     q = _hits[key]
     t = time.monotonic()
     while q and q[0] < t - 60:
         q.popleft()
-    if len(q) >= RATE_LIMIT_PER_MIN:
+    if len(q) >= (RATE_LIMIT_PER_MIN if cap is None else cap):
         raise HTTPException(status_code=429, detail="rate limit")
     q.append(t)
 
@@ -63,6 +65,17 @@ def require_source_key(request: Request, x_source_key: str | None = Header(defau
         raise HTTPException(status_code=401, detail="bad source key")
     _rate_limit(f"src:{store.bearer_hash(x_source_key)[:16]}")
     return x_source_key
+
+
+def require_cloud_key(request: Request, x_cloud_key: str | None = Header(default=None, alias="X-Cloud-Key")) -> None:
+    """Irin Cloud's shared key (RELAY_CLOUD_KEY): 503 while unset, 401 when wrong; throttled per client IP.
+    Gates the verified mark and the owner-token check (phone accounts, Phase 1)."""
+    _rate_limit(f"ip:{_client_ip(request)}")
+    key = RELAY_CLOUD_KEY or os.environ.get("RELAY_CLOUD_KEY", "")
+    if not key:
+        raise HTTPException(status_code=503, detail="RELAY_CLOUD_KEY is not set")
+    if not x_cloud_key or not _eq(x_cloud_key, key):
+        raise HTTPException(status_code=401, detail="bad cloud key")
 
 
 def _owned(doc: dict | None, source_key: str) -> dict:
