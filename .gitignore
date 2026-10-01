@@ -31,3 +31,4 @@ node_modules/
 *.mp4
 *.mov
 .claude/worktrees/
+AUDIT.md

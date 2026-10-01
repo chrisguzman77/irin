@@ -1,5 +1,4 @@
-<!-- Generated from CLAUDE.md by deploy/sync_rules.sh; do not edit here. -->
-
+<!-- generated from CLAUDE.md by deploy/sync_rules.sh; do not edit -->
 # Irin — rules for every Claude Code session
 
 Irin is ONE project with three audiences. The bedside device is the spine;
@@ -175,11 +174,11 @@ Three tiers: `main` ← `dev` ← feature branches.
   `demo/scenarios/` and the small trained model in `ml/models/` are
   committable data. Synthetic scenarios are labeled SYNTHETIC with obviously
   fake timestamps.
-- The working repo stays PRIVATE. The Meta submission is a fresh public
-  MIRROR built on submission day by Chris (deploy/public_mirror.sh):
-  squashed history, journal/ and AUDIT.md excluded, metrics.md trimmed to
-  the headline numbers said on stage. Still write every commit as if a
-  stranger could read it: a secret cannot be un-pushed anywhere.
+- The working repo is PUBLIC (Chris's decision, 2026-09-27: no mirror; this
+  repo is the submission, with the journals, metrics.md, and the date-shifted
+  demo scenarios on view). deploy/public_mirror.sh stays an unused stub.
+  Write every commit as if a stranger reads it, because one does: a secret
+  cannot be un-pushed, and AUDIT.md is not committed (it lists weak spots).
 
 ## Safety invariants — never weaken these
 

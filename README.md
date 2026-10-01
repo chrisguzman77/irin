@@ -32,7 +32,7 @@ Irin is not three hacks stapled together. The bedside device is the spine (forec
 | Audience | Part | What it does | Challenge |
 |---|---|---|---|
 | **The sleeper** | **Irin** (the device + the app) | Live glucose, a 30-minute low forecast, LED + sound alarm ladder, phone acknowledge, morning report | Main judging · AI/ML/Data Viz track |
-| **The doctor** | **Irin Rounds** | Decision-ready Clinical Signal Cards built from real nights, encrypted to the doctor's key, read in a clinician inbox; a doctor's reply applies only after the patient confirms | **Impiricus** |
+| **The doctor** | **Irin Rounds** | Decision-ready Clinical Signal Cards built from the night records (on Chris's real history: glucose real, reason codes inferred and labeled), encrypted to the doctor's key, read in a clinician inbox; a doctor's reply applies only after the patient confirms | **Impiricus** |
 | **The people who care** | **Night Buddy** + **Family Story** | A matched buddy as the last human rung on the alarm ladder, an opt-in volunteer hub, and a plain-language story of the night for family, with a voice note | **Meta** |
 
 ### How the track and the sponsor challenges connect
@@ -228,6 +228,8 @@ Tests: `cd backend && IRIN_HW=mock pytest -q`, and `pytest -q` from `relay/`, `c
 ---
 
 ## Honest notes
+
+- The laptop fallback (running the relay and cloud on a laptop at the venue) is described in `CLAUDE.md` but was never made to work end to end: the HTTPS and routing setup assume the real domain.
 
 - The forecaster and Rounds numbers are from **one person's** history, retrospective (n = 1).
 - Standing Cards run on Chris's real history: **glucose real; reason codes inferred and labeled; acknowledge, presence, and recall data are a labeled overlay.**
